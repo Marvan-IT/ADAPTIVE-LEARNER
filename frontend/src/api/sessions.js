@@ -1,0 +1,42 @@
+import api from "./client";
+
+// LLM-dependent calls need longer timeouts (reasoning models like DeepSeek R1 are slow)
+const LLM_TIMEOUT = 180_000; // 3 minutes
+const CARDS_TIMEOUT = 300_000; // 5 minutes (generates multiple cards + questions)
+
+export const startSession = (studentId, conceptId, style = "default", lessonInterests = []) =>
+  api.post("/api/v2/sessions", {
+    student_id: studentId,
+    concept_id: conceptId,
+    style,
+    lesson_interests: lessonInterests.length > 0 ? lessonInterests : [],
+  });
+
+export const getPresentation = (sessionId) =>
+  api.post(`/api/v2/sessions/${sessionId}/present`, {}, { timeout: LLM_TIMEOUT });
+
+export const beginCheck = (sessionId) =>
+  api.post(`/api/v2/sessions/${sessionId}/check`, {}, { timeout: LLM_TIMEOUT });
+
+export const sendResponse = (sessionId, message) =>
+  api.post(`/api/v2/sessions/${sessionId}/respond`, { message }, { timeout: LLM_TIMEOUT });
+
+export const switchStyle = (sessionId, style) =>
+  api.put(`/api/v2/sessions/${sessionId}/style`, { style }, { timeout: LLM_TIMEOUT });
+
+export const getSession = (sessionId) =>
+  api.get(`/api/v2/sessions/${sessionId}`);
+
+// Card-based learning (longest timeout — AI generates multiple cards + questions)
+export const getCards = (sessionId) =>
+  api.post(`/api/v2/sessions/${sessionId}/cards`, {}, { timeout: CARDS_TIMEOUT });
+
+export const assistStudent = (sessionId, cardIndex, message, trigger = "user") =>
+  api.post(`/api/v2/sessions/${sessionId}/assist`, {
+    card_index: cardIndex,
+    message,
+    trigger,
+  }, { timeout: LLM_TIMEOUT });
+
+export const completeCards = (sessionId) =>
+  api.post(`/api/v2/sessions/${sessionId}/complete-cards`);

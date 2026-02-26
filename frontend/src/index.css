@@ -1,0 +1,117 @@
+@import "tailwindcss";
+@import "katex/dist/katex.min.css";
+
+@import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&display=swap');
+
+/* ── Default theme ─────────────────────── */
+:root {
+  --color-primary: #3b82f6;
+  --color-primary-light: #dbeafe;
+  --color-primary-dark: #1d4ed8;
+  --color-bg: #f8fafc;
+  --color-surface: #ffffff;
+  --color-text: #1e293b;
+  --color-text-muted: #64748b;
+  --color-accent: #8b5cf6;
+  --color-success: #22c55e;
+  --color-danger: #ef4444;
+  --color-border: #e2e8f0;
+}
+
+/* ── Pirate theme ──────────────────────── */
+[data-theme="pirate"] {
+  --color-primary: #d97706;
+  --color-primary-light: #fef3c7;
+  --color-primary-dark: #b45309;
+  --color-bg: #fffbeb;
+  --color-surface: #fefce8;
+  --color-text: #78350f;
+  --color-text-muted: #a16207;
+  --color-accent: #b45309;
+  --color-success: #16a34a;
+  --color-danger: #dc2626;
+  --color-border: #fde68a;
+}
+
+/* ── Astronaut theme ───────────────────── */
+[data-theme="astronaut"] {
+  --color-primary: #7c3aed;
+  --color-primary-light: #1e1145;
+  --color-primary-dark: #6d28d9;
+  --color-bg: #0f0a2e;
+  --color-surface: #1a1145;
+  --color-text: #e2e8f0;
+  --color-text-muted: #a78bfa;
+  --color-accent: #06b6d4;
+  --color-success: #34d399;
+  --color-danger: #f87171;
+  --color-border: #312e81;
+}
+
+/* ── Gamer theme ───────────────────────── */
+[data-theme="gamer"] {
+  --color-primary: #22c55e;
+  --color-primary-light: #052e16;
+  --color-primary-dark: #16a34a;
+  --color-bg: #0a0a0a;
+  --color-surface: #171717;
+  --color-text: #4ade80;
+  --color-text-muted: #a855f7;
+  --color-accent: #c026d3;
+  --color-success: #4ade80;
+  --color-danger: #f43f5e;
+  --color-border: #262626;
+}
+
+/* ── Base styles ───────────────────────── */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Nunito', sans-serif;
+  font-size: 18px;
+  line-height: 1.7;
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  transition: background-color 0.3s, color 0.3s;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+/* ── Scrollbar ─────────────────────────── */
+::-webkit-scrollbar { width: 8px; }
+::-webkit-scrollbar-track { background: var(--color-bg); }
+::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: 4px; }
+
+/* ── Markdown content ──────────────────── */
+.markdown-content h1,
+.markdown-content h2,
+.markdown-content h3 {
+  color: var(--color-primary);
+  margin-top: 1.2em;
+  margin-bottom: 0.5em;
+  font-weight: 700;
+}
+.markdown-content h1 { font-size: 1.8rem; }
+.markdown-content h2 { font-size: 1.4rem; }
+.markdown-content h3 { font-size: 1.2rem; }
+.markdown-content p { margin-bottom: 0.8em; }
+.markdown-content ul, .markdown-content ol { margin-left: 1.5em; margin-bottom: 0.8em; }
+.markdown-content li { margin-bottom: 0.3em; }
+.markdown-content strong { color: var(--color-primary); font-weight: 700; }
+
+/* ── KaTeX overrides ───────────────────── */
+.katex { font-size: 1.1em; }
+.katex-display { margin: 1em 0; overflow-x: auto; }
+
+/* ── RTL support ──────────────────────── */
+[dir="rtl"] { text-align: right; }
+[dir="rtl"] input,
+[dir="rtl"] textarea { text-align: right; }
+[dir="rtl"] .markdown-content ul,
+[dir="rtl"] .markdown-content ol { margin-left: 0; margin-right: 1.5em; }

@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip install:*)",
+      "Bash(python:*)",
+      "Bash(dir \"c:\\\\files\\\\Desktop\\\\ADA\\\\backend\\\\output\\\\prealgebra\\\\mathpix_cache\"\" /b 2>&1 | find /c \".md \")",
+      "Bash(powershell -Command:*)",
+      "Bash(.venv\\\\Scripts\\\\pip install:*)",
+      "Bash(c:\\\\files\\\\Desktop\\\\ADA\\\\.venv\\\\Scripts\\\\pip.exe install:*)",
+      "Bash(powershell -File -:*)",
+      "Bash(\"c:\\\\files\\\\Desktop\\\\ADA\\\\.venv\\\\Scripts\\\\python.exe\" -m api.main)",
+      "Bash(timeout:*)",
+      "Bash(curl:*)",
+      "Bash(comm:*)",
+      "Bash(c:filesDesktopADA.venvScriptspython.exe -c \"import networkx; print\\(networkx.__version__\\)\")",
+      "Bash(cmd /c \"if exist c:\\\\files\\\\Desktop\\\\ADA\\\\backend\\\\output\\\\prealgebra\\\\dependency_edges.json \\(echo File exists\\) else \\(echo File not found\\)\")",
+      "Bash(cmd /c \"c:\\\\files\\\\Desktop\\\\ADA\\\\.venv\\\\Scripts\\\\python.exe -c \"\"import networkx; print\\(networkx.__version__\\)\"\"\")",
+      "Bash(cmd /c dir:*)",
+      "Bash(\"c:\\\\files\\\\Desktop\\\\ADA\\\\.venv\\\\Scripts\\\\python.exe\":*)",
+      "Bash(\"c:\\\\files\\\\Desktop\\\\ADA\\\\.venv\\\\Scripts\\\\python.exe\" -c:*)",
+      "Bash(\"c:\\\\files\\\\Desktop\\\\ADA\\\\.venv\\\\Scripts\\\\python.exe\" validate_graph.py)",
+      "Bash(dir:*)",
+      "Bash(findstr:*)",
+      "Bash(cmd /c \"where python\")",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(wsl --status:*)",
+      "Bash(wsl:*)",
+      "Bash(xargs:*)",
+      "Bash(ls:*)",
+      "Bash(rtk ls:*)"
+    ]
+  }
+}

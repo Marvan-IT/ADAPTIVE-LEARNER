@@ -1,0 +1,75 @@
+# ── Secrets / environment ──────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+
+# ── Python ─────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# ── Virtual environments ────────────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+
+# ── PDF textbooks (1 GB+ — do not commit) ──────────────────────────
+backend/data/
+
+# ── Pipeline outputs (ChromaDB, graphs, images — do not commit) ────
+backend/output/
+
+# ── Log files ──────────────────────────────────────────────────────
+*.log
+backend/server_err.log
+backend/server_out.log
+backend/uvicorn_stderr.log
+backend/uvicorn_stdout.log
+
+# ── Translation cache (runtime artifact) ───────────────────────────
+backend/translation_cache.json
+
+# ── Node / frontend ────────────────────────────────────────────────
+node_modules/
+frontend/dist/
+frontend/.vite/
+.eslintcache
+
+# ── OS artifacts ───────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Windows reserved device name artifact ──────────────────────────
+/nul
+
+# ── Debug / scratch scripts ──────────────────────────────────────────────────
+test_filter_debug.py
+test_llm_extraction.py
+query_chroma.py
+
+# ── Scratch JSON / text files ─────────────────────────────────────────────────
+test*.json
+tmp_*.json
+models.json
+temp_*.json
+response.json
+concept_id.txt
+
+# ── IDE ────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.suo
+*.user
