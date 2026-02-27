@@ -106,5 +106,11 @@
   "interest.minecraft": "マイクラ",
   "interest.dinosaurs": "恐竜",
   "interest.art": "アート",
-  "interest.robots": "ロボット"
+  "interest.robots": "ロボット",
+  "image.whatItShows": "これが示すもの：",
+  "image.whyItHelps": "なぜ役立つか：",
+  "image.diagram": "概念図",
+  "learning.generatingCard": "次のカードを生成中...",
+  "learning.reviewDue": "復習期限",
+  "learning.reviewDueBadge": "📖"
 }

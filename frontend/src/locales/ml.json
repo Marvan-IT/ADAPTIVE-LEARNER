@@ -106,5 +106,11 @@
   "interest.minecraft": "മൈൻക്രാഫ്റ്റ്",
   "interest.dinosaurs": "ദിനോസറുകൾ",
   "interest.art": "കല",
-  "interest.robots": "റോബോട്ടുകൾ"
+  "interest.robots": "റോബോട്ടുകൾ",
+  "image.whatItShows": "ഇത് കാണിക്കുന്നത്:",
+  "image.whyItHelps": "ഇത് എന്തുകൊണ്ട് സഹായിക്കുന്നു:",
+  "image.diagram": "ആശയ ഡയഗ്രം",
+  "learning.generatingCard": "അടുത്ത കാർഡ് സൃഷ്ടിക്കുന്നു...",
+  "learning.reviewDue": "അവലോകനം കാലഞ്ചി",
+  "learning.reviewDueBadge": "📖"
 }

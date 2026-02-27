@@ -7,6 +7,7 @@ import {
   completeCards,
   beginCheck,
   sendResponse,
+  completeCardAndGetNext,
 } from "../api/sessions";
 import { useStudent } from "./StudentContext";
 import { useTheme } from "./ThemeContext";
@@ -34,6 +35,11 @@ const initialState = {
   mastered: null,
   loading: false,
   error: null,
+  // Adaptive card tracking
+  idleTriggerCount: 0,
+  adaptiveCardLoading: false,
+  motivationalNote: null,
+  performanceVsBaseline: null,
 };
 
 function sessionReducer(state, action) {
@@ -56,7 +62,10 @@ function sessionReducer(state, action) {
     case "NEXT_CARD":
       return {
         ...state,
-        currentCardIndex: Math.min(state.currentCardIndex + 1, state.cards.length - 1),
+        currentCardIndex: state.currentCardIndex + 1,
+        idleTriggerCount: 0,
+        motivationalNote: null,
+        performanceVsBaseline: null,
       };
     case "PREV_CARD":
       return {
@@ -91,6 +100,32 @@ function sessionReducer(state, action) {
           { role: "assistant", content: action.payload },
         ],
         assistLoading: false,
+      };
+    case "IDLE_TRIGGERED":
+      return { ...state, idleTriggerCount: state.idleTriggerCount + 1 };
+    case "ADAPTIVE_CARD_LOADING":
+      return { ...state, adaptiveCardLoading: true };
+    case "ADAPTIVE_CARD_LOADED":
+      return {
+        ...state,
+        cards: [...state.cards, action.payload.card],
+        currentCardIndex: state.currentCardIndex + 1,
+        adaptiveCardLoading: false,
+        idleTriggerCount: 0,
+        motivationalNote: action.payload.motivational_note ?? null,
+        performanceVsBaseline: action.payload.performance_vs_baseline ?? null,
+      };
+    case "ADAPTIVE_CARD_ERROR":
+      return {
+        ...state,
+        adaptiveCardLoading: false,
+        currentCardIndex: Math.min(
+          state.currentCardIndex + 1,
+          state.cards.length - 1
+        ),
+        idleTriggerCount: 0,
+        motivationalNote: null,
+        performanceVsBaseline: null,
       };
     // Transition: cards done → Socratic chat
     case "CHECKING_STARTED":
@@ -134,6 +169,8 @@ function sessionReducer(state, action) {
   }
 }
 
+const MAX_ADAPTIVE_CARDS = 8;
+
 export function SessionProvider({ children }) {
   const [state, dispatch] = useReducer(sessionReducer, initialState);
   const { student, refreshMastery } = useStudent();
@@ -176,9 +213,32 @@ export function SessionProvider({ children }) {
     [student, style]
   );
 
-  const goToNextCard = useCallback(() => {
-    dispatch({ type: "NEXT_CARD" });
-  }, []);
+  const goToNextCard = useCallback(
+    async (signals) => {
+      // If no signals provided, session missing, or card ceiling reached, just advance index
+      if (!state.session || !signals || state.cards.length >= MAX_ADAPTIVE_CARDS) {
+        dispatch({ type: "NEXT_CARD" });
+        return;
+      }
+      dispatch({ type: "ADAPTIVE_CARD_LOADING" });
+      try {
+        const res = await completeCardAndGetNext(state.session.id, signals);
+        trackEvent("adaptive_card_loaded", {
+          card_index:              res.data.card_index,
+          adaptation:              res.data.adaptation_applied,
+          speed:                   res.data.learning_profile_summary?.speed,
+          comprehension:           res.data.learning_profile_summary?.comprehension,
+          engagement:              res.data.learning_profile_summary?.engagement,
+          confidence:              res.data.learning_profile_summary?.confidence_score,
+          performance_vs_baseline: res.data.performance_vs_baseline,
+        });
+        dispatch({ type: "ADAPTIVE_CARD_LOADED", payload: res.data });
+      } catch (err) {
+        dispatch({ type: "ADAPTIVE_CARD_ERROR" });
+      }
+    },
+    [state.session, state.cards.length]
+  );
 
   const goToPrevCard = useCallback(() => {
     dispatch({ type: "PREV_CARD" });
@@ -194,6 +254,9 @@ export function SessionProvider({ children }) {
   const sendAssistMessage = useCallback(
     async (message, trigger = "user") => {
       if (!state.session) return;
+      if (trigger === "idle") {
+        dispatch({ type: "IDLE_TRIGGERED" });
+      }
       if (trigger === "user" && message) {
         dispatch({ type: "ASSIST_SENT", payload: message });
       }

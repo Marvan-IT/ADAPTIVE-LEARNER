@@ -106,5 +106,11 @@
   "interest.minecraft": "我的世界",
   "interest.dinosaurs": "恐龙",
   "interest.art": "艺术",
-  "interest.robots": "机器人"
+  "interest.robots": "机器人",
+  "image.whatItShows": "这展示了什么：",
+  "image.whyItHelps": "为什么有帮助：",
+  "image.diagram": "概念示意图",
+  "learning.generatingCard": "正在生成您的下一张卡片...",
+  "learning.reviewDue": "复习到期",
+  "learning.reviewDueBadge": "📖"
 }

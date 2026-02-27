@@ -1,8 +1,8 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { useSession } from "../../context/SessionContext";
-import { API_BASE_URL } from "../../utils/constants";
 import ChatBubble from "./ChatBubble";
+import ConceptImage from "./ConceptImage";
 import { Send, Loader, MessageCircle, Brain, Image as ImageIcon, ChevronDown, ChevronUp } from "lucide-react";
 import { trackEvent } from "../../utils/analytics";
 
@@ -216,34 +216,7 @@ function DiagramPanel({ diagrams, conceptTitle }) {
       {expanded && (
         <div style={{ padding: "0.5rem 1rem 0.75rem" }}>
           {diagrams.slice(0, 5).map((img, i) => (
-            <div key={i} style={{
-              borderRadius: "8px",
-              border: "1px solid var(--color-border)",
-              overflow: "hidden",
-              backgroundColor: "#fff",
-              marginBottom: "0.5rem",
-              maxWidth: "400px",
-            }}>
-              <img
-                src={`${API_BASE_URL}${img.url}`}
-                alt={img.caption || `Diagram ${i + 1} for ${conceptTitle}`}
-                style={{ width: "100%", height: "auto", display: "block" }}
-                loading="lazy"
-              />
-              {img.caption && (
-                <div style={{
-                  padding: "0.4rem 0.6rem",
-                  fontSize: "0.75rem",
-                  color: "var(--color-text-muted)",
-                  fontStyle: "italic",
-                  lineHeight: 1.3,
-                  borderTop: "1px solid var(--color-border)",
-                  backgroundColor: "var(--color-bg)",
-                }}>
-                  {img.caption}
-                </div>
-              )}
-            </div>
+            <ConceptImage key={i} img={img} maxWidth="400px" />
           ))}
         </div>
       )}

@@ -3,8 +3,8 @@ import ReactMarkdown from "react-markdown";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import { useSession } from "../../context/SessionContext";
-import { API_BASE_URL } from "../../utils/constants";
 import AssistantPanel from "./AssistantPanel";
+import ConceptImage from "./ConceptImage";
 import { useTranslation } from "react-i18next";
 import { trackEvent } from "../../utils/analytics";
 import {
@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 
 const WRONG_FEEDBACK_MS = 1800;
+const MAX_ADAPTIVE_CARDS = 8;
 
 export default function CardLearningView() {
   const { t } = useTranslation();
@@ -31,14 +32,42 @@ export default function CardLearningView() {
     finishCards,
     sendAssistMessage,
     loading,
+    assistLoading,
+    idleTriggerCount,
+    adaptiveCardLoading,
+    motivationalNote,
+    performanceVsBaseline,
   } = useSession();
 
   const card = cards[currentCardIndex];
-  const isLastCard = currentCardIndex === cards.length - 1;
+  const isLastCard = currentCardIndex === cards.length - 1 || cards.length >= MAX_ADAPTIVE_CARDS;
 
   // Per-card question state: { mcqIdx, tfIdx, mcqCorrect, tfCorrect, mcqFeedback, tfFeedback }
   const [cardStates, setCardStates] = useState({});
   const feedbackTimerRef = useRef(null);
+
+  // Signal tracking refs — reset on each new card
+  const cardStartTimeRef = useRef(Date.now());
+  const wrongAttemptsRef = useRef(0);
+  const selectedWrongOptionRef = useRef(null);
+  const hintsUsedRef = useRef(0);
+  const prevAssistLoadingRef = useRef(false);
+
+  // Reset signal tracking when card changes
+  useEffect(() => {
+    cardStartTimeRef.current = Date.now();
+    wrongAttemptsRef.current = 0;
+    selectedWrongOptionRef.current = null;
+    hintsUsedRef.current = 0;
+  }, [currentCardIndex]);
+
+  // Track hints via assistLoading transitions (false → true = one hint request)
+  useEffect(() => {
+    if (assistLoading && !prevAssistLoadingRef.current) {
+      hintsUsedRef.current += 1;
+    }
+    prevAssistLoadingRef.current = !!assistLoading;
+  }, [assistLoading]);
 
   const getCardState = useCallback(
     (idx) =>
@@ -113,6 +142,10 @@ export default function CardLearningView() {
       });
 
       if (!correct) {
+        // Track wrong attempt signals
+        wrongAttemptsRef.current += 1;
+        selectedWrongOptionRef.current = optionIndex;
+
         // Auto-hint via assistant
         sendAssistMessage(
           `The student got this question wrong: "${q.question}". Give a helpful hint about this topic without revealing the answer.`,
@@ -152,6 +185,9 @@ export default function CardLearningView() {
       });
 
       if (!correct) {
+        // Track wrong attempt signals
+        wrongAttemptsRef.current += 1;
+
         sendAssistMessage(
           `The student got this question wrong: "${q.question}". Give a helpful hint about this topic without revealing the answer.`,
           "user"
@@ -174,6 +210,46 @@ export default function CardLearningView() {
     [cs, currentTf, currentCardIndex, updateCardState, sendAssistMessage, getCardState]
   );
 
+  // Collect signals and call adaptive goToNextCard
+  const handleNextCard = useCallback(() => {
+    goToNextCard({
+      cardIndex:           currentCardIndex,
+      timeOnCardSec:       (Date.now() - cardStartTimeRef.current) / 1000,
+      wrongAttempts:       wrongAttemptsRef.current,
+      selectedWrongOption: selectedWrongOptionRef.current,
+      hintsUsed:           hintsUsedRef.current,
+      idleTriggers:        idleTriggerCount,
+    });
+  }, [currentCardIndex, idleTriggerCount, goToNextCard]);
+
+  // Loading skeleton while adaptive card is being fetched
+  if (adaptiveCardLoading) {
+    return (
+      <div style={{ display: "flex", gap: "1rem", alignItems: "flex-start" }}>
+        <div style={{ flex: "1 1 0", minWidth: 0 }}>
+          <div className="flex flex-col gap-4 animate-pulse p-6">
+            <div className="h-6 bg-gray-200 dark:bg-gray-700 rounded w-3/4" />
+            <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-full" />
+            <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-5/6" />
+            <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-2/3" />
+            <div className="mt-4 h-10 bg-gray-200 dark:bg-gray-700 rounded w-1/2" />
+          </div>
+          <p style={{
+            textAlign: "center",
+            color: "var(--color-text-muted)",
+            fontSize: "0.9rem",
+            marginTop: "0.5rem",
+          }}>
+            {t("learning.generatingCard")}
+          </p>
+        </div>
+        <div style={{ width: "320px", flexShrink: 0 }}>
+          <AssistantPanel />
+        </div>
+      </div>
+    );
+  }
+
   if (!card) return null;
 
   return (
@@ -181,6 +257,14 @@ export default function CardLearningView() {
       {/* ─── Main Card Area (70%) ─── */}
       <div style={{ flex: "1 1 0", minWidth: 0 }}>
         <CardProgress current={currentCardIndex} total={cards.length} cardStates={cardStates} cards={cards} />
+
+        {/* Motivational micro-feedback banner */}
+        {motivationalNote && (
+          <div className="mb-3 px-4 py-2 rounded-lg bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 text-green-800 dark:text-green-300 text-sm font-medium flex items-center gap-2">
+            {performanceVsBaseline === "FASTER" && <span>⚡</span>}
+            {motivationalNote}
+          </div>
+        )}
 
         {/* Card Content */}
         <div
@@ -236,43 +320,13 @@ export default function CardLearningView() {
             </div>
 
             {/* Card Images */}
-            {card.images?.length > 0 && (
+            {card.images?.filter((img) => img.description || img.caption).length > 0 && (
               <div style={{ marginTop: "1rem" }}>
-                {card.images.map((img, i) => (
-                  <div
-                    key={i}
-                    style={{
-                      borderRadius: "10px",
-                      border: "1.5px solid var(--color-border)",
-                      overflow: "hidden",
-                      backgroundColor: "#fff",
-                      marginBottom: "0.75rem",
-                      maxWidth: "500px",
-                    }}
-                  >
-                    <img
-                      src={`${API_BASE_URL}${img.url}`}
-                      alt={img.caption || `Diagram ${i + 1}`}
-                      style={{ width: "100%", height: "auto", display: "block" }}
-                      loading="lazy"
-                    />
-                    {img.caption && (
-                      <div
-                        style={{
-                          padding: "0.4rem 0.7rem",
-                          fontSize: "0.8rem",
-                          color: "var(--color-text-muted)",
-                          fontStyle: "italic",
-                          lineHeight: 1.3,
-                          borderTop: "1px solid var(--color-border)",
-                          backgroundColor: "var(--color-bg)",
-                        }}
-                      >
-                        {img.caption}
-                      </div>
-                    )}
-                  </div>
-                ))}
+                {card.images
+                  .filter((img) => img.description || img.caption)
+                  .map((img, i) => (
+                    <ConceptImage key={i} img={img} maxWidth="500px" />
+                  ))}
               </div>
             )}
 
@@ -389,7 +443,7 @@ export default function CardLearningView() {
             </button>
           ) : (
             <button
-              onClick={goToNextCard}
+              onClick={handleNextCard}
               disabled={!canProceed || isLastCard}
               style={{
                 display: "flex",

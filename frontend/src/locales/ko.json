@@ -106,5 +106,11 @@
   "interest.minecraft": "마인크래프트",
   "interest.dinosaurs": "공룡",
   "interest.art": "미술",
-  "interest.robots": "로봇"
+  "interest.robots": "로봇",
+  "image.whatItShows": "이것이 보여주는 것:",
+  "image.whyItHelps": "왜 도움이 되는지:",
+  "image.diagram": "개념 도표",
+  "learning.generatingCard": "다음 카드 생성 중...",
+  "learning.reviewDue": "복습 예정",
+  "learning.reviewDueBadge": "📖"
 }

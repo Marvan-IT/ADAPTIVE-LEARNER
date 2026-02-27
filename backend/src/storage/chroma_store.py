@@ -3,6 +3,8 @@ ChromaDB Store — manages the vector database for concept block storage and ret
 Uses OpenAI embeddings for vector representation.
 """
 
+import json
+import logging
 from pathlib import Path
 from typing import Optional
 
@@ -11,8 +13,17 @@ from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
 
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from config import OPENAI_API_KEY, OPENAI_BASE_URL, EMBEDDING_MODEL, CHROMA_COLLECTION_NAME, CHROMA_DIR
+from config import (
+    OPENAI_API_KEY,
+    OPENAI_BASE_URL,
+    EMBEDDING_MODEL,
+    CHROMA_COLLECTION_NAME,
+    CHROMA_DIR,
+    LATEX_METADATA_SIZE_WARN_THRESHOLD,
+)
 from models import ConceptBlock, DependencyEdge
+
+logger = logging.getLogger(__name__)
 
 
 def initialize_collection(
@@ -87,6 +98,15 @@ def store_concept_blocks(
             prereqs = prereq_map.get(block.concept_id, [])
             dependents = dependent_map.get(block.concept_id, [])
 
+            latex_json = json.dumps(block.latex, ensure_ascii=False)
+            latex_byte_len = len(latex_json.encode("utf-8"))
+            if latex_byte_len > LATEX_METADATA_SIZE_WARN_THRESHOLD:
+                logger.warning(
+                    "latex_expressions for concept %s is %d bytes — approaching metadata limit",
+                    block.concept_id,
+                    latex_byte_len,
+                )
+
             ids.append(block.concept_id)
             documents.append(block.text)
             metadatas.append({
@@ -99,6 +119,7 @@ def store_concept_blocks(
                 "source_pages_start": block.source_pages[0] if block.source_pages else 0,
                 "source_pages_end": block.source_pages[-1] if block.source_pages else 0,
                 "latex_count": len(block.latex),
+                "latex_expressions": latex_json,
                 "prerequisites": ", ".join(prereqs) if prereqs else "",
                 "dependents": ", ".join(dependents) if dependents else "",
                 "prerequisite_count": len(prereqs),
@@ -110,7 +131,7 @@ def store_concept_blocks(
             metadatas=metadatas,
         )
         stored += len(batch)
-        print(f"  Stored batch {i // batch_size + 1}: {len(batch)} concepts")
+        logger.info("Stored batch %d: %d concepts", i // batch_size + 1, len(batch))
 
     return stored
 

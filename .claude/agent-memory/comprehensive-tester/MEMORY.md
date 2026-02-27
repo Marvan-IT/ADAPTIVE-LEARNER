@@ -45,3 +45,22 @@
 - `"Return ONLY the JSON object"` — always in user prompt
 
 See `adaptive-engine-tests.md` for full test count and group breakdown.
+
+### Concept Enrichment Module (chroma_store + vision_annotator + knowledge_service)
+- `store_concept_blocks` upserts with `latex_expressions=json.dumps(block.latex)` and `latex_count=len(block.latex)` — both always present
+- `annotate_image(image_bytes, concept_title, image_type, llm_client, model, cache_dir)` — skips DECORATIVE immediately; graceful degradation on API/JSON errors → `{"description": None, "relevance": None}`
+- Vision MD5 cache: `{cache_dir}/vision_{md5_hex}.json`; second call with same bytes hits cache, no API call
+- `KnowledgeService._get_latex(concept_id, chroma_metadata)` — primary: `chroma_metadata["latex_expressions"]` (JSON string); fallback: `_latex_map`
+- `KnowledgeService.get_concept_images` always returns `description` and `relevance` keys (None if unannotated)
+
+### KnowledgeService Test Isolation Pattern
+Use `object.__new__` to bypass `__init__` entirely (avoids ChromaDB/file I/O):
+```python
+ks = object.__new__(KnowledgeService)
+ks.book_slug = "prealgebra"
+ks._latex_map = {}; ks._image_map = {}
+type(ks.graph).__contains__ = MagicMock(return_value=True)  # for `in` operator
+```
+MagicMock dunder `__contains__` must be set on `type(mock_obj)`, not the instance.
+
+See `backend/tests/test_concept_enrichment.py` — 17 tests across 3 groups.

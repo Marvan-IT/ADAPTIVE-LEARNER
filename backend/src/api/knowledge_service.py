@@ -7,6 +7,7 @@ dependency graph traversal in a single query.
 """
 
 import json
+import logging
 import sys
 import os
 from pathlib import Path
@@ -20,6 +21,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from storage.chroma_store import initialize_collection, query_similar_concepts, get_collection_stats
 from graph.graph_store import load_graph_json, get_graph_stats, get_topological_order, get_learning_path, get_concept_depth
 from config import OUTPUT_DIR
+
+logger = logging.getLogger(__name__)
 
 
 class KnowledgeService:
@@ -44,8 +47,9 @@ class KnowledgeService:
         graph_path = self._book_output_dir / "dependency_graph.json"
         self.graph = load_graph_json(graph_path)
 
-        # Load LaTeX data from concept_blocks.json
-        # (ChromaDB only stores latex_count, not the actual array)
+        # Load LaTeX data from concept_blocks.json as a fallback.
+        # The primary source is now the latex_expressions field stored
+        # directly in ChromaDB metadata (populated by chroma_store.py).
         self._latex_map: dict[str, list[str]] = {}
         concept_blocks_path = self._book_output_dir / "concept_blocks.json"
         if concept_blocks_path.exists():
@@ -54,7 +58,7 @@ class KnowledgeService:
             for block in blocks:
                 cid = block.get("concept_id", "")
                 self._latex_map[cid] = block.get("latex", [])
-            print(f"  LaTeX: loaded for {len(self._latex_map)} concepts")
+            logger.info("LaTeX fallback map loaded for %d concepts", len(self._latex_map))
 
         # Load image index from image_index.json
         self._image_map: dict[str, list[dict]] = {}
@@ -63,10 +67,16 @@ class KnowledgeService:
             with open(image_index_path, "r", encoding="utf-8") as f:
                 self._image_map = json.load(f)
             total_images = sum(len(v) for v in self._image_map.values())
-            print(f"  Images: {total_images} across {len(self._image_map)} concepts")
+            logger.info("Image index loaded: %d images across %d concepts", total_images, len(self._image_map))
 
-        print(f"  ChromaDB: {self.collection.count()} concepts in '{collection_name}'")
-        print(f"  Graph: {self.graph.number_of_nodes()} nodes, {self.graph.number_of_edges()} edges")
+        logger.info(
+            "ChromaDB collection '%s': %d concepts", collection_name, self.collection.count()
+        )
+        logger.info(
+            "Graph: %d nodes, %d edges",
+            self.graph.number_of_nodes(),
+            self.graph.number_of_edges(),
+        )
 
     # ── The core RAG + Graph method ───────────────────────────────
 
@@ -161,13 +171,17 @@ class KnowledgeService:
             prerequisites = sorted(self.graph.predecessors(concept_id))
             dependents = sorted(self.graph.successors(concept_id))
 
+        # Pass the already-fetched metadata dict so _get_latex can read
+        # latex_expressions without making a second ChromaDB round-trip.
+        latex = self._get_latex(concept_id, chroma_metadata=metadata)
+
         return {
             "concept_id": concept_id,
             "concept_title": metadata.get("concept_title", ""),
             "chapter": str(metadata.get("chapter", "")),
             "section": str(metadata.get("section", "")),
             "text": concept["text"],
-            "latex": self._get_latex(concept_id),
+            "latex": latex,
             "images": self.get_concept_images(concept_id),
             "prerequisites": prerequisites,
             "dependents": dependents,
@@ -310,7 +324,14 @@ class KnowledgeService:
     # ── Images ────────────────────────────────────────────────────
 
     def get_concept_images(self, concept_id: str) -> list[dict]:
-        """Get image metadata with URLs for a concept."""
+        """
+        Get image metadata with URLs and vision annotations for a concept.
+
+        Returns a list of dicts matching the ConceptImage schema. The
+        description and relevance fields are populated from image_index.json
+        when the pipeline has been run with annotation enabled; otherwise
+        they are None.
+        """
         raw_images = self._image_map.get(concept_id, [])
         return [
             {
@@ -320,12 +341,54 @@ class KnowledgeService:
                 "height": img["height"],
                 "image_type": img["image_type"],
                 "page": img["page"],
+                "description": img.get("description"),  # None if not annotated
+                "relevance": img.get("relevance"),       # None if not annotated
             }
             for img in raw_images
         ]
 
     # ── Internal helpers ──────────────────────────────────────────
 
-    def _get_latex(self, concept_id: str) -> list[str]:
-        """Get LaTeX expressions for a concept from the preloaded map."""
+    def _get_latex(
+        self,
+        concept_id: str,
+        chroma_metadata: Optional[dict] = None,
+    ) -> list[str]:
+        """
+        Get LaTeX expressions for a concept.
+
+        Primary source: latex_expressions field in ChromaDB metadata
+        (a JSON-serialised list stored by chroma_store.store_concept_blocks).
+        Callers that have already retrieved the ChromaDB metadata dict should
+        pass it as chroma_metadata to avoid a second database round-trip.
+
+        Fallback: _latex_map loaded from concept_blocks.json at startup.
+        Used for collections that pre-date the latex_expressions field and
+        for any parse failures.
+
+        Args:
+            concept_id:      The concept identifier.
+            chroma_metadata: Optional already-fetched ChromaDB metadata dict
+                             for this concept.  When supplied, no extra
+                             ChromaDB call is made.
+
+        Returns:
+            list[str] — may be empty if no LaTeX is stored.
+        """
+        # ── Primary: ChromaDB metadata ────────────────────────────
+        # Use the caller-supplied metadata when available; otherwise fall
+        # through to the in-memory fallback without making an extra call.
+        if chroma_metadata is not None:
+            raw = chroma_metadata.get("latex_expressions")
+            if raw:
+                try:
+                    return json.loads(raw)
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to parse latex_expressions for concept %s: %s",
+                        concept_id,
+                        exc,
+                    )
+
+        # ── Fallback: in-memory map from concept_blocks.json ─────
         return self._latex_map.get(concept_id, [])

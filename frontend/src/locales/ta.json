@@ -106,5 +106,11 @@
   "interest.minecraft": "மைன்கிராஃப்ட்",
   "interest.dinosaurs": "டைனோசர்கள்",
   "interest.art": "கலை",
-  "interest.robots": "ரோபோக்கள்"
+  "interest.robots": "ரோபோக்கள்",
+  "image.whatItShows": "இது காட்டுவது:",
+  "image.whyItHelps": "ஏன் உதவுகிறது:",
+  "image.diagram": "கருத்து வரைபடம்",
+  "learning.generatingCard": "உங்கள் அடுத்த அட்டையை உருவாக்குகிறது...",
+  "learning.reviewDue": "மதிப்பாய்வு நிலுவை",
+  "learning.reviewDueBadge": "📖"
 }

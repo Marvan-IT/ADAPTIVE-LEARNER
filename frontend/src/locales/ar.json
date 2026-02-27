@@ -106,5 +106,11 @@
   "interest.minecraft": "ماينكرافت",
   "interest.dinosaurs": "ديناصورات",
   "interest.art": "فن",
-  "interest.robots": "روبوتات"
+  "interest.robots": "روبوتات",
+  "image.whatItShows": "ما يُظهره:",
+  "image.whyItHelps": "لماذا يساعد:",
+  "image.diagram": "مخطط مفهوم",
+  "learning.generatingCard": "جارٍ توليد بطاقتك التالية...",
+  "learning.reviewDue": "مراجعة مستحقة",
+  "learning.reviewDueBadge": "📖"
 }

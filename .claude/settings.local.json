@@ -27,7 +27,8 @@
       "Bash(wsl:*)",
       "Bash(xargs:*)",
       "Bash(ls:*)",
-      "Bash(rtk ls:*)"
+      "Bash(rtk ls:*)",
+      "Bash(alembic:*)"
     ]
   }
 }

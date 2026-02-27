@@ -202,6 +202,8 @@ def build_socratic_system_prompt(
     interests: list[str] | None = None,
     images: list[dict] | None = None,
     language: str = "en",
+    socratic_profile=None,   # LearningProfile | None
+    history: dict | None = None,
 ) -> str:
     """Build the system prompt for the Socratic questioning phase."""
 
@@ -238,7 +240,7 @@ def build_socratic_system_prompt(
                 "If you need a visual not available, describe it in words."
             )
 
-    return f"""You are ADA, an adaptive math tutor in ASSESSMENT MODE.
+    prompt = f"""You are ADA, an adaptive math tutor in ASSESSMENT MODE.
 
 Your job is to CHECK whether the student truly understood a concept through guided questioning.
 
@@ -275,6 +277,32 @@ CURRENT CONCEPT: {concept_title}
 CONCEPT REFERENCE (for your internal use only — NEVER share this with the student):
 {concept_text[:1200]}
 {interests_text}{image_context}{style_text}{_language_instruction(language)}"""
+
+    # Append adaptive student context when a learning profile is available
+    if socratic_profile is not None:
+        if socratic_profile.comprehension == "STRUGGLING":
+            prompt += (
+                "\n\nSTUDENT CONTEXT: This student typically struggles with new concepts. "
+                "Ask simpler, step-by-step questions. Offer a gentle hint if they get stuck twice."
+            )
+        elif socratic_profile.comprehension == "STRONG":
+            prompt += (
+                "\n\nSTUDENT CONTEXT: This student is strong and fast. "
+                "Ask deeper, more abstract questions. Push them to explain the WHY, not just the HOW."
+            )
+        if socratic_profile.engagement == "BORED":
+            prompt += (
+                "\nFrame questions as real-world puzzles or challenges to maintain engagement."
+            )
+
+    if history and history.get("is_known_weak_concept"):
+        n = history.get("failed_concept_attempts", 0)
+        prompt += (
+            f"\nNote: This student has attempted this concept {n} time(s) without mastering it. "
+            "Be especially encouraging and patient."
+        )
+
+    return prompt
 
 
 # ── Card-Based Learning Prompts ──────────────────────────────
@@ -418,7 +446,11 @@ def build_cards_user_prompt(
                     hint = "tall/vertical (table or step-by-step)"
                 else:
                     hint = "standard diagram (chart or worked example)"
-                desc.append(f"  Diagram {i}: {hint}, from page {page}")
+                vision_desc = img.get("description") or ""
+                if vision_desc:
+                    desc.append(f"  Diagram {i}: {hint}, from page {page} — {vision_desc[:120]}")
+                else:
+                    desc.append(f"  Diagram {i}: {hint}, from page {page}")
             image_text = (
                 "\n\nAVAILABLE DIAGRAMS:\n"
                 + "\n".join(desc)

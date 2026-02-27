@@ -70,7 +70,12 @@ BACK_MATTER_MARKERS = [
 
 # ── Mathpix OCR settings ──────────────────────────────────────────────
 MATHPIX_DPI = 200          # Resolution for page rendering (balances quality vs size)
-MATHPIX_RATE_LIMIT = 0.5   # Seconds between API requests
+MATHPIX_RATE_LIMIT = 0.5   # Seconds between Mathpix API requests
+
+# ── Vision annotation settings ────────────────────────────────────────
+VISION_RATE_LIMIT: float = 0.5   # Seconds between GPT-4o Vision API requests
+# Warn when latex_expressions JSON string exceeds this byte threshold in ChromaDB metadata
+LATEX_METADATA_SIZE_WARN_THRESHOLD: int = 8192
 
 # ── Book-slug to book-code mapping ─────────────────────────────────────
 BOOK_CODE_MAP = {

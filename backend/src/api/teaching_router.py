@@ -4,15 +4,16 @@ Teaching sessions, Socratic checks, style switching.
 """
 
 import re
+from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select, func
+from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from db.connection import get_db
-from db.models import Student, TeachingSession, ConversationMessage, StudentMastery
+from db.models import Student, TeachingSession, ConversationMessage, StudentMastery, SpacedReview
 from api.teaching_schemas import (
     CreateStudentRequest, StudentResponse,
     StartSessionRequest, SessionResponse,
@@ -361,3 +362,36 @@ async def complete_cards(
 
     result = await teaching_svc.complete_cards(db, session)
     return result
+
+
+# ═══════════════════════════════════════════════════════════════════
+# SPACED REVIEW
+# ═══════════════════════════════════════════════════════════════════
+
+@router.get("/students/{student_id}/review-due")
+async def get_review_due(student_id: UUID, db: AsyncSession = Depends(get_db)):
+    """Return concepts due for spaced review for this student."""
+    now = datetime.now(timezone.utc)
+
+    result = await db.execute(
+        select(SpacedReview)
+        .where(
+            and_(
+                SpacedReview.student_id == student_id,
+                SpacedReview.due_at <= now,
+                SpacedReview.completed_at.is_(None),
+            )
+        )
+        .order_by(SpacedReview.due_at)
+    )
+    reviews = result.scalars().all()
+
+    return [
+        {
+            "concept_id": r.concept_id,
+            "due_at": r.due_at.isoformat(),
+            "review_number": r.review_number,
+            "review_id": str(r.id),
+        }
+        for r in reviews
+    ]

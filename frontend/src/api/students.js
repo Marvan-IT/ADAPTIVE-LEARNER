@@ -18,3 +18,6 @@ export const listStudents = () => api.get("/api/v2/students");
 
 export const updateLanguage = (studentId, language) =>
   api.patch(`/api/v2/students/${studentId}/language`, { language });
+
+export const getReviewDue = (studentId) =>
+  api.get(`/api/v2/students/${studentId}/review-due`);

@@ -106,5 +106,11 @@
   "interest.minecraft": "Minecraft",
   "interest.dinosaurs": "Dinosaurier",
   "interest.art": "Kunst",
-  "interest.robots": "Roboter"
+  "interest.robots": "Roboter",
+  "image.whatItShows": "Was dies zeigt:",
+  "image.whyItHelps": "Warum es hilft:",
+  "image.diagram": "Konzeptdiagramm",
+  "learning.generatingCard": "Nächste Karte wird generiert...",
+  "learning.reviewDue": "Wiederholung fällig",
+  "learning.reviewDueBadge": "📖"
 }

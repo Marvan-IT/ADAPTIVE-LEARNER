@@ -106,5 +106,11 @@
   "interest.minecraft": "මයින්ක්‍රාෆ්ට්",
   "interest.dinosaurs": "ඩයිනසෝරයන්",
   "interest.art": "කලාව",
-  "interest.robots": "රොබෝවරු"
+  "interest.robots": "රොබෝවරු",
+  "image.whatItShows": "මෙය පෙන්වන දේ:",
+  "image.whyItHelps": "මෙය උපකාර වන්නේ ඇයි:",
+  "image.diagram": "සංකල්ප රූප සටහන",
+  "learning.generatingCard": "ඔබේ ඊළඟ කාඩ්පත ජනනය කරමින්...",
+  "learning.reviewDue": "සමාලෝචනය නියමිත",
+  "learning.reviewDueBadge": "📖"
 }

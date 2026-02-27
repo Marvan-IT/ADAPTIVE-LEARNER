@@ -25,10 +25,21 @@ async def get_db():
 
 
 async def init_db():
-    """Create all tables from ORM metadata."""
-    from db.models import Base
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    """
+    Database initialisation hook called at FastAPI lifespan startup.
+
+    Schema management is handled exclusively by Alembic migrations.
+    To apply migrations before starting the server run:
+
+        cd backend && alembic upgrade head
+
+    This function intentionally performs no DDL so that production schema
+    changes are always versioned, reviewed, and reversible.
+    """
+    # Verify that the engine can reach the database on startup.
+    # This gives an early, clear error if DATABASE_URL is misconfigured.
+    async with engine.connect() as conn:
+        await conn.execute(__import__("sqlalchemy").text("SELECT 1"))
 
 
 async def close_db():

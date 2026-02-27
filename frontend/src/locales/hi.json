@@ -106,5 +106,11 @@
   "interest.minecraft": "माइनक्राफ्ट",
   "interest.dinosaurs": "डायनासोर",
   "interest.art": "कला",
-  "interest.robots": "रोबोट"
+  "interest.robots": "रोबोट",
+  "image.whatItShows": "यह क्या दिखाता है:",
+  "image.whyItHelps": "यह क्यों मदद करता है:",
+  "image.diagram": "अवधारणा आरेख",
+  "learning.generatingCard": "आपका अगला कार्ड बना रहे हैं...",
+  "learning.reviewDue": "समीक्षा देय",
+  "learning.reviewDueBadge": "📖"
 }

@@ -25,7 +25,7 @@ from api.prompts import (
     build_cards_user_prompt,
     build_assistant_system_prompt,
 )
-from db.models import TeachingSession, ConversationMessage, StudentMastery, Student
+from db.models import TeachingSession, ConversationMessage, StudentMastery, Student, SpacedReview
 
 MASTERY_THRESHOLD = 70  # Score >= 70 marks concept as mastered
 
@@ -173,6 +173,30 @@ class TeachingService:
         concept_title = concept["concept_title"]
         images = concept.get("images", [])
 
+        # Build student's learning profile from card interaction history
+        from adaptive.adaptive_engine import load_student_history
+        from adaptive.profile_builder import build_learning_profile
+        from adaptive.schemas import AnalyticsSummary
+
+        history = await load_student_history(str(session.student_id), session.concept_id, db)
+        socratic_profile = None
+        if history["total_cards_completed"] >= 5:
+            mini_analytics = AnalyticsSummary(
+                student_id=str(session.student_id),
+                concept_id=session.concept_id,
+                time_spent_sec=history["avg_time_per_card"] or 120.0,
+                expected_time_sec=120.0,
+                attempts=max(1, round((history["avg_wrong_attempts"] or 0) + 1)),
+                wrong_attempts=round(history["avg_wrong_attempts"] or 0),
+                hints_used=round(history["avg_hints_per_card"] or 0),
+                revisits=0,
+                recent_dropoffs=0,
+                skip_rate=0.0,
+                quiz_score=1.0,
+                last_7d_sessions=history["sessions_last_7d"],
+            )
+            socratic_profile = build_learning_profile(mini_analytics, has_unmet_prereq=False)
+
         # Build the Socratic system prompt (per-lesson interests override profile)
         effective_interests = session.lesson_interests if session.lesson_interests else student.interests
         language = getattr(student, "preferred_language", "en") or "en"
@@ -183,6 +207,8 @@ class TeachingService:
             interests=effective_interests,
             images=images,
             language=language,
+            socratic_profile=socratic_profile,
+            history=history,
         )
 
         msg_count = await self._get_message_count(db, session.id)
@@ -291,6 +317,18 @@ class TeachingService:
                         student_id=session.student_id,
                         concept_id=session.concept_id,
                         session_id=session.id,
+                    ))
+
+                # Create spaced review schedule (Ebbinghaus: +1, +3, +7, +14, +30 days)
+                from datetime import timedelta
+                REVIEW_INTERVALS_DAYS = [1, 3, 7, 14, 30]
+                now_utc = datetime.now(timezone.utc)
+                for i, days in enumerate(REVIEW_INTERVALS_DAYS, 1):
+                    db.add(SpacedReview(
+                        student_id=session.student_id,
+                        concept_id=session.concept_id,
+                        review_number=i,
+                        due_at=now_utc + timedelta(days=days),
                     ))
 
         await db.flush()

@@ -17,14 +17,21 @@ from openai import AsyncOpenAI
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from adaptive.schemas import AdaptiveLessonRequest, AdaptiveLesson
+from uuid import UUID
+
+from adaptive.schemas import AdaptiveLessonRequest, AdaptiveLesson, NextCardRequest, NextCardResponse
 from adaptive.adaptive_engine import generate_adaptive_lesson
 from db.connection import get_db
 from db.models import Student, StudentMastery
+from config import OPENAI_MODEL
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v3", tags=["adaptive"])
+
+# Secondary router for card-completion endpoints mounted under /api/v2
+# (cards endpoint must live at /api/v2/sessions/{id}/complete-card, not /api/v3)
+cards_router = APIRouter(tags=["adaptive-cards"])
 
 # ── Service references — injected by main.py lifespan ─────────────────────────
 # Set to None here; main.py assigns real instances after startup.
@@ -113,3 +120,164 @@ async def generate_lesson(
         raise HTTPException(status_code=500, detail="Internal server error")
 
     return lesson
+
+
+# ── Card-completion adaptive endpoint ─────────────────────────────────────────
+
+@cards_router.post(
+    "/api/v2/sessions/{session_id}/complete-card",
+    response_model=NextCardResponse,
+    summary="Record card completion and generate the next adaptive card",
+    description=(
+        "Persists the student's card interaction signals, loads their history, "
+        "blends current signals with historical baselines, generates an adaptive "
+        "next card via the LLM, and returns it with motivational context. "
+        "Returns 409 when the 8-card ceiling is reached."
+    ),
+)
+async def complete_card(
+    session_id: UUID,
+    req: NextCardRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    POST /api/v2/sessions/{session_id}/complete-card
+
+    Steps:
+      1. Load and validate the session.
+      2. Save the CardInteraction row immediately.
+      3. Check the 8-card ceiling — return 409 if reached.
+      4. Load the student's full interaction history for blending.
+      5. Load the student's mastery store (bulk SELECT, no N+1).
+      6. Call generate_next_card() from the adaptive engine.
+      7. Compute performance_vs_baseline comparison string.
+      8. Append the new card to session.presentation_text cache.
+      9. Commit and return NextCardResponse.
+
+    Error responses:
+      400 — Session not in PRESENTING or CARDS phase
+      404 — Session not found
+      409 — Card ceiling (8 cards) reached
+      502 — LLM failed after all retries
+    """
+    import json as json_mod
+    from sqlalchemy import select
+    from db.models import CardInteraction, Student, TeachingSession, StudentMastery
+    from adaptive.adaptive_engine import load_student_history, generate_next_card
+
+    # 1. Load session
+    session_result = await db.execute(
+        select(TeachingSession).where(TeachingSession.id == session_id)
+    )
+    session = session_result.scalar_one_or_none()
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if session.phase not in ("PRESENTING", "CARDS"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Session phase '{session.phase}' does not accept card signals",
+        )
+
+    # 2. Load student language preference
+    student_result = await db.execute(
+        select(Student).where(Student.id == session.student_id)
+    )
+    student = student_result.scalar_one_or_none()
+    language = student.preferred_language if student else "en"
+
+    # 3. Save CardInteraction immediately
+    interaction = CardInteraction(
+        session_id=session_id,
+        student_id=session.student_id,
+        concept_id=session.concept_id,
+        card_index=req.card_index,
+        time_on_card_sec=req.time_on_card_sec,
+        wrong_attempts=req.wrong_attempts,
+        selected_wrong_option=req.selected_wrong_option,
+        hints_used=req.hints_used,
+        idle_triggers=req.idle_triggers,
+    )
+    db.add(interaction)
+    await db.flush()
+
+    # 4. Check ceiling — parse existing cards from the session cache
+    existing_cards: list = []
+    if session.presentation_text:
+        try:
+            existing_cards = json_mod.loads(session.presentation_text)
+            if not isinstance(existing_cards, list):
+                existing_cards = []
+        except Exception:
+            existing_cards = []
+
+    MAX_CARDS = 8
+    if len(existing_cards) >= MAX_CARDS:
+        await db.commit()
+        raise HTTPException(status_code=409, detail={"ceiling": True})
+
+    # 5. Load student history
+    history = await load_student_history(str(session.student_id), session.concept_id, db)
+
+    # 6. Load mastery store (bulk SELECT — no N+1)
+    mastery_result = await db.execute(
+        select(StudentMastery.concept_id)
+        .where(StudentMastery.student_id == session.student_id)
+    )
+    mastery_store = {row.concept_id: True for row in mastery_result.all()}
+
+    # 7. Generate next card
+    try:
+        card_dict, profile, gen_profile, motivational_note = await generate_next_card(
+            student_id=str(session.student_id),
+            concept_id=session.concept_id,
+            signals=req,
+            card_index=len(existing_cards),
+            history=history,
+            knowledge_svc=adaptive_knowledge_svc,
+            mastery_store=mastery_store,
+            llm_client=adaptive_llm_client,
+            model=OPENAI_MODEL,
+            language=language,
+        )
+    except Exception as exc:
+        logger.error("generate_next_card failed: %s", exc)
+        await db.commit()
+        raise HTTPException(status_code=502, detail="Adaptive card generation failed")
+
+    # 8. Compute performance_vs_baseline
+    avg_time = history.get("avg_time_per_card")
+    if avg_time and avg_time > 0:
+        if req.time_on_card_sec < avg_time * 0.75 and req.wrong_attempts == 0:
+            perf = "FASTER"
+        elif req.time_on_card_sec > avg_time * 1.5:
+            perf = "SLOWER"
+        else:
+            perf = "ON_TRACK"
+    else:
+        perf = None
+
+    # 9. Update adaptation_applied on the interaction row
+    adaptation_str = f"{profile.speed}/{profile.comprehension}"
+    interaction.adaptation_applied = adaptation_str
+
+    # 10. Append new card to the session's presentation cache and set phase
+    existing_cards.append(card_dict)
+    session.presentation_text = json_mod.dumps(existing_cards)
+    session.phase = "CARDS"
+
+    await db.commit()
+
+    return NextCardResponse(
+        session_id=session_id,
+        card=card_dict,
+        card_index=card_dict["index"],
+        adaptation_applied=adaptation_str,
+        learning_profile_summary={
+            "speed": profile.speed,
+            "comprehension": profile.comprehension,
+            "engagement": profile.engagement,
+            "confidence_score": profile.confidence_score,
+        },
+        motivational_note=motivational_note,
+        performance_vs_baseline=perf,
+    )

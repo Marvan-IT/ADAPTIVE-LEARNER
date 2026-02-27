@@ -30,7 +30,7 @@ from api.knowledge_service import KnowledgeService
 from api.teaching_router import router as teaching_router
 from api.teaching_service import TeachingService
 import api.teaching_router as teaching_router_module
-from adaptive.adaptive_router import router as adaptive_router
+from adaptive.adaptive_router import router as adaptive_router, cards_router as adaptive_cards_router
 import adaptive.adaptive_router as adaptive_router_module
 from db.connection import init_db, close_db
 from config import OUTPUT_DIR, OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, OPENAI_MODEL_MINI
@@ -111,6 +111,7 @@ app.include_router(teaching_router)
 
 # ── Week 3: Adaptive Learning Engine router ───────────────────────
 app.include_router(adaptive_router)
+app.include_router(adaptive_cards_router)
 
 # ── Static files: serve extracted images ──────────────────────────
 _images_dir = OUTPUT_DIR / "prealgebra" / "images"

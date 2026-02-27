@@ -4,7 +4,7 @@ import rehypeKatex from "rehype-katex";
 import { useSession } from "../../context/SessionContext";
 import { useTheme } from "../../context/ThemeContext";
 import { themes } from "../../theme/themes";
-import { API_BASE_URL } from "../../utils/constants";
+import ConceptImage from "./ConceptImage";
 import { MessageCircle, BookOpen, Sparkles } from "lucide-react";
 
 export default function PresentationView() {
@@ -13,11 +13,14 @@ export default function PresentationView() {
   const theme = themes[style] || themes.default;
 
   // Only show DIAGRAM-type images with reasonable size (skip tiny formula renders)
+  // Also require at least a description or legacy caption so we never show a
+  // bare image with no context.
   const usefulDiagrams = (images || []).filter(
     (img) =>
       (img.image_type || "").toUpperCase() === "DIAGRAM" &&
       (img.width || 0) >= 200 &&
-      (img.height || 0) >= 80
+      (img.height || 0) >= 80 &&
+      (img.description || img.caption)
   );
 
   return (
@@ -68,41 +71,7 @@ export default function PresentationView() {
           {usefulDiagrams.length > 0 && (
             <div style={{ marginTop: "1.5rem" }}>
               {usefulDiagrams.slice(0, 5).map((img, i) => (
-                <div
-                  key={i}
-                  style={{
-                    borderRadius: "10px",
-                    border: "1.5px solid var(--color-border)",
-                    overflow: "hidden",
-                    backgroundColor: "#fff",
-                    marginBottom: "1rem",
-                    maxWidth: "600px",
-                  }}
-                >
-                  <img
-                    src={`${API_BASE_URL}${img.url}`}
-                    alt={img.caption || `Diagram for ${conceptTitle}`}
-                    style={{
-                      width: "100%",
-                      height: "auto",
-                      display: "block",
-                    }}
-                    loading="lazy"
-                  />
-                  {img.caption && (
-                    <div style={{
-                      padding: "0.5rem 0.75rem",
-                      fontSize: "0.82rem",
-                      color: "var(--color-text-muted)",
-                      fontStyle: "italic",
-                      lineHeight: 1.4,
-                      borderTop: "1px solid var(--color-border)",
-                      backgroundColor: "var(--color-bg)",
-                    }}>
-                      {img.caption}
-                    </div>
-                  )}
-                </div>
+                <ConceptImage key={i} img={img} maxWidth="600px" />
               ))}
             </div>
           )}

@@ -8,6 +8,7 @@ import { useTheme } from "../context/ThemeContext";
 import ConceptGraph from "../components/conceptmap/ConceptGraph";
 import MapLegend from "../components/conceptmap/MapLegend";
 import { formatConceptTitle } from "../utils/formatConceptTitle";
+import { getReviewDue } from "../api/students";
 import {
   Loader, Play, CheckCircle, Lock, BookOpen, Trophy, Target,
   Skull, Rocket, Gamepad2, AlertTriangle, Heart, RefreshCw,
@@ -17,12 +18,23 @@ import { SUGGESTED_INTERESTS } from "../utils/constants";
 export default function ConceptMapPage() {
   const { t } = useTranslation();
   const { nodes, edges, nodeStatuses, loading, error } = useConceptMap();
-  const { masteredConcepts } = useStudent();
+  const { student, masteredConcepts } = useStudent();
   const { style: globalStyle } = useTheme();
   const [selectedNode, setSelectedNode] = useState(null);
   const [lessonStyle, setLessonStyle] = useState(globalStyle);
   const [lessonInterests, setLessonInterests] = useState([]);
+  const [reviewDueConcepts, setReviewDueConcepts] = useState(new Set());
   const navigate = useNavigate();
+
+  // Fetch review-due concepts — non-critical, silent fail
+  useEffect(() => {
+    if (!student?.id) return;
+    getReviewDue(student.id)
+      .then((res) => {
+        setReviewDueConcepts(new Set(res.data.map((r) => r.concept_id)));
+      })
+      .catch(() => {});
+  }, [student?.id]);
 
   const STYLE_OPTIONS = useMemo(() => [
     { id: "default", icon: BookOpen, label: t("style.default"), color: "#3b82f6" },
@@ -201,6 +213,7 @@ export default function ConceptMapPage() {
                 selected={selectedNode === n.concept_id}
                 onClick={() => handleNodeSelect(n.concept_id)}
                 onLearn={() => startLesson(n.concept_id)}
+                reviewDue={reviewDueConcepts.has(n.concept_id)}
               />
             ))}
           </div>
@@ -359,6 +372,17 @@ export default function ConceptMapPage() {
                 }}>
                   <CheckCircle size={14} /> {t("map.mastered")}
                 </div>
+
+                {reviewDueConcepts.has(selectedNode) && (
+                  <div style={{
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    marginBottom: "0.75rem",
+                  }}>
+                    <span className="ml-2 px-1.5 py-0.5 rounded text-xs bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 border border-amber-300 dark:border-amber-700">
+                      {t("learning.reviewDueBadge")} {t("learning.reviewDue")}
+                    </span>
+                  </div>
+                )}
 
                 <div style={{
                   fontSize: "0.75rem", fontWeight: 700, color: "var(--color-text-muted)",
@@ -530,7 +554,7 @@ function StatCard({ icon: Icon, label, count, color }) {
   );
 }
 
-function ConceptListItem({ node, status, selected, onClick, onLearn }) {
+function ConceptListItem({ node, status, selected, onClick, onLearn, reviewDue }) {
   const { t } = useTranslation();
   const title = node.title || formatConceptTitle(node.concept_id);
   const borderColor = selected ? "var(--color-primary)" : "var(--color-border)";
@@ -554,8 +578,13 @@ function ConceptListItem({ node, status, selected, onClick, onLearn }) {
         }}>
           {title}
         </div>
-        <div style={{ fontSize: "0.72rem", color: "var(--color-text-muted)" }}>
+        <div style={{ fontSize: "0.72rem", color: "var(--color-text-muted)", display: "flex", alignItems: "center", gap: "0.3rem" }}>
           Ch. {node.chapter} &middot; {node.section}
+          {reviewDue && (
+            <span className="px-1.5 py-0.5 rounded text-xs bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 border border-amber-300 dark:border-amber-700">
+              {t("learning.reviewDueBadge")} {t("learning.reviewDue")}
+            </span>
+          )}
         </div>
       </div>
 

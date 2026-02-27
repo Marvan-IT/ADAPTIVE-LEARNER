@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import uuid
 from typing import Literal
+from uuid import UUID
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -128,3 +129,33 @@ class AdaptiveLesson(BaseModel):
     generation_profile: GenerationProfile
     lesson: AdaptiveLessonContent
     remediation: RemediationInfo
+
+
+# ── Next-card adaptive loop ────────────────────────────────────────────────────
+
+class CardBehaviorSignals(BaseModel):
+    """Behavioral signals captured for a single card interaction by the frontend."""
+
+    card_index: int
+    time_on_card_sec: float = 0.0
+    wrong_attempts: int = 0
+    selected_wrong_option: int | None = None
+    hints_used: int = 0
+    idle_triggers: int = 0
+
+
+class NextCardRequest(CardBehaviorSignals):
+    """Request body for POST /api/v2/sessions/{session_id}/complete-card."""
+    pass
+
+
+class NextCardResponse(BaseModel):
+    """Response body for POST /api/v2/sessions/{session_id}/complete-card."""
+
+    session_id: UUID
+    card: dict
+    card_index: int
+    adaptation_applied: str
+    learning_profile_summary: dict
+    motivational_note: str | None = None
+    performance_vs_baseline: str | None = None  # "FASTER", "SLOWER", "ON_TRACK", None

@@ -64,6 +64,28 @@ _LESSON_JSON_SCHEMA = """\
   ]
 }"""
 
+_NEXT_CARD_JSON_SCHEMA = """\
+{
+  "title": "<concise card title>",
+  "content": "<markdown-formatted explanation — maximum 6 lines>",
+  "motivational_note": "<one warm encouraging sentence based on student progress, or null>",
+  "questions": [
+    {
+      "type": "mcq",
+      "question": "<question text>",
+      "options": ["<A>", "<B>", "<C>", "<D>"],
+      "correct_index": 0,
+      "explanation": "<why the correct option is right>"
+    },
+    {
+      "type": "true_false",
+      "question": "<true/false statement>",
+      "correct_answer": "true",
+      "explanation": "<brief explanation>"
+    }
+  ]
+}"""
+
 
 def build_adaptive_prompt(
     concept_detail: dict,
@@ -289,3 +311,88 @@ def _build_user_prompt(
     ]
 
     return "\n".join(parts)
+
+
+def build_next_card_prompt(
+    concept_detail: dict,
+    learning_profile: LearningProfile,
+    gen_profile: GenerationProfile,
+    card_index: int,
+    history: dict,
+    language: str = "en",
+) -> tuple[str, str]:
+    """
+    Build (system_prompt, user_prompt) for a single adaptive next-card LLM call.
+    Reuses _build_system_prompt() unchanged, then overrides schema + card count.
+    Adds STUDENT CONTEXT block with historical signals and motivational note rules.
+    """
+    import math
+
+    # Reuse existing system prompt, then override schema and card rules
+    base_sys = _build_system_prompt(learning_profile, gen_profile, language)
+
+    # Replace the lesson JSON schema section with single-card schema
+    sys_overrides = (
+        "\n\nOVERRIDE — You are generating ONE card, not a full lesson.\n"
+        "OUTPUT SCHEMA for this single card (your response must match exactly):\n"
+        + _NEXT_CARD_JSON_SCHEMA
+        + "\n\nGenerate EXACTLY 1 card (the JSON object above — NOT wrapped in an array).\n"
+        "Do NOT include a 'concept_explanation' key.\n"
+        f"Set difficulty = {max(1, min(5, 1 + math.ceil(4 * card_index / max(card_index + 3, 4))))}"
+    )
+    system_prompt = base_sys + sys_overrides
+
+    # User prompt: concept info
+    title = concept_detail.get("concept_title", "Unknown Concept")
+    chapter = concept_detail.get("chapter", "")
+    section = concept_detail.get("section", "")
+    raw_text = concept_detail.get("text", "")
+    truncated_text = raw_text[:_CONCEPT_TEXT_LIMIT]
+    if len(raw_text) > _CONCEPT_TEXT_LIMIT:
+        truncated_text += "\n[... source text truncated ...]"
+
+    is_weak = history.get("is_known_weak_concept", False)
+    failed_n = history.get("failed_concept_attempts", 0)
+    trend = history.get("trend_direction", "STABLE")
+    trend_list = history.get("trend_wrong_list", [])
+    lang_name = _LANGUAGE_NAMES.get(language, language)
+
+    parts = [
+        "CONCEPT TO TEACH:",
+        f"  Title:   {title}",
+        f"  Chapter: {chapter}",
+        f"  Section: {section}",
+        "",
+        "Source material:",
+        truncated_text,
+        "",
+        "STUDENT PROFILE:",
+        f"  Speed:               {learning_profile.speed}",
+        f"  Comprehension:       {learning_profile.comprehension}",
+        f"  Engagement:          {learning_profile.engagement}",
+        f"  Confidence score:    {learning_profile.confidence_score:.2f}",
+        "",
+        "STUDENT CONTEXT:",
+        f"  Cards completed historically:  {history.get('total_cards_completed', 0)}",
+        f"  Sessions this week:            {history.get('sessions_last_7d', 0)}",
+        f"  Concepts mastered:             {history.get('mastered_count', 0)}",
+        f"  Performance trend (last 5 wrong_attempts): {trend_list}",
+        f"  Trend direction:               {trend}",
+        (
+            f"  Known weak concept:            YES \u2014 student has attempted this concept "
+            f"{failed_n} times without mastering. Be extra patient and encouraging."
+            if is_weak
+            else "  Known weak concept:            No"
+        ),
+        "",
+        "MOTIVATIONAL NOTE RULES:",
+        "  - If trend_direction is IMPROVING: celebrate the improvement warmly",
+        "  - If is_known_weak_concept is YES: acknowledge persistence, be extra encouraging",
+        "  - If student is FAST+STRONG: challenge them with 'Let\u2019s push further!'",
+        f"  - Keep it to ONE natural teacher-voice sentence in {lang_name}",
+        "  - Set motivational_note to null if no meaningful context exists yet",
+        "",
+        "Return ONLY the JSON object. No markdown fences, no commentary.",
+    ]
+
+    return system_prompt, "\n".join(parts)

@@ -19,6 +19,7 @@ import logging
 import re
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -288,3 +289,211 @@ async def generate_adaptive_lesson(
             prereq_title=prereq_title,
         ),
     )
+
+
+# ── Next-card adaptive loop ────────────────────────────────────────────────────
+
+async def load_student_history(student_id: str, concept_id: str, db) -> dict:
+    """
+    Load and aggregate a student's full interaction history from the DB.
+    Returns a dict with personal baselines, performance trend, and weak-concept flag.
+    """
+    from datetime import timedelta
+    from sqlalchemy import select, func
+    from db.models import CardInteraction, TeachingSession, StudentMastery
+    import uuid as _uuid
+
+    sid = _uuid.UUID(student_id) if isinstance(student_id, str) else student_id
+
+    # 1. Global aggregate baseline
+    agg_result = await db.execute(
+        select(
+            func.avg(CardInteraction.time_on_card_sec).label("avg_time"),
+            func.avg(CardInteraction.wrong_attempts).label("avg_wrong"),
+            func.avg(CardInteraction.hints_used).label("avg_hints"),
+            func.count(CardInteraction.id).label("total_cards"),
+        ).where(CardInteraction.student_id == sid)
+    )
+    agg = agg_result.one()
+
+    # 2. Performance trend: last 5 cards
+    trend_result = await db.execute(
+        select(CardInteraction.wrong_attempts, CardInteraction.time_on_card_sec)
+        .where(CardInteraction.student_id == sid)
+        .order_by(CardInteraction.completed_at.desc())
+        .limit(5)
+    )
+    recent = trend_result.all()
+    trend_wrong_list = [r.wrong_attempts for r in recent]
+    if len(trend_wrong_list) >= 3:
+        first_half = trend_wrong_list[len(trend_wrong_list) // 2:]
+        second_half = trend_wrong_list[:len(trend_wrong_list) // 2]
+        avg_first = sum(first_half) / len(first_half)
+        avg_second = sum(second_half) / len(second_half)
+        if avg_second < avg_first - 0.3:
+            trend_direction = "IMPROVING"
+        elif avg_second > avg_first + 0.3:
+            trend_direction = "WORSENING"
+        else:
+            trend_direction = "STABLE"
+    else:
+        trend_direction = "STABLE"
+
+    # 3. Sessions last 7 days
+    cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+    sessions_7d_result = await db.execute(
+        select(func.count(TeachingSession.id))
+        .where(TeachingSession.student_id == sid)
+        .where(TeachingSession.started_at >= cutoff)
+    )
+    sessions_7d = sessions_7d_result.scalar() or 0
+
+    # 4. Total mastered count
+    mastered_result = await db.execute(
+        select(func.count(StudentMastery.id))
+        .where(StudentMastery.student_id == sid)
+    )
+    mastered_count = mastered_result.scalar() or 0
+
+    # 5. Known-weak-concept check
+    weak_result = await db.execute(
+        select(func.count(TeachingSession.id))
+        .where(TeachingSession.student_id == sid)
+        .where(TeachingSession.concept_id == concept_id)
+        .where(TeachingSession.concept_mastered == False)  # noqa: E712
+    )
+    failed_attempts = weak_result.scalar() or 0
+
+    return {
+        "avg_time_per_card": float(agg.avg_time) if agg.avg_time is not None else None,
+        "avg_wrong_attempts": float(agg.avg_wrong) if agg.avg_wrong is not None else None,
+        "avg_hints_per_card": float(agg.avg_hints) if agg.avg_hints is not None else None,
+        "total_cards_completed": int(agg.total_cards) if agg.total_cards else 0,
+        "sessions_last_7d": int(sessions_7d),
+        "mastered_count": int(mastered_count),
+        "is_known_weak_concept": failed_attempts >= 2,
+        "failed_concept_attempts": int(failed_attempts),
+        "trend_direction": trend_direction,
+        "trend_wrong_list": trend_wrong_list,
+    }
+
+
+def build_blended_analytics(
+    current: "CardBehaviorSignals",
+    history: dict,
+    concept_id: str,
+    student_id: str,
+) -> AnalyticsSummary:
+    """
+    Blend current card signals with historical baseline using deviation detection.
+
+    New student (< 5 cards): 100% current signals.
+    Normal variance: 60% current / 40% history.
+    Acute deviation (fever, distraction, or sudden recovery): 90% current / 10% history.
+    """
+    MIN_HISTORY_CARDS = 5
+    has_history = history["total_cards_completed"] >= MIN_HISTORY_CARDS
+    baseline_time = history["avg_time_per_card"] or 120.0
+    baseline_wrong = history["avg_wrong_attempts"] or 0.0
+    baseline_hints = history["avg_hints_per_card"] or 0.0
+
+    if not has_history:
+        cw, hw = 1.0, 0.0
+    else:
+        time_ratio = current.time_on_card_sec / max(baseline_time, 30.0)
+        wrong_ratio = (current.wrong_attempts + 1) / max(baseline_wrong + 1, 1.0)
+        is_acute = time_ratio > 2.0 or time_ratio < 0.4 or wrong_ratio > 3.0
+        cw, hw = (0.9, 0.1) if is_acute else (0.6, 0.4)
+
+    blended_wrong = current.wrong_attempts * cw + baseline_wrong * hw
+    blended_hints = current.hints_used * cw + baseline_hints * hw
+    expected_time = baseline_time  # personal baseline
+
+    return AnalyticsSummary(
+        student_id=student_id,
+        concept_id=concept_id,
+        time_spent_sec=current.time_on_card_sec,
+        expected_time_sec=expected_time,
+        attempts=max(1, round(blended_wrong) + 1),
+        wrong_attempts=round(blended_wrong),
+        hints_used=round(blended_hints),
+        revisits=0,
+        recent_dropoffs=current.idle_triggers,
+        skip_rate=0.0,
+        quiz_score=max(0.0, 1.0 - blended_wrong * 0.25),
+        last_7d_sessions=history["sessions_last_7d"],
+    )
+
+
+async def generate_next_card(
+    student_id: str,
+    concept_id: str,
+    signals: "CardBehaviorSignals",
+    card_index: int,
+    history: dict,
+    knowledge_svc,
+    mastery_store: dict[str, bool],
+    llm_client: AsyncOpenAI,
+    model: str,
+    language: str = "en",
+) -> tuple[dict, "LearningProfile", "GenerationProfile", str | None]:
+    """
+    Generate the next adaptive card using blended student analytics.
+    Returns (card_dict, learning_profile, gen_profile, motivational_note).
+    """
+    from adaptive.prompt_builder import build_next_card_prompt
+    from config import OPENAI_MODEL_MINI
+
+    analytics = build_blended_analytics(signals, history, concept_id, student_id)
+    has_prereq = find_remediation_prereq(concept_id, knowledge_svc, mastery_store) is not None
+    profile = build_learning_profile(analytics, has_unmet_prereq=has_prereq)
+    gen_profile = build_generation_profile(profile)
+
+    concept_detail = knowledge_svc.get_concept_detail(concept_id)
+    if concept_detail is None:
+        raise ValueError(f"Concept not found: {concept_id}")
+
+    sys_p, usr_p = build_next_card_prompt(
+        concept_detail=concept_detail,
+        learning_profile=profile,
+        gen_profile=gen_profile,
+        card_index=card_index,
+        history=history,
+        language=language,
+    )
+
+    messages = [
+        {"role": "system", "content": sys_p},
+        {"role": "user", "content": usr_p},
+    ]
+    raw = await _call_llm(llm_client, OPENAI_MODEL_MINI, messages, max_tokens=2200)
+    cleaned = _extract_json_block(raw)
+
+    parsed: dict | None = None
+    for attempt_raw in (cleaned, _salvage_truncated_json(cleaned)):
+        try:
+            parsed = json.loads(attempt_raw)
+            break
+        except json.JSONDecodeError:
+            pass
+
+    if parsed is None:
+        raise ValueError(f"LLM output could not be parsed. Raw (first 300): {raw[:300]}")
+
+    motivational_note = parsed.pop("motivational_note", None)
+
+    # Normalise to frontend LessonCard shape
+    card = {
+        "index": card_index,
+        "title": parsed.get("title", f"Card {card_index + 1}"),
+        "content": parsed.get("content", ""),
+        "images": [],
+        "questions": parsed.get("questions", []),
+    }
+
+    # Assign stable question IDs
+    for i, q in enumerate(card["questions"]):
+        q_type = q.get("type", "mcq")
+        q["id"] = f"c{card_index}_{q_type}_{i}"
+
+    return card, profile, gen_profile, motivational_note

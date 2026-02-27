@@ -53,6 +53,8 @@ class ConceptImage(BaseModel):
     height: int
     image_type: str  # "FORMULA" or "DIAGRAM"
     page: int
+    description: str | None = None  # Vision annotation: what the image shows
+    relevance: str | None = None    # Vision annotation: pedagogical purpose
 
 
 class ConceptResult(BaseModel):

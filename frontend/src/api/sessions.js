@@ -40,3 +40,19 @@ export const assistStudent = (sessionId, cardIndex, message, trigger = "user") =
 
 export const completeCards = (sessionId) =>
   api.post(`/api/v2/sessions/${sessionId}/complete-cards`);
+
+const COMPLETE_CARD_TIMEOUT = 30_000;
+
+export const completeCardAndGetNext = (sessionId, signals) =>
+  api.post(
+    `/api/v2/sessions/${sessionId}/complete-card`,
+    {
+      card_index:            signals.cardIndex,
+      time_on_card_sec:      signals.timeOnCardSec,
+      wrong_attempts:        signals.wrongAttempts,
+      selected_wrong_option: signals.selectedWrongOption ?? null,
+      hints_used:            signals.hintsUsed,
+      idle_triggers:         signals.idleTriggers,
+    },
+    { timeout: COMPLETE_CARD_TIMEOUT }
+  );
