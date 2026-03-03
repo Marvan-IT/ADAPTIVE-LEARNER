@@ -5,7 +5,7 @@ Pydantic schemas for the Week 2 Teaching endpoints.
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # ── Request Schemas ───────────────────────────────────────────────
@@ -99,6 +99,7 @@ class SocraticResponse(BaseModel):
     score: int | None = None
     mastered: bool | None = None
     exchange_count: int
+    xp_awarded: int | None = None   # Populated only when check_complete=True
 
 
 class MessageResponse(BaseModel):
@@ -158,3 +159,57 @@ class AssistResponse(BaseModel):
 
 
 # CompleteCardsRequest removed — cards are gateways only, no scores sent
+
+
+# ── Adaptive Transparency Schemas ────────────────────────────────────────────
+
+class CardInteractionRecord(BaseModel):
+    """A single card interaction row for the history endpoint."""
+
+    id: str                          # UUID as string
+    session_id: str                  # UUID as string
+    concept_id: str
+    card_index: int
+    time_on_card_sec: float
+    wrong_attempts: int
+    hints_used: int
+    idle_triggers: int
+    adaptation_applied: str | None
+    completed_at: str                # ISO 8601 string
+
+    model_config = {"from_attributes": True}
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_uuids_and_datetime(cls, data):
+        """Convert UUID fields to strings and datetime to ISO 8601 when loading from ORM."""
+        # Support both ORM objects (via from_attributes) and plain dicts
+        if hasattr(data, "__dict__"):
+            return {
+                "id": str(data.id),
+                "session_id": str(data.session_id),
+                "concept_id": data.concept_id,
+                "card_index": data.card_index,
+                "time_on_card_sec": data.time_on_card_sec,
+                "wrong_attempts": data.wrong_attempts,
+                "hints_used": data.hints_used,
+                "idle_triggers": data.idle_triggers,
+                "adaptation_applied": data.adaptation_applied,
+                "completed_at": data.completed_at.isoformat() if isinstance(data.completed_at, datetime) else str(data.completed_at),
+            }
+        # Plain dict path — coerce UUID values to strings if needed
+        result = dict(data)
+        for field in ("id", "session_id"):
+            if field in result and not isinstance(result[field], str):
+                result[field] = str(result[field])
+        if "completed_at" in result and isinstance(result["completed_at"], datetime):
+            result["completed_at"] = result["completed_at"].isoformat()
+        return result
+
+
+class CardHistoryResponse(BaseModel):
+    """Response for GET /api/v2/students/{student_id}/card-history."""
+
+    student_id: str
+    total_returned: int
+    interactions: list[CardInteractionRecord]

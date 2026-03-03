@@ -7,4 +7,13 @@ const api = axios.create({
   headers: { "Content-Type": "application/json" },
 });
 
+api.interceptors.request.use((config) => {
+  const key = import.meta.env.VITE_API_SECRET_KEY;
+  if (key) {
+    config.headers = config.headers || {};
+    config.headers["X-API-Key"] = key;
+  }
+  return config;
+});
+
 export default api;

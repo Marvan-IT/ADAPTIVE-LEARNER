@@ -41,6 +41,16 @@ export const assistStudent = (sessionId, cardIndex, message, trigger = "user") =
 export const completeCards = (sessionId) =>
   api.post(`/api/v2/sessions/${sessionId}/complete-cards`);
 
+export const recordCardInteraction = (sessionId, signals) =>
+  api.post(`/api/v2/sessions/${sessionId}/record-interaction`, {
+    card_index:         signals.cardIndex,
+    time_on_card_sec:   signals.timeOnCardSec,
+    wrong_attempts:     signals.wrongAttempts,
+    hints_used:         signals.hintsUsed,
+    idle_triggers:      signals.idleTriggers,
+    adaptation_applied: signals.adaptationApplied ?? null,
+  });
+
 const COMPLETE_CARD_TIMEOUT = 30_000;
 
 export const completeCardAndGetNext = (sessionId, signals) =>
@@ -53,6 +63,7 @@ export const completeCardAndGetNext = (sessionId, signals) =>
       selected_wrong_option: signals.selectedWrongOption ?? null,
       hints_used:            signals.hintsUsed,
       idle_triggers:         signals.idleTriggers,
+      difficulty_bias:       signals.difficultyBias ?? null,
     },
     { timeout: COMPLETE_CARD_TIMEOUT }
   );

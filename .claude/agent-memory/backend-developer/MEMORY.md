@@ -138,7 +138,48 @@ app.include_router(adaptive_cards_router)
 `begin_socratic_check()` calls `load_student_history()` and, if >= 5 cards completed, builds `AnalyticsSummary` + `LearningProfile` from aggregate history. Passes `socratic_profile` and `history` to `build_socratic_system_prompt()`.
 
 ### build_socratic_system_prompt extended signature
-Added `socratic_profile=None` and `history=None` params. Appends STUDENT CONTEXT block at end of prompt for STRUGGLING/STRONG/BORED profiles and known-weak-concept flag.
+Added `socratic_profile=None`, `history=None`, and `session_card_stats=None` params. Appends `_build_session_stats_block()` block at end of prompt. `min_questions` is now dynamic (3/4/5 based on session error_rate). Old STRUGGLING/STRONG/BORED inline blocks replaced by the new helper.
+
+## Full Adaptive Upgrade (implemented 2026-03-02)
+
+### XP Award Constants (config.py)
+`XP_MASTERY=50`, `XP_MASTERY_BONUS=25`, `XP_MASTERY_BONUS_THRESHOLD=90`, `XP_CONSOLATION=10`, `XP_CARD_ADVANCE=5`
+
+### generate_cards() adaptive wiring (teaching_service.py)
+- `asyncio.gather(load_student_history(...), load_wrong_option_pattern(...))` runs concurrently
+- Wraps both in try/except with safe fallback dict (total_cards_completed=0, etc.)
+- Builds `LearningProfile` when `history["total_cards_completed"] >= 3` using proxy `quiz_score = max(0.1, 1.0 - min(avg_wrong_attempts * 0.15, 0.9))`
+- Passes `learning_profile=card_profile, history=history` to `build_cards_system_prompt()`
+- Passes `wrong_option_pattern=wrong_option_pattern` to `build_cards_user_prompt()`
+- Log: `[cards-adaptive] student_id=... concept_id=... history_cards=N profile=S/C/E wrong_option_pattern=N|None`
+
+### begin_socratic_check() session stats wiring (teaching_service.py)
+- Queries `CardInteraction` by `session_id` for count, sum(wrong_attempts), sum(hints_used)
+- Wrapped in try/except; sets `session_card_stats=None` on failure
+- Passes `session_card_stats=session_card_stats` to `build_socratic_system_prompt()`
+- Log: `[socratic-adaptive] session_id=... session_cards=N session_wrong=N session_hints=N error_rate=F`
+- `CardInteraction` is now imported at module level in `teaching_service.py`
+
+### teaching_service.py — added module-level logger + CardInteraction import
+```python
+import logging
+from db.models import TeachingSession, ..., CardInteraction
+logger = logging.getLogger(__name__)
+```
+
+### prompts.py — new helpers
+- `_build_card_profile_block(learning_profile, history)` — appended to `build_cards_system_prompt()`; returns "" when profile is None (backward compat)
+- `_build_misconception_block` logic inlined in `build_cards_user_prompt()`; injected when `wrong_option_pattern is not None`
+- `_build_session_stats_block(session_card_stats, socratic_profile, history)` — appended to `build_socratic_system_prompt()`; returns "" when both args None
+
+### teaching_router.py — XP award after mastery
+- `_award_xp(student_id, xp_delta, new_streak, mastered, score, db)` — private async fn; logs `[xp-awarded]` / `[xp-award-failed]`; swallows exceptions
+- `respond_to_check` handler: fetches `student_for_xp = await db.get(Student, session.student_id)`, computes `new_streak = current_streak + 1 if mastered`, calls `_award_xp` inline (not background task)
+- `SocraticResponse` schema now has `xp_awarded: int | None = None`
+- Imports: `XP_MASTERY, XP_MASTERY_BONUS, XP_MASTERY_BONUS_THRESHOLD, XP_CONSOLATION` from config
+
+### adaptive/prompt_builder.py — FAST/STRONG wording fix
+Line ~213: replaced `"- Skip introductory analogies..."` with `"- ALL content, definitions, and formulas MUST appear..."`
 
 ## Detailed notes
 See `patterns.md` for generation_profile lookup table and profile_builder classification rules.

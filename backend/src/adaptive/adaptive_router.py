@@ -23,7 +23,7 @@ from adaptive.schemas import AdaptiveLessonRequest, AdaptiveLesson, NextCardRequ
 from adaptive.adaptive_engine import generate_adaptive_lesson
 from db.connection import get_db
 from db.models import Student, StudentMastery
-from config import OPENAI_MODEL
+from config import ADAPTIVE_CARD_CEILING, ADAPTIVE_CARD_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -199,19 +199,22 @@ async def complete_card(
     )
     db.add(interaction)
     await db.flush()
+    await db.commit()   # Persist immediately — before any code that can fail or time out
 
     # 4. Check ceiling — parse existing cards from the session cache
     existing_cards: list = []
     if session.presentation_text:
         try:
-            existing_cards = json_mod.loads(session.presentation_text)
-            if not isinstance(existing_cards, list):
-                existing_cards = []
+            parsed = json_mod.loads(session.presentation_text)
+            if isinstance(parsed, list):
+                existing_cards = parsed
+            elif isinstance(parsed, dict) and "cards" in parsed:
+                # teaching_service stores dict format on first generation; extract the list
+                existing_cards = parsed["cards"]
         except Exception:
             existing_cards = []
 
-    MAX_CARDS = 8
-    if len(existing_cards) >= MAX_CARDS:
+    if len(existing_cards) >= ADAPTIVE_CARD_CEILING:
         await db.commit()
         raise HTTPException(status_code=409, detail={"ceiling": True})
 
@@ -223,11 +226,11 @@ async def complete_card(
         select(StudentMastery.concept_id)
         .where(StudentMastery.student_id == session.student_id)
     )
-    mastery_store = {row.concept_id: True for row in mastery_result.all()}
+    mastery_store = {cid: True for cid in mastery_result.scalars().all()}
 
     # 7. Generate next card
     try:
-        card_dict, profile, gen_profile, motivational_note = await generate_next_card(
+        card_dict, profile, gen_profile, motivational_note, adaptation_label = await generate_next_card(
             student_id=str(session.student_id),
             concept_id=session.concept_id,
             signals=req,
@@ -236,7 +239,7 @@ async def complete_card(
             knowledge_svc=adaptive_knowledge_svc,
             mastery_store=mastery_store,
             llm_client=adaptive_llm_client,
-            model=OPENAI_MODEL,
+            model=ADAPTIVE_CARD_MODEL,
             language=language,
         )
     except Exception as exc:
@@ -257,7 +260,7 @@ async def complete_card(
         perf = None
 
     # 9. Update adaptation_applied on the interaction row
-    adaptation_str = f"{profile.speed}/{profile.comprehension}"
+    adaptation_str = adaptation_label
     interaction.adaptation_applied = adaptation_str
 
     # 10. Append new card to the session's presentation cache and set phase

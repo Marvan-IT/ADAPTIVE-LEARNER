@@ -210,7 +210,8 @@ def _build_system_prompt(
             "- Include at least 2 'practice' cards with difficulty >= 4.\n"
             "- Each of those challenge cards must have a non-null fun_element "
             "(e.g., a real-world puzzle, competitive challenge, or creative twist).\n"
-            "- Skip introductory analogies; assume the student grasps concepts quickly.\n"
+            "- ALL content, definitions, and formulas MUST appear — never skip substance. "
+            "Replace beginner analogies with real-world applications and 'why it works' reasoning.\n"
             "- Introduce edge cases and extensions where appropriate."
         )
 
@@ -320,6 +321,8 @@ def build_next_card_prompt(
     card_index: int,
     history: dict,
     language: str = "en",
+    wrong_option_pattern: int | None = None,
+    difficulty_bias: str | None = None,
 ) -> tuple[str, str]:
     """
     Build (system_prompt, user_prompt) for a single adaptive next-card LLM call.
@@ -395,4 +398,28 @@ def build_next_card_prompt(
         "Return ONLY the JSON object. No markdown fences, no commentary.",
     ]
 
-    return system_prompt, "\n".join(parts)
+    user_content = "\n".join(parts)
+
+    # ── Misconception pattern injection ───────────────────────────────────────
+    if wrong_option_pattern is not None:
+        user_content += (
+            f"\n\nMISCONCEPTION PATTERN: This student has repeatedly selected option index "
+            f"{wrong_option_pattern} incorrectly on this concept. Directly contrast the correct concept "
+            f"with this common misconception in your card content."
+        )
+
+    # ── Difficulty bias adjustment ─────────────────────────────────────────────
+    if difficulty_bias == "TOO_EASY":
+        user_content += (
+            "\n\nDIFFICULTY ADJUSTMENT: The student indicated this is too easy. "
+            "Increase challenge: use more abstract examples, skip basic scaffolding, "
+            "and target a higher difficulty level (4-5)."
+        )
+    elif difficulty_bias == "TOO_HARD":
+        user_content += (
+            "\n\nDIFFICULTY ADJUSTMENT: The student indicated this is too hard. "
+            "Simplify: use step-by-step breakdown, concrete examples, simpler language, "
+            "and target a lower difficulty level (1-2)."
+        )
+
+    return system_prompt, user_content

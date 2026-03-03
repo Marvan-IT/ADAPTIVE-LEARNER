@@ -4,9 +4,11 @@ import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import { useSession } from "../../context/SessionContext";
 import AssistantPanel from "./AssistantPanel";
+import AdaptiveSignalTracker from "./AdaptiveSignalTracker";
 import ConceptImage from "./ConceptImage";
 import { useTranslation } from "react-i18next";
 import { trackEvent } from "../../utils/analytics";
+import { CardSkeleton } from "../ui/Skeleton";
 import {
   ChevronLeft,
   ChevronRight,
@@ -16,9 +18,31 @@ import {
   Flag,
   Loader,
 } from "lucide-react";
+import { useAdaptiveStore } from "../../store/adaptiveStore";
+import { updateStudentProgress } from "../../api/students";
+import { useStudent } from "../../context/StudentContext";
+import XPBurst from "../game/XPBurst";
+import StreakMeter from "../game/StreakMeter";
+import AdaptiveModeIndicator from "../game/AdaptiveModeIndicator";
 
 const WRONG_FEEDBACK_MS = 1800;
 const MAX_ADAPTIVE_CARDS = 8;
+
+/* ─── Difficulty Badge ─── */
+function DifficultyBadge({ difficulty }) {
+  return (
+    <div className="flex gap-0.5 items-center" title={`Difficulty: ${difficulty}/5`}>
+      {[1, 2, 3, 4, 5].map((i) => (
+        <span
+          key={i}
+          className={`text-xs ${i <= (difficulty || 3) ? "text-yellow-400" : "text-[var(--color-border)]"}`}
+        >
+          ★
+        </span>
+      ))}
+    </div>
+  );
+}
 
 export default function CardLearningView() {
   const { t } = useTranslation();
@@ -37,17 +61,37 @@ export default function CardLearningView() {
     adaptiveCardLoading,
     motivationalNote,
     performanceVsBaseline,
+    learningProfileSummary,
+    adaptationApplied,
+    difficultyBias,
+    setDifficultyBias,
   } = useSession();
 
+  const { student } = useStudent();
+
+  const mode = useAdaptiveStore((s) => s.mode);
+  const awardXP = useAdaptiveStore((s) => s.awardXP);
+  const recordAnswer = useAdaptiveStore((s) => s.recordAnswer);
+  const updateMode = useAdaptiveStore((s) => s.updateMode);
+
   const card = cards[currentCardIndex];
-  const isLastCard = currentCardIndex === cards.length - 1 || cards.length >= MAX_ADAPTIVE_CARDS;
+  const MIN_CARDS_BEFORE_FINISH = 4;
+  const isLastCard = (currentCardIndex === cards.length - 1 || cards.length >= MAX_ADAPTIVE_CARDS)
+    && currentCardIndex >= MIN_CARDS_BEFORE_FINISH - 1;
 
   // Per-card question state: { mcqIdx, tfIdx, mcqCorrect, tfCorrect, mcqFeedback, tfFeedback }
   const [cardStates, setCardStates] = useState({});
   const feedbackTimerRef = useRef(null);
 
+  // Assistant panel reveal: hidden until first answer submitted
+  const [showAssistant, setShowAssistant] = useState(false);
+
+  // Per-card signal tracking state (for AdaptiveSignalTracker display)
+  const [wrongAttemptsDisplay, setWrongAttemptsDisplay] = useState(0);
+  const [hintsUsedDisplay, setHintsUsedDisplay] = useState(0);
+
   // Signal tracking refs — reset on each new card
-  const cardStartTimeRef = useRef(Date.now());
+  const cardStartTimeRef = useRef(null);
   const wrongAttemptsRef = useRef(0);
   const selectedWrongOptionRef = useRef(null);
   const hintsUsedRef = useRef(0);
@@ -55,19 +99,29 @@ export default function CardLearningView() {
 
   // Reset signal tracking when card changes
   useEffect(() => {
-    cardStartTimeRef.current = Date.now();
+    cardStartTimeRef.current = performance.now();
     wrongAttemptsRef.current = 0;
     selectedWrongOptionRef.current = null;
     hintsUsedRef.current = 0;
+    setWrongAttemptsDisplay(0);
+    setHintsUsedDisplay(0);
   }, [currentCardIndex]);
 
   // Track hints via assistLoading transitions (false → true = one hint request)
   useEffect(() => {
     if (assistLoading && !prevAssistLoadingRef.current) {
       hintsUsedRef.current += 1;
+      setHintsUsedDisplay(hintsUsedRef.current);
     }
     prevAssistLoadingRef.current = !!assistLoading;
   }, [assistLoading]);
+
+  // Sync adaptive mode when learningProfileSummary updates
+  useEffect(() => {
+    if (learningProfileSummary) {
+      updateMode(learningProfileSummary);
+    }
+  }, [learningProfileSummary]);
 
   const getCardState = useCallback(
     (idx) =>
@@ -136,6 +190,20 @@ export default function CardLearningView() {
       const correct = optionIndex === q.correct_index;
       trackEvent("question_answered", { question_type: "mcq", correct, card_index: currentCardIndex, concept_id: session?.concept_id, concept_title: conceptTitle });
 
+      // XP + streak tracking
+      if (correct) {
+        awardXP(10);
+        recordAnswer(true);
+        // Fire-and-forget DB sync — non-critical, silently ignore failures
+        const { streak } = useAdaptiveStore.getState();
+        updateStudentProgress(student?.id, 10, streak).catch(() => {});
+      } else {
+        recordAnswer(false);
+      }
+
+      // Reveal assistant panel on first answer
+      setShowAssistant(true);
+
       updateCardState(currentCardIndex, {
         mcqFeedback: { correct, explanation: q.explanation, answer: optionIndex },
         ...(correct ? { mcqCorrect: true } : {}),
@@ -145,6 +213,7 @@ export default function CardLearningView() {
         // Track wrong attempt signals
         wrongAttemptsRef.current += 1;
         selectedWrongOptionRef.current = optionIndex;
+        setWrongAttemptsDisplay(wrongAttemptsRef.current);
 
         // Auto-hint via assistant
         sendAssistMessage(
@@ -179,6 +248,20 @@ export default function CardLearningView() {
       const correct = value === q.correct_answer;
       trackEvent("question_answered", { question_type: "true_false", correct, card_index: currentCardIndex, concept_id: session?.concept_id, concept_title: conceptTitle });
 
+      // XP + streak tracking
+      if (correct) {
+        awardXP(10);
+        recordAnswer(true);
+        // Fire-and-forget DB sync — non-critical, silently ignore failures
+        const { streak } = useAdaptiveStore.getState();
+        updateStudentProgress(student?.id, 10, streak).catch(() => {});
+      } else {
+        recordAnswer(false);
+      }
+
+      // Reveal assistant panel on first answer
+      setShowAssistant(true);
+
       updateCardState(currentCardIndex, {
         tfFeedback: { correct, explanation: q.explanation, answer: value },
         ...(correct ? { tfCorrect: true } : {}),
@@ -187,6 +270,7 @@ export default function CardLearningView() {
       if (!correct) {
         // Track wrong attempt signals
         wrongAttemptsRef.current += 1;
+        setWrongAttemptsDisplay(wrongAttemptsRef.current);
 
         sendAssistMessage(
           `The student got this question wrong: "${q.question}". Give a helpful hint about this topic without revealing the answer.`,
@@ -211,34 +295,32 @@ export default function CardLearningView() {
   );
 
   // Collect signals and call adaptive goToNextCard
-  const handleNextCard = useCallback(() => {
-    goToNextCard({
+  const handleNextCard = useCallback(async () => {
+    await goToNextCard({
       cardIndex:           currentCardIndex,
-      timeOnCardSec:       (Date.now() - cardStartTimeRef.current) / 1000,
+      timeOnCardSec:       cardStartTimeRef.current !== null ? (performance.now() - cardStartTimeRef.current) / 1000 : 0,
       wrongAttempts:       wrongAttemptsRef.current,
       selectedWrongOption: selectedWrongOptionRef.current,
       hintsUsed:           hintsUsedRef.current,
       idleTriggers:        idleTriggerCount,
+      difficultyBias:      difficultyBias ?? null,
     });
-  }, [currentCardIndex, idleTriggerCount, goToNextCard]);
+    setDifficultyBias(null);
+    setShowAssistant(false);
+  }, [currentCardIndex, idleTriggerCount, goToNextCard, difficultyBias, setDifficultyBias]);
 
   // Loading skeleton while adaptive card is being fetched
   if (adaptiveCardLoading) {
     return (
-      <div style={{ display: "flex", gap: "1rem", alignItems: "flex-start" }}>
-        <div style={{ flex: "1 1 0", minWidth: 0 }}>
-          <div className="flex flex-col gap-4 animate-pulse p-6">
-            <div className="h-6 bg-gray-200 dark:bg-gray-700 rounded w-3/4" />
-            <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-full" />
-            <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-5/6" />
-            <div className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-2/3" />
-            <div className="mt-4 h-10 bg-gray-200 dark:bg-gray-700 rounded w-1/2" />
-          </div>
+      <div className="flex gap-4 items-start">
+        <div className="flex-1 min-w-0">
+          <CardSkeleton />
           <p style={{
             textAlign: "center",
             color: "var(--color-text-muted)",
             fontSize: "0.9rem",
-            marginTop: "0.5rem",
+            marginTop: "0.75rem",
+            fontWeight: 600,
           }}>
             {t("learning.generatingCard")}
           </p>
@@ -253,14 +335,46 @@ export default function CardLearningView() {
   if (!card) return null;
 
   return (
-    <div style={{ display: "flex", gap: "1rem", alignItems: "flex-start" }}>
-      {/* ─── Main Card Area (70%) ─── */}
-      <div style={{ flex: "1 1 0", minWidth: 0 }}>
-        <CardProgress current={currentCardIndex} total={cards.length} cardStates={cardStates} cards={cards} />
+    <div className="flex gap-6 items-start">
+      {/* ─── Main Card Area ─── */}
+      <div className="flex-1 min-w-0 transition-all duration-500">
+        {/* Segmented progress bar */}
+        <div className="flex gap-1 w-full mb-4">
+          {cards.map((_, i) => {
+            const csDot = cardStates[i];
+            const isDone = csDot?.mcqCorrect && csDot?.tfCorrect;
+            return (
+              <div
+                key={i}
+                className={`h-1.5 flex-1 rounded-full transition-all duration-300 ${
+                  isDone
+                    ? "bg-[var(--color-success)]"
+                    : i === currentCardIndex
+                    ? "bg-[var(--color-primary)]"
+                    : i < currentCardIndex
+                    ? "bg-[var(--color-primary)]/60"
+                    : "bg-[var(--color-border)]"
+                }`}
+              />
+            );
+          })}
+        </div>
 
         {/* Motivational micro-feedback banner */}
         {motivationalNote && (
-          <div className="mb-3 px-4 py-2 rounded-lg bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 text-green-800 dark:text-green-300 text-sm font-medium flex items-center gap-2">
+          <div style={{
+            marginBottom: "0.75rem",
+            padding: "0.5rem 1rem",
+            borderRadius: "var(--radius-md)",
+            backgroundColor: "color-mix(in srgb, var(--color-success) 10%, var(--color-surface))",
+            border: "1.5px solid color-mix(in srgb, var(--color-success) 30%, var(--color-border))",
+            color: "var(--color-text)",
+            fontSize: "0.875rem",
+            fontWeight: 600,
+            display: "flex",
+            alignItems: "center",
+            gap: "0.5rem",
+          }}>
             {performanceVsBaseline === "FASTER" && <span>⚡</span>}
             {motivationalNote}
           </div>
@@ -268,6 +382,7 @@ export default function CardLearningView() {
 
         {/* Card Content */}
         <div
+          className={`${mode === "SLOW" ? "adaptive-slow" : ""} ${mode === "EXCELLING" ? "adaptive-excelling" : ""} ${mode === "STRUGGLING" ? "adaptive-struggling" : ""}`}
           style={{
             backgroundColor: "var(--color-surface)",
             borderRadius: "16px",
@@ -301,13 +416,21 @@ export default function CardLearningView() {
             >
               {currentCardIndex + 1}
             </div>
-            <div>
+            <div className="flex-1 min-w-0">
               <div style={{ color: "#fff", fontWeight: 700, fontSize: "1.05rem" }}>
                 {card.title}
               </div>
               <div style={{ color: "rgba(255,255,255,0.8)", fontSize: "0.78rem", fontWeight: 500 }}>
                 {conceptTitle} — {t("learning.cardProgress", { current: currentCardIndex + 1, total: cards.length })}
               </div>
+            </div>
+            {/* Game HUD in header */}
+            <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+              <StreakMeter compact />
+              <AdaptiveModeIndicator compact />
+              {card.difficulty != null && (
+                <DifficultyBadge difficulty={card.difficulty} />
+              )}
             </div>
           </div>
 
@@ -320,10 +443,10 @@ export default function CardLearningView() {
             </div>
 
             {/* Card Images */}
-            {card.images?.filter((img) => img.description || img.caption).length > 0 && (
+            {card.images?.filter((img) => img.url).length > 0 && (
               <div style={{ marginTop: "1rem" }}>
                 {card.images
-                  .filter((img) => img.description || img.caption)
+                  .filter((img) => img.url)
                   .map((img, i) => (
                     <ConceptImage key={i} img={img} maxWidth="500px" />
                   ))}
@@ -378,6 +501,78 @@ export default function CardLearningView() {
           </div>
         </div>
 
+        {/* Adaptive Signal Tracker */}
+        <AdaptiveSignalTracker
+          wrongAttempts={wrongAttemptsDisplay}
+          hintsUsed={hintsUsedDisplay}
+          idleTriggers={idleTriggerCount}
+          learningProfileSummary={learningProfileSummary}
+          adaptationApplied={adaptationApplied}
+          cardIndex={currentCardIndex}
+        />
+
+        {/* Mastery readiness bar */}
+        {currentCardIndex >= 2 && learningProfileSummary?.confidence_score != null && (
+          <div className="mt-2">
+            <div className="flex justify-between text-xs mb-1" style={{ color: "var(--color-text-muted)" }}>
+              <span>Mastery readiness</span>
+              <span>{Math.round(learningProfileSummary.confidence_score * 100)}%</span>
+            </div>
+            <div
+              className="h-1.5 rounded-full overflow-hidden"
+              style={{ backgroundColor: "var(--color-border)" }}
+            >
+              <div
+                className="h-full rounded-full transition-all duration-500"
+                style={{
+                  width: `${learningProfileSummary.confidence_score * 100}%`,
+                  backgroundColor: "var(--color-primary)",
+                }}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Too Easy / Too Hard difficulty bias buttons */}
+        {currentCardIndex > 0 && (
+          <div className="flex gap-2 mt-3">
+            <button
+              onClick={() => setDifficultyBias(difficultyBias === "TOO_EASY" ? null : "TOO_EASY")}
+              style={{
+                padding: "0.375rem 0.75rem",
+                fontSize: "0.75rem",
+                borderRadius: "var(--radius-full)",
+                border: `1.5px solid ${difficultyBias === "TOO_EASY" ? "var(--color-primary)" : "var(--color-border)"}`,
+                backgroundColor: difficultyBias === "TOO_EASY" ? "var(--color-primary)" : "transparent",
+                color: difficultyBias === "TOO_EASY" ? "#fff" : "var(--color-text-muted)",
+                cursor: "pointer",
+                fontFamily: "inherit",
+                fontWeight: 600,
+                transition: "all var(--motion-fast)",
+              }}
+            >
+              Too Easy
+            </button>
+            <button
+              onClick={() => setDifficultyBias(difficultyBias === "TOO_HARD" ? null : "TOO_HARD")}
+              style={{
+                padding: "0.375rem 0.75rem",
+                fontSize: "0.75rem",
+                borderRadius: "var(--radius-full)",
+                border: `1.5px solid ${difficultyBias === "TOO_HARD" ? "#ef4444" : "var(--color-border)"}`,
+                backgroundColor: difficultyBias === "TOO_HARD" ? "#ef4444" : "transparent",
+                color: difficultyBias === "TOO_HARD" ? "#fff" : "var(--color-text-muted)",
+                cursor: "pointer",
+                fontFamily: "inherit",
+                fontWeight: 600,
+                transition: "all var(--motion-fast)",
+              }}
+            >
+              Too Hard
+            </button>
+          </div>
+        )}
+
         {/* Navigation Buttons */}
         <div
           style={{
@@ -412,7 +607,14 @@ export default function CardLearningView() {
 
           {isLastCard && canProceed ? (
             <button
-              onClick={finishCards}
+              onClick={() => finishCards({
+                cardIndex:         currentCardIndex,
+                timeOnCardSec:     cardStartTimeRef.current !== null ? (performance.now() - cardStartTimeRef.current) / 1000 : 0,
+                wrongAttempts:     wrongAttemptsRef.current,
+                hintsUsed:         hintsUsedRef.current,
+                idleTriggers:      idleTriggerCount,
+                adaptationApplied: adaptationApplied ?? null,
+              })}
               disabled={loading}
               style={{
                 display: "flex",
@@ -466,82 +668,34 @@ export default function CardLearningView() {
         </div>
       </div>
 
-      {/* ─── Assistant Panel (30%) ─── */}
-      <div style={{ width: "320px", flexShrink: 0 }}>
-        <AssistantPanel />
+      {/* ─── Assistant Panel — slides in after first answer ─── */}
+      <div
+        className="transition-all duration-500 overflow-hidden"
+        style={{
+          width: showAssistant ? "320px" : "0px",
+          opacity: showAssistant ? 1 : 0,
+          flexShrink: 0,
+          position: "sticky",
+          top: "70px",
+          alignSelf: "flex-start",
+        }}
+      >
+        <div style={{ width: "320px" }}>
+          <AssistantPanel />
+        </div>
       </div>
 
       <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      <XPBurst />
     </div>
   );
 }
 
-/* ─── Card Progress Dots ─── */
-function CardProgress({ current, total, cardStates, cards }) {
-  const { t } = useTranslation();
-
-  return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        gap: "0.3rem",
-        marginBottom: "1rem",
-      }}
-    >
-      {cards.map((card, idx) => {
-        const cs = cardStates[idx];
-        const isDone = cs?.mcqCorrect && cs?.tfCorrect;
-        const isCurrent = idx === current;
-
-        return (
-          <div key={idx} style={{ display: "flex", alignItems: "center", gap: "0.3rem" }}>
-            {idx > 0 && (
-              <div
-                style={{
-                  width: "20px",
-                  height: "2px",
-                  backgroundColor: isDone ? "var(--color-success)" : "var(--color-border)",
-                  borderRadius: "1px",
-                }}
-              />
-            )}
-            <div
-              style={{
-                width: isCurrent ? "28px" : "12px",
-                height: "12px",
-                borderRadius: isCurrent ? "6px" : "50%",
-                backgroundColor: isDone
-                  ? "var(--color-success)"
-                  : isCurrent
-                  ? "var(--color-primary)"
-                  : "var(--color-border)",
-                transition: "all 0.3s",
-              }}
-            />
-          </div>
-        );
-      })}
-      <span
-        style={{
-          marginLeft: "0.75rem",
-          fontSize: "0.8rem",
-          fontWeight: 700,
-          color: "var(--color-text-muted)",
-        }}
-      >
-        {t("learning.cardProgress", { current: current + 1, total })}
-      </span>
-    </div>
-  );
-}
-
-/* ─── MCQ Question Block ─── */
+/* ─── MCQ Question Block (pill-shaped buttons) ─── */
 function MCQBlock({ question, index, feedback, isCorrect, onAnswer }) {
   const { t } = useTranslation();
   const answered = feedback !== null;
-  const isLocked = isCorrect || (answered && !feedback?.correct);
+  const isLocked = isCorrect || answered;
 
   return (
     <div
@@ -561,6 +715,7 @@ function MCQBlock({ question, index, feedback, isCorrect, onAnswer }) {
           : answered && !feedback?.correct
           ? "rgba(239,68,68,0.05)"
           : "var(--color-bg)",
+        animation: answered && !feedback?.correct ? "shake 0.35s ease-out" : "none",
       }}
     >
       <div
@@ -606,6 +761,20 @@ function MCQBlock({ question, index, feedback, isCorrect, onAnswer }) {
           const showCorrect = answered && optIsCorrect;
           const showWrong = isSelected && !feedback?.correct;
 
+          let borderColor = "var(--color-border)";
+          let bgColor = "var(--color-surface)";
+          let textColor = "var(--color-text)";
+
+          if (showCorrect) {
+            borderColor = "#22c55e";
+            bgColor = "rgba(34,197,94,0.1)";
+            textColor = "#166534";
+          } else if (showWrong) {
+            borderColor = "#ef4444";
+            bgColor = "rgba(239,68,68,0.1)";
+            textColor = "#991b1b";
+          }
+
           return (
             <button
               key={oi}
@@ -614,42 +783,52 @@ function MCQBlock({ question, index, feedback, isCorrect, onAnswer }) {
               style={{
                 display: "flex",
                 alignItems: "center",
-                gap: "0.5rem",
-                padding: "0.6rem 0.9rem",
-                borderRadius: "10px",
-                border: `2px solid ${
-                  showCorrect ? "var(--color-success)" : showWrong ? "var(--color-danger)" : "var(--color-border)"
-                }`,
-                backgroundColor: showCorrect
-                  ? "rgba(34,197,94,0.1)"
-                  : showWrong
-                  ? "rgba(239,68,68,0.1)"
-                  : "var(--color-surface)",
-                color: "var(--color-text)",
+                gap: "0.75rem",
+                width: "100%",
+                padding: "0.75rem 1rem",
+                borderRadius: "9999px",
+                border: `2px solid ${borderColor}`,
+                backgroundColor: bgColor,
+                color: textColor,
                 fontSize: "0.9rem",
                 fontWeight: isSelected || showCorrect ? 700 : 500,
                 cursor: isLocked ? "default" : "pointer",
                 fontFamily: "inherit",
                 textAlign: "left",
                 transition: "all 0.2s",
+                animation: showWrong ? "shake 0.4s ease" : "none",
+              }}
+              onMouseEnter={(e) => {
+                if (!isLocked && !showCorrect && !showWrong) {
+                  e.currentTarget.style.borderColor = "var(--color-primary)";
+                  e.currentTarget.style.backgroundColor = "color-mix(in srgb, var(--color-primary) 5%, var(--color-surface))";
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (!isLocked && !showCorrect && !showWrong) {
+                  e.currentTarget.style.borderColor = "var(--color-border)";
+                  e.currentTarget.style.backgroundColor = "var(--color-surface)";
+                }
               }}
             >
+              {/* Label circle A, B, C, D */}
               <span
                 style={{
-                  width: "22px",
-                  height: "22px",
+                  width: "28px",
+                  height: "28px",
                   borderRadius: "50%",
-                  border: `2px solid ${
-                    showCorrect ? "var(--color-success)" : showWrong ? "var(--color-danger)" : "var(--color-border)"
-                  }`,
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
                   flexShrink: 0,
-                  fontSize: "0.7rem",
-                  fontWeight: 800,
-                  backgroundColor: showCorrect ? "var(--color-success)" : showWrong ? "var(--color-danger)" : "transparent",
-                  color: showCorrect || showWrong ? "#fff" : "var(--color-text-muted)",
+                  fontSize: "0.75rem",
+                  fontWeight: 700,
+                  backgroundColor: showCorrect
+                    ? "#22c55e"
+                    : showWrong
+                    ? "#ef4444"
+                    : "color-mix(in srgb, var(--color-primary) 10%, var(--color-surface))",
+                  color: showCorrect || showWrong ? "#fff" : "var(--color-primary)",
                 }}
               >
                 {showCorrect ? <CheckCircle size={14} /> : showWrong ? <XCircle size={14} /> : String.fromCharCode(65 + oi)}

@@ -41,9 +41,9 @@ from adaptive.remediation import (
     has_unmet_prereq,
     build_remediation_cards,
 )
-from adaptive.prompt_builder import build_adaptive_prompt
-from adaptive.adaptive_engine import generate_adaptive_lesson
-from adaptive.schemas import AdaptiveLesson
+from adaptive.prompt_builder import build_adaptive_prompt, build_next_card_prompt
+from adaptive.adaptive_engine import generate_adaptive_lesson, generate_next_card, load_wrong_option_pattern
+from adaptive.schemas import AdaptiveLesson, CardBehaviorSignals
 
 
 # =============================================================================
@@ -1131,3 +1131,325 @@ class TestGenerateAdaptiveLesson:
 
         assert result is not None
         assert mock_llm.chat.completions.create.call_count == 3
+
+
+# =============================================================================
+# Group 6 — Adaptive Transparency: difficulty_bias, wrong_option_pattern,
+#           build_next_card_prompt misconception injection
+# =============================================================================
+
+# A minimal single-card JSON that generate_next_card's LLM mock can return.
+_MOCK_NEXT_CARD_JSON = json.dumps({
+    "type": "mcq",
+    "title": "Quick Check",
+    "content": "What is 1/2 × 1/2?",
+    "answer": "1/4",
+    "options": ["1/4", "1/2", "1", "2/4"],
+    "hints": ["Multiply top and bottom separately."],
+    "difficulty": 3,
+    "fun_element": None,
+    "motivational_note": None,
+})
+
+# A minimal history dict accepted by build_blended_analytics.
+_MOCK_HISTORY = {
+    "total_cards_completed": 10,
+    "avg_time_per_card": 60.0,
+    "avg_wrong_attempts": 0.5,
+    "avg_hints_per_card": 0.2,
+    "sessions_last_7d": 3,
+    "mastered_count": 2,
+    "is_known_weak_concept": False,
+    "failed_concept_attempts": 0,
+    "trend_direction": "STABLE",
+    "trend_wrong_list": [],
+}
+
+
+class TestDifficultyBiasOverride:
+    """
+    generate_next_card must apply the student's explicit difficulty feedback
+    by overriding recommended_next_step in the LearningProfile before the
+    next card is generated.
+
+    Business criteria:
+      - TOO_EASY → recommended_next_step forced to CHALLENGE
+      - TOO_HARD  → recommended_next_step forced to REMEDIATE_PREREQ
+    """
+
+    def _make_llm(self) -> AsyncMock:
+        resp = MagicMock()
+        resp.choices = [MagicMock()]
+        resp.choices[0].message.content = _MOCK_NEXT_CARD_JSON
+        llm = AsyncMock()
+        llm.chat.completions.create = AsyncMock(return_value=resp)
+        return llm
+
+    async def test_difficulty_bias_too_easy_triggers_challenge(self):
+        """
+        When signals.difficulty_bias == 'TOO_EASY', the returned LearningProfile
+        must have recommended_next_step == 'CHALLENGE' regardless of the raw
+        analytics signals, so the LLM generates a harder card.
+        """
+        mock_ks = _make_mock_ks(has_prereqs=False)
+        signals = CardBehaviorSignals(
+            card_index=2,
+            time_on_card_sec=50.0,
+            wrong_attempts=0,
+            hints_used=0,
+            idle_triggers=0,
+            difficulty_bias="TOO_EASY",
+        )
+
+        _card, profile, _gen, _note, _label = await generate_next_card(
+            student_id="student-bias-easy",
+            concept_id="PREALG.C4.S2",
+            signals=signals,
+            card_index=2,
+            history=_MOCK_HISTORY,
+            knowledge_svc=mock_ks,
+            mastery_store={},
+            llm_client=self._make_llm(),
+            model="gpt-4o-mini",
+            language="en",
+            db=None,
+        )
+
+        assert profile.recommended_next_step == "CHALLENGE", (
+            f"Expected CHALLENGE for TOO_EASY bias, got {profile.recommended_next_step!r}"
+        )
+
+    async def test_difficulty_bias_too_hard_triggers_remediate(self):
+        """
+        When signals.difficulty_bias == 'TOO_HARD', the returned LearningProfile
+        must have recommended_next_step == 'REMEDIATE_PREREQ' so the next card
+        revisits prerequisite material.
+        """
+        mock_ks = _make_mock_ks(has_prereqs=False)
+        signals = CardBehaviorSignals(
+            card_index=1,
+            time_on_card_sec=300.0,
+            wrong_attempts=3,
+            hints_used=2,
+            idle_triggers=0,
+            difficulty_bias="TOO_HARD",
+        )
+
+        _card, profile, _gen, _note, _label = await generate_next_card(
+            student_id="student-bias-hard",
+            concept_id="PREALG.C4.S2",
+            signals=signals,
+            card_index=1,
+            history=_MOCK_HISTORY,
+            knowledge_svc=mock_ks,
+            mastery_store={},
+            llm_client=self._make_llm(),
+            model="gpt-4o-mini",
+            language="en",
+            db=None,
+        )
+
+        assert profile.recommended_next_step == "REMEDIATE_PREREQ", (
+            f"Expected REMEDIATE_PREREQ for TOO_HARD bias, got {profile.recommended_next_step!r}"
+        )
+
+    async def test_no_difficulty_bias_does_not_override_profile(self):
+        """
+        When difficulty_bias is None (the common case), generate_next_card must
+        leave recommended_next_step as determined by the analytics.
+        """
+        mock_ks = _make_mock_ks(has_prereqs=False)
+        signals = CardBehaviorSignals(
+            card_index=0,
+            time_on_card_sec=60.0,
+            wrong_attempts=0,
+            hints_used=0,
+            idle_triggers=0,
+            difficulty_bias=None,
+        )
+
+        _card, profile, _gen, _note, _label = await generate_next_card(
+            student_id="student-no-bias",
+            concept_id="PREALG.C4.S2",
+            signals=signals,
+            card_index=0,
+            history=_MOCK_HISTORY,
+            knowledge_svc=mock_ks,
+            mastery_store={},
+            llm_client=self._make_llm(),
+            model="gpt-4o-mini",
+            language="en",
+            db=None,
+        )
+
+        valid_steps = {"CONTINUE", "REMEDIATE_PREREQ", "ADD_PRACTICE", "CHALLENGE"}
+        assert profile.recommended_next_step in valid_steps
+
+
+class TestLoadWrongOptionPattern:
+    """
+    load_wrong_option_pattern must return the option index that the student has
+    repeatedly selected incorrectly (>= WRONG_OPTION_PATTERN_THRESHOLD times),
+    or None when no pattern exists.
+    """
+
+    async def test_wrong_option_pattern_detected(self):
+        """
+        When the DB returns a row with selected_wrong_option=2 and freq >= threshold,
+        load_wrong_option_pattern must return 2 (the option index).
+        """
+        mock_row = MagicMock()
+        mock_row.selected_wrong_option = 2
+        mock_row.freq = 3
+
+        mock_result = MagicMock()
+        mock_result.first.return_value = mock_row
+
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        import uuid
+        result = await load_wrong_option_pattern(
+            student_id=str(uuid.uuid4()),
+            concept_id="PREALG.C4.S2",
+            db=mock_db,
+        )
+
+        assert result == 2, f"Expected option index 2, got {result!r}"
+
+    async def test_wrong_option_pattern_none_when_no_row(self):
+        """
+        When no option reaches the threshold, load_wrong_option_pattern must
+        return None so card generation continues without a misconception block.
+        """
+        mock_result = MagicMock()
+        mock_result.first.return_value = None
+
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        import uuid
+        result = await load_wrong_option_pattern(
+            student_id=str(uuid.uuid4()),
+            concept_id="PREALG.C4.S2",
+            db=mock_db,
+        )
+
+        assert result is None
+
+    async def test_wrong_option_pattern_returns_none_on_db_error(self):
+        """
+        Any DB exception must be swallowed and None returned — transient DB errors
+        must never block card generation (graceful degradation).
+        """
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(side_effect=Exception("DB connection lost"))
+
+        import uuid
+        result = await load_wrong_option_pattern(
+            student_id=str(uuid.uuid4()),
+            concept_id="PREALG.C4.S2",
+            db=mock_db,
+        )
+
+        assert result is None
+
+
+class TestBuildNextCardPromptInjections:
+    """
+    build_next_card_prompt must append MISCONCEPTION PATTERN and/or DIFFICULTY
+    ADJUSTMENT blocks to the user prompt when the corresponding signals are present.
+    """
+
+    def _base_args(self, recommended_next_step: str = "CONTINUE") -> dict:
+        profile = _make_learning_profile(recommended_next_step=recommended_next_step)
+        gen_profile = build_generation_profile(profile)
+        return {
+            "concept_detail": MOCK_CONCEPT,
+            "learning_profile": profile,
+            "gen_profile": gen_profile,
+            "card_index": 2,
+            "history": _MOCK_HISTORY,
+            "language": "en",
+        }
+
+    def test_next_card_prompt_includes_misconception_when_wrong_option_pattern_set(self):
+        """
+        When wrong_option_pattern=2, the user prompt must contain a MISCONCEPTION
+        PATTERN block referencing option index 2.
+        """
+        _sys, user = build_next_card_prompt(
+            **self._base_args(),
+            wrong_option_pattern=2,
+            difficulty_bias=None,
+        )
+
+        assert "MISCONCEPTION PATTERN" in user
+        assert "2" in user
+
+    def test_next_card_prompt_no_misconception_when_wrong_option_pattern_is_none(self):
+        """
+        When wrong_option_pattern is None, the MISCONCEPTION PATTERN block must
+        be absent from the user prompt.
+        """
+        _sys, user = build_next_card_prompt(
+            **self._base_args(),
+            wrong_option_pattern=None,
+            difficulty_bias=None,
+        )
+
+        assert "MISCONCEPTION PATTERN" not in user
+
+    def test_next_card_prompt_includes_difficulty_adjustment_for_too_easy(self):
+        """
+        When difficulty_bias='TOO_EASY', the user prompt must contain a
+        DIFFICULTY ADJUSTMENT block instructing the LLM to raise challenge.
+        """
+        _sys, user = build_next_card_prompt(
+            **self._base_args(),
+            wrong_option_pattern=None,
+            difficulty_bias="TOO_EASY",
+        )
+
+        assert "DIFFICULTY ADJUSTMENT" in user
+        assert "too easy" in user.lower() or "increase" in user.lower() or "higher difficulty" in user.lower()
+
+    def test_next_card_prompt_includes_difficulty_adjustment_for_too_hard(self):
+        """
+        When difficulty_bias='TOO_HARD', the user prompt must contain a
+        DIFFICULTY ADJUSTMENT block instructing the LLM to simplify.
+        """
+        _sys, user = build_next_card_prompt(
+            **self._base_args(),
+            wrong_option_pattern=None,
+            difficulty_bias="TOO_HARD",
+        )
+
+        assert "DIFFICULTY ADJUSTMENT" in user
+        assert "too hard" in user.lower() or "simplif" in user.lower() or "lower difficulty" in user.lower()
+
+    def test_next_card_prompt_no_difficulty_adjustment_when_bias_is_none(self):
+        """
+        When difficulty_bias is None, the DIFFICULTY ADJUSTMENT block must be absent.
+        """
+        _sys, user = build_next_card_prompt(
+            **self._base_args(),
+            wrong_option_pattern=None,
+            difficulty_bias=None,
+        )
+
+        assert "DIFFICULTY ADJUSTMENT" not in user
+
+    def test_next_card_prompt_both_injections_present_simultaneously(self):
+        """
+        Both MISCONCEPTION PATTERN and DIFFICULTY ADJUSTMENT blocks must appear
+        when both wrong_option_pattern and difficulty_bias are set.
+        """
+        _sys, user = build_next_card_prompt(
+            **self._base_args(),
+            wrong_option_pattern=0,
+            difficulty_bias="TOO_EASY",
+        )
+
+        assert "MISCONCEPTION PATTERN" in user
+        assert "DIFFICULTY ADJUSTMENT" in user

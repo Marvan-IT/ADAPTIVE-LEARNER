@@ -142,6 +142,7 @@ class CardBehaviorSignals(BaseModel):
     selected_wrong_option: int | None = None
     hints_used: int = 0
     idle_triggers: int = 0
+    difficulty_bias: Literal["TOO_EASY", "TOO_HARD"] | None = None
 
 
 class NextCardRequest(CardBehaviorSignals):

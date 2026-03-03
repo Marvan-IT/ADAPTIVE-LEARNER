@@ -7,6 +7,7 @@ Orchestrates the 2-step teaching flow:
 
 import asyncio
 import json
+import logging
 import re
 import uuid
 from datetime import datetime, timezone
@@ -15,7 +16,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from openai import AsyncOpenAI
 
-from config import OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, OPENAI_MODEL_MINI
+from config import OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, OPENAI_MODEL_MINI, MASTERY_THRESHOLD
 from api.knowledge_service import KnowledgeService
 from api.prompts import (
     build_presentation_system_prompt,
@@ -25,10 +26,9 @@ from api.prompts import (
     build_cards_user_prompt,
     build_assistant_system_prompt,
 )
-from db.models import TeachingSession, ConversationMessage, StudentMastery, Student, SpacedReview
+from db.models import TeachingSession, ConversationMessage, StudentMastery, Student, SpacedReview, CardInteraction
 
-MASTERY_THRESHOLD = 70  # Score >= 70 marks concept as mastered
-
+logger = logging.getLogger(__name__)
 
 class TeachingService:
     """Manages the full lifecycle of a teaching session."""
@@ -173,6 +173,41 @@ class TeachingService:
         concept_title = concept["concept_title"]
         images = concept.get("images", [])
 
+        # Query this session's card interaction stats for adaptive Socratic calibration
+        session_card_stats = None
+        try:
+            stats_result = await db.execute(
+                select(
+                    func.count(CardInteraction.id).label("total_cards"),
+                    func.coalesce(func.sum(CardInteraction.wrong_attempts), 0).label("total_wrong"),
+                    func.coalesce(func.sum(CardInteraction.hints_used), 0).label("total_hints"),
+                ).where(CardInteraction.session_id == session.id)
+            )
+            row = stats_result.one()
+            total_cards = int(row.total_cards or 0)
+            total_wrong = int(row.total_wrong or 0)
+            total_hints = int(row.total_hints or 0)
+            session_card_stats = {
+                "total_cards": total_cards,
+                "total_wrong": total_wrong,
+                "total_hints": total_hints,
+                "error_rate": total_wrong / max(total_cards, 1) if total_cards > 0 else 0.0,
+            }
+            logger.info(
+                "[socratic-adaptive] session_id=%s session_cards=%d session_wrong=%d "
+                "session_hints=%d error_rate=%.2f",
+                str(session.id),
+                session_card_stats["total_cards"],
+                session_card_stats["total_wrong"],
+                session_card_stats["total_hints"],
+                session_card_stats["error_rate"],
+            )
+        except Exception as exc:
+            logger.warning(
+                "[socratic-adaptive] session_stats_failed: session_id=%s error=%s — continuing without stats",
+                session.id, exc,
+            )
+
         # Build student's learning profile from card interaction history
         from adaptive.adaptive_engine import load_student_history
         from adaptive.profile_builder import build_learning_profile
@@ -209,6 +244,7 @@ class TeachingService:
             language=language,
             socratic_profile=socratic_profile,
             history=history,
+            session_card_stats=session_card_stats,
         )
 
         msg_count = await self._get_message_count(db, session.id)
@@ -271,7 +307,7 @@ class TeachingService:
         openai_messages = self._build_windowed_messages(raw_messages)
 
         # Call OpenAI for the next Socratic response
-        ai_response = await self._chat(messages=openai_messages, max_tokens=800)
+        ai_response = await self._chat(messages=openai_messages, max_tokens=400)
         await self._save_message(db, session.id, "assistant", ai_response, "CHECKING", msg_count + 1)
 
         # Check if the AI signaled completion
@@ -320,16 +356,25 @@ class TeachingService:
                     ))
 
                 # Create spaced review schedule (Ebbinghaus: +1, +3, +7, +14, +30 days)
+                # ON CONFLICT DO NOTHING prevents duplicate rows on re-mastery
                 from datetime import timedelta
+                from sqlalchemy.dialects.postgresql import insert as pg_insert
                 REVIEW_INTERVALS_DAYS = [1, 3, 7, 14, 30]
                 now_utc = datetime.now(timezone.utc)
                 for i, days in enumerate(REVIEW_INTERVALS_DAYS, 1):
-                    db.add(SpacedReview(
-                        student_id=session.student_id,
-                        concept_id=session.concept_id,
-                        review_number=i,
-                        due_at=now_utc + timedelta(days=days),
-                    ))
+                    stmt = (
+                        pg_insert(SpacedReview)
+                        .values(
+                            student_id=session.student_id,
+                            concept_id=session.concept_id,
+                            review_number=i,
+                            due_at=now_utc + timedelta(days=days),
+                        )
+                        .on_conflict_do_nothing(
+                            index_elements=["student_id", "concept_id", "review_number"]
+                        )
+                    )
+                    await db.execute(stmt)
 
         await db.flush()
         return result
@@ -374,7 +419,10 @@ class TeachingService:
             try:
                 cached = json.loads(session.presentation_text)
                 if "cards" in cached:
-                    return cached
+                    # Skip cache if none of the cards have images (pre-image-fix sessions)
+                    has_images = any(card.get("images") for card in cached.get("cards", []))
+                    if has_images:
+                        return cached
             except (json.JSONDecodeError, TypeError):
                 pass
 
@@ -388,9 +436,11 @@ class TeachingService:
         latex = concept.get("latex", [])
         images = concept.get("images", [])
 
-        # 2. Parse sub-sections from concept text (cap at 6 cards max)
+        # 2. Parse sub-sections from concept text (min 4, cap at 6)
         sub_sections = self._parse_sub_sections(concept_text)
-        if len(sub_sections) > 6:
+        if len(sub_sections) < 4:
+            sub_sections = self._split_into_n_chunks(concept_text, 4)
+        elif len(sub_sections) > 6:
             # Merge the last sections into the 6th card to keep it manageable
             merged_text = "\n\n".join(s["text"] for s in sub_sections[5:])
             merged_title = sub_sections[5]["title"]
@@ -401,13 +451,78 @@ class TeachingService:
             if len(sec["text"]) > 1500:
                 sec["text"] = sec["text"][:1500] + "..."
 
-        # 3. Filter useful diagrams
+        # 3. All DIAGRAM + FORMULA images — size is irrelevant, content value matters
         useful_images = [
             img for img in images
-            if img.get("image_type", "").upper() == "DIAGRAM"
-            and img.get("width", 0) >= 200
-            and img.get("height", 0) >= 80
+            if img.get("image_type", "").upper() in ("DIAGRAM", "FORMULA")
         ]
+        logger.info(
+            "cards concept=%s total_images=%d useful_images=%d",
+            session.concept_id, len(images), len(useful_images),
+        )
+
+        # 3b. Load student history and wrong-option pattern concurrently for adaptive enrichment
+        from adaptive.adaptive_engine import load_student_history, load_wrong_option_pattern
+        from adaptive.profile_builder import build_learning_profile
+        from adaptive.schemas import AnalyticsSummary
+
+        try:
+            history, wrong_option_pattern = await asyncio.gather(
+                load_student_history(str(session.student_id), session.concept_id, db),
+                load_wrong_option_pattern(str(session.student_id), session.concept_id, db),
+            )
+        except Exception as exc:
+            logger.warning(
+                "[cards-adaptive] history_load_failed: student_id=%s concept_id=%s error=%s — using defaults",
+                session.student_id, session.concept_id, exc,
+            )
+            history = {
+                "total_cards_completed": 0,
+                "avg_time_per_card": None,
+                "avg_wrong_attempts": None,
+                "avg_hints_per_card": None,
+                "sessions_last_7d": 0,
+                "is_known_weak_concept": False,
+                "failed_concept_attempts": 0,
+                "trend_direction": "STABLE",
+                "trend_wrong_list": [],
+            }
+            wrong_option_pattern = None
+
+        # Build a LearningProfile when sufficient history exists (>= 3 cards)
+        card_profile = None
+        if history["total_cards_completed"] >= 3:
+            mini = AnalyticsSummary(
+                student_id=str(session.student_id),
+                concept_id=session.concept_id,
+                time_spent_sec=history["avg_time_per_card"] or 120.0,
+                expected_time_sec=120.0,
+                attempts=max(1, round((history["avg_wrong_attempts"] or 0) + 1)),
+                wrong_attempts=round(history["avg_wrong_attempts"] or 0),
+                hints_used=round(history["avg_hints_per_card"] or 0),
+                revisits=0,
+                recent_dropoffs=0,
+                skip_rate=0.0,
+                quiz_score=max(0.1, 1.0 - min((history["avg_wrong_attempts"] or 0) * 0.15, 0.9)),
+                last_7d_sessions=history["sessions_last_7d"],
+            )
+            card_profile = build_learning_profile(mini, has_unmet_prereq=False)
+            logger.info(
+                "Card adaptive profile for student=%s concept=%s: speed=%s comp=%s eng=%s",
+                session.student_id, session.concept_id,
+                card_profile.speed, card_profile.comprehension, card_profile.engagement,
+            )
+
+        logger.info(
+            "[cards-adaptive] student_id=%s concept_id=%s history_cards=%d "
+            "profile=%s/%s/%s wrong_option_pattern=%s",
+            str(session.student_id), session.concept_id,
+            history["total_cards_completed"],
+            card_profile.speed if card_profile else "NONE",
+            card_profile.comprehension if card_profile else "NONE",
+            card_profile.engagement if card_profile else "NONE",
+            wrong_option_pattern,
+        )
 
         # 4. Build prompts
         effective_interests = session.lesson_interests if session.lesson_interests else student.interests
@@ -416,6 +531,8 @@ class TeachingService:
             style=session.style,
             interests=effective_interests,
             language=language,
+            learning_profile=card_profile,
+            history=history,
         )
 
         user_prompt = build_cards_user_prompt(
@@ -423,6 +540,7 @@ class TeachingService:
             sub_sections=sub_sections,
             latex=latex,
             images=images,
+            wrong_option_pattern=wrong_option_pattern,
         )
 
         # 5. Generate cards in a single LLM call
@@ -436,6 +554,11 @@ class TeachingService:
         total_questions = 0
         for ci, card in enumerate(raw_cards):
             card["index"] = ci
+            # Forward difficulty from LLM response; fall back to 3 (medium) if absent or None
+            if card.get("difficulty") is None:
+                card["difficulty"] = 3
+            else:
+                card["difficulty"] = int(card["difficulty"])
             # Filter to only mcq and true_false, cap at 2 each (1 primary + 1 backup)
             questions = card.get("questions", [])
             mcq_qs = [q for q in questions if q.get("type") == "mcq"][:2]
@@ -448,15 +571,19 @@ class TeachingService:
             card["questions"] = mcq_qs + tf_qs
             total_questions += len(card["questions"])
 
-            # Map image_indices to actual image objects with captions
-            card_images = []
-            for idx in card.get("image_indices", []):
-                if 1 <= idx <= len(useful_images):
-                    img_copy = dict(useful_images[idx - 1])
-                    img_copy["caption"] = f"Diagram for: {card.get('title', '')}"
-                    card_images.append(img_copy)
-            card["images"] = card_images
-            # Remove raw image_indices from response
+            # image_indices from LLM are ignored — backend handles distribution below
+            card["images"] = []
+            card.pop("image_indices", None)
+
+        # Direct image distribution — round-robin across cards.
+        # Does NOT rely on LLM image_indices. All concept images are pre-confirmed relevant.
+        if useful_images:
+            for i, img in enumerate(useful_images):
+                target_card = raw_cards[i % len(raw_cards)]
+                img_copy = dict(img)
+                img_copy["caption"] = img_copy.get("description") or f"Diagram for: {target_card.get('title', '')}"
+                target_card["images"].append(img_copy)
+        for card in raw_cards:
             card.pop("image_indices", None)
 
         result = {
@@ -540,12 +667,17 @@ class TeachingService:
         if session.presentation_text:
             try:
                 cached = json.loads(session.presentation_text)
-                concept_title = cached.get("concept_title", session.concept_id)
-                cards = cached.get("cards", [])
+                if isinstance(cached, dict):
+                    concept_title = cached.get("concept_title", session.concept_id)
+                    cards = cached.get("cards", [])
+                elif isinstance(cached, list):
+                    cards = cached
+                else:
+                    cards = []
                 if 0 <= card_index < len(cards):
                     card_title = cards[card_index].get("title", card_title)
                     card_content = cards[card_index].get("content", "")
-            except (json.JSONDecodeError, TypeError):
+            except (json.JSONDecodeError, TypeError, AttributeError):
                 pass
 
         # Get student language
@@ -648,6 +780,23 @@ class TeachingService:
         sections = [s for s in sections if s["text"]]
 
         return sections
+
+    @staticmethod
+    def _split_into_n_chunks(text: str, n: int) -> list[dict]:
+        """Split concept text into n equal chunks when header-based parsing yields < n sections."""
+        sentences = [s.strip() for s in text.replace('\n', ' ').split('. ') if s.strip()]
+        if not sentences:
+            return [{"title": "Part 1", "text": text}]
+        chunk_size = max(1, len(sentences) // n)
+        chunks = []
+        for i in range(0, len(sentences), chunk_size):
+            part = '. '.join(sentences[i:i + chunk_size]).strip()
+            if part:
+                chunks.append({"title": f"Part {len(chunks) + 1}", "text": part})
+        # Pad to n if sentence splitting produced fewer chunks
+        while len(chunks) < n:
+            chunks.append(chunks[-1])
+        return chunks[:n]
 
     @staticmethod
     def _salvage_truncated_json(raw: str):

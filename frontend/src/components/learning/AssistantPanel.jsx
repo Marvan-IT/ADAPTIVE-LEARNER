@@ -4,11 +4,21 @@ import ReactMarkdown from "react-markdown";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import { useSession } from "../../context/SessionContext";
-import { Brain, Send, Loader, Sparkles } from "lucide-react";
+import { Brain, Send, Sparkles } from "lucide-react";
 import { trackEvent } from "../../utils/analytics";
+import { AnimatePresence, motion } from "framer-motion";
+import { useAdaptiveStore } from "../../store/adaptiveStore";
 
 const IDLE_TIMEOUT_MS = 90000; // 90 seconds
 const MAX_IDLE_TRIGGERS_PER_CARD = 2;
+
+const modeColors = {
+  NORMAL:     "linear-gradient(135deg, var(--color-accent), var(--color-primary))",
+  EXCELLING:  "linear-gradient(135deg, var(--xp-gold), #f97316)",
+  SLOW:       "linear-gradient(135deg, var(--adapt-slow), #818cf8)",
+  STRUGGLING: "linear-gradient(135deg, var(--adapt-struggling), #fb923c)",
+  BORED:      "linear-gradient(135deg, var(--adapt-bored), #06b6d4)",
+};
 
 export default function AssistantPanel() {
   const { t } = useTranslation();
@@ -21,6 +31,8 @@ export default function AssistantPanel() {
     conceptTitle,
     session,
   } = useSession();
+
+  const mode = useAdaptiveStore((s) => s.mode);
 
   const [input, setInput] = useState("");
   const messagesEndRef = useRef(null);
@@ -97,21 +109,19 @@ export default function AssistantPanel() {
         overflow: "hidden",
         display: "flex",
         flexDirection: "column",
-        height: "calc(100vh - 180px)",
+        height: "calc(100vh - 86px)",
         maxHeight: "700px",
-        position: "sticky",
-        top: "100px",
       }}
     >
-      {/* Header */}
+      {/* Header — color changes with adaptive mode */}
       <div
         style={{
-          background:
-            "linear-gradient(135deg, var(--color-accent), var(--color-primary))",
+          background: modeColors[mode] || modeColors.NORMAL,
           padding: "0.75rem 1rem",
           display: "flex",
           alignItems: "center",
           gap: "0.6rem",
+          transition: "background 0.4s ease",
         }}
       >
         <div
@@ -175,70 +185,76 @@ export default function AssistantPanel() {
           </div>
         )}
 
-        {assistMessages.map((msg, idx) => (
-          <div
-            key={idx}
-            style={{
-              display: "flex",
-              justifyContent: msg.role === "user" ? "flex-end" : "flex-start",
-              marginBottom: "0.5rem",
-            }}
-          >
-            <div
+        <AnimatePresence initial={false}>
+          {assistMessages.map((msg, idx) => (
+            <motion.div
+              key={idx}
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
               style={{
-                maxWidth: "90%",
-                padding: "0.5rem 0.75rem",
-                borderRadius:
-                  msg.role === "user"
-                    ? "12px 4px 12px 12px"
-                    : "4px 12px 12px 12px",
-                backgroundColor:
-                  msg.role === "user"
-                    ? "var(--color-primary)"
-                    : "var(--color-surface)",
-                color: msg.role === "user" ? "#fff" : "var(--color-text)",
-                border:
-                  msg.role === "user"
-                    ? "none"
-                    : "1px solid var(--color-border)",
-                fontSize: "0.85rem",
-                lineHeight: 1.5,
+                display: "flex",
+                justifyContent: msg.role === "user" ? "flex-end" : "flex-start",
+                marginBottom: "0.5rem",
               }}
             >
-              {msg.role === "assistant" ? (
-                <div className="markdown-content" style={{ fontSize: "0.85rem" }}>
-                  <ReactMarkdown
-                    remarkPlugins={[remarkMath]}
-                    rehypePlugins={[rehypeKatex]}
-                  >
-                    {msg.content}
-                  </ReactMarkdown>
-                </div>
-              ) : (
-                <span>{msg.content}</span>
-              )}
-            </div>
-          </div>
-        ))}
+              <div
+                style={{
+                  maxWidth: "90%",
+                  padding: "0.5rem 0.75rem",
+                  borderRadius:
+                    msg.role === "user"
+                      ? "12px 4px 12px 12px"
+                      : "4px 12px 12px 12px",
+                  backgroundColor:
+                    msg.role === "user"
+                      ? "var(--color-primary)"
+                      : "var(--color-surface)",
+                  color: msg.role === "user" ? "#fff" : "var(--color-text)",
+                  border:
+                    msg.role === "user"
+                      ? "none"
+                      : "1px solid var(--color-border)",
+                  fontSize: "0.85rem",
+                  lineHeight: 1.5,
+                }}
+              >
+                {msg.role === "assistant" ? (
+                  <div className="markdown-content" style={{ fontSize: "0.85rem" }}>
+                    <ReactMarkdown
+                      remarkPlugins={[remarkMath]}
+                      rehypePlugins={[rehypeKatex]}
+                    >
+                      {msg.content}
+                    </ReactMarkdown>
+                  </div>
+                ) : (
+                  <span>{msg.content}</span>
+                )}
+              </div>
+            </motion.div>
+          ))}
+        </AnimatePresence>
 
         {assistLoading && (
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "0.4rem",
-              color: "var(--color-text-muted)",
-              fontSize: "0.8rem",
-              padding: "0.4rem 0",
-            }}
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            style={{ display: "flex", gap: "4px", padding: "0.4rem 0.5rem", alignItems: "center" }}
           >
-            <Loader
-              size={14}
-              style={{ animation: "spin 1s linear infinite" }}
-            />
-            {t("assist.thinking")}
-            <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-          </div>
+            {[0, 1, 2].map((i) => (
+              <div
+                key={i}
+                style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: "50%",
+                  background: "var(--color-text-muted)",
+                  animation: `dots-bounce 1.2s ease-in-out ${i * 0.2}s infinite`,
+                }}
+              />
+            ))}
+          </motion.div>
         )}
 
         <div ref={messagesEndRef} />

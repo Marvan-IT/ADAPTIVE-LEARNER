@@ -36,6 +36,8 @@ class Student(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
+    xp: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    streak: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
 
     sessions: Mapped[list["TeachingSession"]] = relationship(
         back_populates="student", cascade="all, delete-orphan"
@@ -183,6 +185,12 @@ class SpacedReview(Base):
     """
 
     __tablename__ = "spaced_reviews"
+    __table_args__ = (
+        UniqueConstraint(
+            "student_id", "concept_id", "review_number",
+            name="uq_spaced_review_student_concept_number",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     student_id: Mapped[uuid.UUID] = mapped_column(

@@ -41,6 +41,35 @@ CHROMA_COLLECTION_NAME = "openstax_concepts"
 ADAPTIVE_ERROR_PENALTY_WEIGHT: float = 0.4   # Weight for error rate in confidence score
 ADAPTIVE_HINT_PENALTY_WEIGHT: float = 0.2    # Weight for hint usage in confidence score
 
+# ── Mastery ───────────────────────────────────────────────────────────────────
+MASTERY_THRESHOLD = 60  # Score out of 100 required to mark a concept as mastered
+
+# ── Adaptive card generation ──────────────────────────────────────────────────
+ADAPTIVE_CARD_MODEL   = OPENAI_MODEL_MINI   # gpt-4o-mini: fast for single-card generation
+ADAPTIVE_CARD_CEILING = 8                   # Maximum adaptive cards per session
+
+# ── XP Award Values ────────────────────────────────────────────────────────────
+XP_MASTERY: int = 50                  # Base XP awarded on concept mastery
+XP_MASTERY_BONUS: int = 25            # Bonus XP when check_score >= XP_MASTERY_BONUS_THRESHOLD
+XP_MASTERY_BONUS_THRESHOLD: int = 90  # Score (0–100) qualifying for mastery bonus
+XP_CONSOLATION: int = 10              # Consolation XP when session completes without mastery
+XP_CARD_ADVANCE: int = 5              # XP awarded in the frontend per card advance (informational)
+
+# ── Adaptive Transparency ─────────────────────────────────────────────────────
+WRONG_OPTION_PATTERN_THRESHOLD: int = 3  # Times a wrong option must be chosen to trigger pattern injection
+CARD_HISTORY_DEFAULT_LIMIT: int = 50     # Default row limit for GET /card-history
+CARD_HISTORY_MAX_LIMIT: int = 200        # Hard cap — prevents runaway queries
+
+# ── Deviation-aware blending ──────────────────────────────────────────────────
+ADAPTIVE_MIN_HISTORY_CARDS     = 5    # Minimum cards before history is blended in
+ADAPTIVE_ACUTE_HIGH_TIME_RATIO = 2.0  # time_ratio > this → distraction/illness detected
+ADAPTIVE_ACUTE_LOW_TIME_RATIO  = 0.4  # time_ratio < this → recovery/acceleration detected
+ADAPTIVE_ACUTE_WRONG_RATIO     = 3.0  # wrong_ratio > this → acute struggle detected
+ADAPTIVE_ACUTE_CURRENT_WEIGHT  = 0.9  # Current-signal weight in acute deviation mode
+ADAPTIVE_ACUTE_HISTORY_WEIGHT  = 0.1  # History weight in acute deviation mode
+ADAPTIVE_NORMAL_CURRENT_WEIGHT = 0.6  # Current-signal weight in normal variance mode
+ADAPTIVE_NORMAL_HISTORY_WEIGHT = 0.4  # History weight in normal variance mode
+
 # ── Boilerplate patterns to strip (line-level) ─────────────────────────
 BOILERPLATE_PATTERNS = [
     r"Access for free at openstax\.org",

@@ -19,6 +19,8 @@ from collections import defaultdict
 from pathlib import Path
 
 import fitz  # PyMuPDF
+import io as _io
+from PIL import Image as _PILImage
 from openai import AsyncOpenAI
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -140,12 +142,27 @@ async def extract_and_save_images(
         height: int = img_info.get("height", 0)
 
         # Discard thumbnails / noise that slipped through classification
-        if width < 10 or height < 10:
+        if width < 50 or height < 50:
             skipped += 1
             continue
 
-        # Map page number to owning concept
-        concept_id = page_to_concept.get(page_num, "UNMAPPED")
+        # Validate and normalize image bytes with Pillow — skips black/corrupt images
+        try:
+            _pil = _PILImage.open(_io.BytesIO(image_bytes))
+            _pil.verify()  # raises on corruption
+            # Re-open after verify (verify closes the stream)
+            _pil = _PILImage.open(_io.BytesIO(image_bytes)).convert("RGB")
+            _out = _io.BytesIO()
+            _pil.save(_out, format="PNG")
+            image_bytes = _out.getvalue()
+            ext = "png"
+        except Exception:
+            logger.debug("Pillow validation failed for xref %d — skipping", xref)
+            skipped += 1
+            continue
+
+        # Map page number to owning concept (with ±5-page proximity fallback)
+        concept_id = _nearest_concept(page_num, page_to_concept)
 
         # Save image file under images/{concept_id}/{xref}.{ext}
         concept_dir = images_dir / concept_id
@@ -236,6 +253,22 @@ async def extract_and_save_images(
 
 
 # ── Helpers ───────────────────────────────────────────────────────────
+
+def _nearest_concept(page_num: int, page_map: dict[int, str]) -> str:
+    """
+    Assign an image page to its owning concept.
+    If the page is not directly mapped, searches within ±5 pages for the
+    nearest concept boundary and assigns to that concept. Falls back to
+    "UNMAPPED" only when no concept is within 5 pages.
+    """
+    if page_num in page_map:
+        return page_map[page_num]
+    mapped = sorted(page_map)
+    if not mapped:
+        return "UNMAPPED"
+    closest = min(mapped, key=lambda p: abs(p - page_num))
+    return page_map[closest] if abs(closest - page_num) <= 5 else "UNMAPPED"
+
 
 def _build_page_to_concept_map(concept_blocks: list[dict]) -> dict[int, str]:
     """

@@ -29,16 +29,21 @@ logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = (
     "You are an expert mathematics educator analysing images extracted from "
-    "OpenStax mathematics textbooks. Your task is to describe the mathematical "
-    "content of the image and explain its pedagogical purpose so that a "
-    "teaching AI can reference it accurately when tutoring a student.\n\n"
+    "OpenStax mathematics textbooks.\n\n"
     "Respond ONLY with a JSON object in this exact format — no markdown, no "
     "code blocks, no extra text:\n"
-    '{"description": "<concise description of what the image shows>", '
-    '"relevance": "<one sentence explaining why this image matters for understanding the concept>", '
+    '{"description": "<2-4 sentences written naturally as if explaining to a curious student. '
+    "Describe what the image shows AND why it helps understand the concept in a single flowing paragraph. "
+    "Do NOT use headings, bullet points, or labels. "
+    "Do NOT start with phrases like 'This image shows' or 'Description:'. "
+    "Just describe it conversationally — for example: "
+    "'Three lines are drawn on the same coordinate plane, each with a different slope. "
+    "The steeper the line, the larger the slope value, making it easy to see how changing "
+    "the coefficient in y = mx changes how fast the line rises.'\", "
     '"is_educational": <true if this is genuine math content such as a formula, equation, '
     "number line, graph, or diagram that helps a student learn; "
-    "false if it is a logo, icon, institutional photo, or decorative illustration>}"
+    "false if it is a logo, icon, institutional photo, or decorative illustration>}\n\n"
+    "If the image is decorative or non-mathematical, set is_educational to false and description to null."
 )
 
 
@@ -159,7 +164,8 @@ async def annotate_image(
         annotation = {
             # Coerce empty strings to None so callers can use a simple truthiness check.
             "description": parsed.get("description") or None,
-            "relevance": parsed.get("relevance") or None,
+            # relevance field removed from prompt — kept as None for schema compatibility
+            "relevance": None,
             "is_educational": bool(parsed.get("is_educational", True)),
         }
     except json.JSONDecodeError as exc:

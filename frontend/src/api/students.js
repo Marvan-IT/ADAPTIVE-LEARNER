@@ -21,3 +21,18 @@ export const updateLanguage = (studentId, language) =>
 
 export const getReviewDue = (studentId) =>
   api.get(`/api/v2/students/${studentId}/review-due`);
+
+export const getCardHistory = (studentId, limit = 50) =>
+  api.get(`/api/v2/students/${studentId}/card-history`, { params: { limit } });
+
+export const updateStudentProgress = (studentId, xpDelta, streak) =>
+  api.patch(`/api/v2/students/${studentId}/progress`, {
+    xp_delta: xpDelta,
+    streak: streak,
+  });
+
+export const getSessions = (studentId) =>
+  api.get(`/api/v2/students/${studentId}/sessions`);
+
+export const getSessionCardInteractions = (sessionId) =>
+  api.get(`/api/v2/sessions/${sessionId}/card-interactions`);

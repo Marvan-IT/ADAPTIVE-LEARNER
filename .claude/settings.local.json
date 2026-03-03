@@ -28,7 +28,9 @@
       "Bash(xargs:*)",
       "Bash(ls:*)",
       "Bash(rtk ls:*)",
-      "Bash(alembic:*)"
+      "Bash(alembic:*)",
+      "Bash(rtk git status)",
+      "Read(//tmp/**)"
     ]
   }
 }

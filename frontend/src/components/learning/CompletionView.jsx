@@ -6,7 +6,33 @@ import { getNextConcepts } from "../../api/concepts";
 import { formatConceptTitle } from "../../utils/formatConceptTitle";
 import { useTranslation } from "react-i18next";
 import { trackEvent } from "../../utils/analytics";
-import { Trophy, Star, RefreshCw, Map, ArrowRight } from "lucide-react";
+import { RefreshCw, Map, ArrowRight } from "lucide-react";
+import ProgressRing from "../ui/ProgressRing";
+
+const CONFETTI_COLORS = ["#3b82f6", "#22c55e", "#8b5cf6", "#f59e0b", "#ef4444", "#06b6d4"];
+
+function Confetti() {
+  const pieces = Array.from({ length: 14 }, (_, i) => i);
+  return (
+    <div aria-hidden="true" style={{ position: "absolute", top: 0, left: 0, right: 0, pointerEvents: "none", overflow: "hidden", height: "100%" }}>
+      {pieces.map((i) => (
+        <div
+          key={i}
+          style={{
+            position: "absolute",
+            top: "-10px",
+            left: `${(i / 14) * 100 + Math.random() * 6}%`,
+            width: "8px",
+            height: "8px",
+            borderRadius: i % 3 === 0 ? "50%" : "2px",
+            backgroundColor: CONFETTI_COLORS[i % CONFETTI_COLORS.length],
+            animation: `confetti-fall ${0.9 + (i % 5) * 0.25}s ${i * 0.06}s ease-in both`,
+          }}
+        />
+      ))}
+    </div>
+  );
+}
 
 export default function CompletionView() {
   const { t } = useTranslation();
@@ -15,7 +41,6 @@ export default function CompletionView() {
   const navigate = useNavigate();
   const [nextConcept, setNextConcept] = useState(null);
 
-  // Track completion_viewed once
   const trackedRef = useRef(false);
   useEffect(() => {
     if (!trackedRef.current) {
@@ -28,74 +53,86 @@ export default function CompletionView() {
     getNextConcepts(masteredConcepts)
       .then((res) => {
         const ready = res.data.ready_to_learn || [];
-        if (ready.length > 0) {
-          setNextConcept(ready[0]);
-        }
+        if (ready.length > 0) setNextConcept(ready[0]);
       })
       .catch(() => {});
   }, [masteredConcepts]);
 
+  const scoreLabel =
+    score >= 90 ? t("completion.excellent") || "Excellent!" :
+    score >= 60 ? t("completion.mastered") :
+    score >= 40 ? t("completion.almostThere") :
+    t("completion.keepPracticing") || "Keep practicing";
+
   const scoreColor =
-    score >= 90 ? "var(--color-success)" :
-    score >= 70 ? "var(--color-primary)" :
-    score >= 50 ? "#f59e0b" : "var(--color-danger)";
+    score >= 90 ? "var(--score-excellent)" :
+    score >= 60 ? "var(--score-pass)" :
+    score >= 40 ? "var(--score-borderline)" :
+    "var(--score-fail)";
 
   return (
-    <div style={{
-      backgroundColor: "var(--color-surface)",
-      borderRadius: "16px",
-      border: "2px solid var(--color-border)",
-      overflow: "hidden",
-    }}>
-      {/* Banner */}
+    <div
+      className="fade-up"
+      style={{
+        backgroundColor: "var(--color-surface)",
+        borderRadius: "var(--radius-xl)",
+        border: "2px solid var(--color-border)",
+        overflow: "hidden",
+        position: "relative",
+        maxWidth: "480px",
+        margin: "0 auto",
+      }}
+    >
+      {mastered && <Confetti />}
+
+      {/* Header gradient banner */}
       <div style={{
         background: mastered
-          ? "linear-gradient(135deg, #22c55e, #16a34a)"
+          ? "linear-gradient(135deg, var(--color-success), #16a34a)"
           : "linear-gradient(135deg, #f59e0b, #d97706)",
-        padding: "1.5rem 2rem",
+        padding: "1.5rem 2rem 2.5rem",
         textAlign: "center",
         color: "#fff",
       }}>
-        {mastered ? (
-          <>
-            <Trophy size={40} style={{ marginBottom: "0.5rem" }} />
-            <h2 style={{ fontSize: "1.5rem", fontWeight: 800, margin: "0 0 0.25rem" }}>
-              {t("completion.mastered")}
-            </h2>
-            <p style={{ fontSize: "0.95rem", opacity: 0.9 }}>
-              {t("completion.masteredMsg", { title: conceptTitle })}
-            </p>
-          </>
-        ) : (
-          <>
-            <Star size={40} style={{ marginBottom: "0.5rem" }} />
-            <h2 style={{ fontSize: "1.5rem", fontWeight: 800, margin: "0 0 0.25rem" }}>
-              {t("completion.almostThere")}
-            </h2>
-            <p style={{ fontSize: "0.95rem", opacity: 0.9 }}>
-              {t("completion.almostMsg", { title: conceptTitle })}
-            </p>
-          </>
-        )}
+        <div style={{ fontSize: "2rem", marginBottom: "0.25rem" }}>
+          {mastered ? "🎉" : "📚"}
+        </div>
+        <h2 style={{ fontSize: "1.4rem", fontWeight: 800, margin: 0 }}>
+          {mastered ? t("completion.mastered") : t("completion.almostThere")}
+        </h2>
+        <p style={{ fontSize: "0.9rem", opacity: 0.9, marginTop: "0.25rem" }}>
+          {mastered
+            ? t("completion.masteredMsg", { title: conceptTitle })
+            : t("completion.almostMsg", { title: conceptTitle })}
+        </p>
       </div>
 
       {/* Score + Actions */}
       <div style={{ padding: "2rem", textAlign: "center" }}>
-        {/* Score circle */}
-        <div style={{
-          width: "130px", height: "130px", borderRadius: "50%",
-          border: `5px solid ${scoreColor}`,
-          display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-          margin: "0 auto 1.5rem",
-          backgroundColor: "var(--color-bg)",
-        }}>
-          <span style={{ fontSize: "2.2rem", fontWeight: 800, color: scoreColor }}>
-            {score}
-          </span>
-          <span style={{ fontSize: "0.75rem", color: "var(--color-text-muted)", fontWeight: 600 }}>
-            {t("completion.outOf")}
-          </span>
+        {/* ProgressRing centered */}
+        <div style={{ position: "relative", display: "inline-flex", alignItems: "center", justifyContent: "center", marginBottom: "1.5rem", marginTop: "-2.5rem" }}>
+          <div style={{ borderRadius: "50%", backgroundColor: "var(--color-surface)", padding: "4px", boxShadow: "var(--shadow-lg)" }}>
+            <ProgressRing score={score} size={130} strokeWidth={9} />
+          </div>
+          <div style={{
+            position: "absolute",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+          }}>
+            <span style={{ fontSize: "2rem", fontWeight: 800, color: scoreColor, lineHeight: 1 }}>
+              {score}
+            </span>
+            <span style={{ fontSize: "0.65rem", color: "var(--color-text-muted)", fontWeight: 700 }}>
+              {t("completion.outOf")}
+            </span>
+          </div>
         </div>
+
+        <p style={{ fontWeight: 700, color: scoreColor, marginBottom: "1.5rem", fontSize: "1rem" }}>
+          {scoreLabel}
+        </p>
 
         {/* Actions */}
         <div style={{ display: "flex", flexDirection: "column", gap: "0.65rem", maxWidth: "300px", margin: "0 auto" }}>
@@ -109,11 +146,15 @@ export default function CompletionView() {
               style={{
                 display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem",
                 width: "100%", padding: "0.75rem",
-                borderRadius: "12px", border: "none",
+                borderRadius: "var(--radius-md)", border: "none",
                 backgroundColor: "var(--color-primary)", color: "#fff",
                 fontSize: "1rem", fontWeight: 700,
                 cursor: "pointer", fontFamily: "inherit",
+                boxShadow: "var(--shadow-sm)",
+                transition: "transform var(--motion-fast)",
               }}
+              onMouseEnter={(e) => (e.currentTarget.style.transform = "scale(1.02)")}
+              onMouseLeave={(e) => (e.currentTarget.style.transform = "scale(1)")}
             >
               <RefreshCw size={18} /> {t("completion.tryAgain")}
             </button>
@@ -129,11 +170,15 @@ export default function CompletionView() {
               style={{
                 display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem",
                 width: "100%", padding: "0.75rem",
-                borderRadius: "12px", border: "none",
+                borderRadius: "var(--radius-md)", border: "none",
                 backgroundColor: "var(--color-primary)", color: "#fff",
                 fontSize: "1rem", fontWeight: 700,
                 cursor: "pointer", fontFamily: "inherit",
+                boxShadow: "var(--shadow-sm)",
+                transition: "transform var(--motion-fast)",
               }}
+              onMouseEnter={(e) => (e.currentTarget.style.transform = "scale(1.02)")}
+              onMouseLeave={(e) => (e.currentTarget.style.transform = "scale(1)")}
             >
               <ArrowRight size={18} />
               {t("completion.next", { title: nextConcept.concept_title || formatConceptTitle(nextConcept.concept_id) })}
@@ -141,14 +186,19 @@ export default function CompletionView() {
           )}
 
           <button
-            onClick={() => { trackEvent("completion_action", { action: "back_to_map", concept_id: session?.concept_id, concept_title: conceptTitle }); reset(); navigate("/map"); }}
+            onClick={() => {
+              trackEvent("completion_action", { action: "back_to_map", concept_id: session?.concept_id, concept_title: conceptTitle });
+              reset();
+              navigate("/map");
+            }}
             style={{
               display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem",
               width: "100%", padding: "0.65rem",
-              borderRadius: "12px", border: "1.5px solid var(--color-border)",
+              borderRadius: "var(--radius-md)", border: "1.5px solid var(--color-border)",
               backgroundColor: "transparent", color: "var(--color-text-muted)",
               fontSize: "0.9rem", fontWeight: 600,
               cursor: "pointer", fontFamily: "inherit",
+              transition: "border-color var(--motion-fast)",
             }}
           >
             <Map size={16} /> {t("learning.backToMap")}

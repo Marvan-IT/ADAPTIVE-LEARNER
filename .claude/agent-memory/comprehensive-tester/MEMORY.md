@@ -29,7 +29,7 @@
 - STRONG: `quiz >= 0.8` AND `error_rate <= 0.2` AND `hints <= 2` (all inclusive)
 - BORED: `skip_rate > 0.35` (strict >, checked before OVERWHELMED)
 - OVERWHELMED: `hints >= 5` AND `revisits >= 2` (both required)
-- Mastery threshold: 0.70 (in config.py)
+- Mastery threshold: 60 (integer, out of 100; `MASTERY_THRESHOLD = 60` in config.py — changed from 70)
 - Confidence score: `clamp(quiz - error_rate*0.4 - min(hints,10)/10*0.2, 0.0, 1.0)`
 - BORED modifier: fun += 0.3 (cap 1.0), emoji = SPARING, card_count = max(7, count-1)
 - OVERWHELMED modifier: card_count = max(7, count-3), practice = max(3, p-1), step_by_step=True, analogy = min(1.0, a+0.2)
@@ -64,3 +64,50 @@ type(ks.graph).__contains__ = MagicMock(return_value=True)  # for `in` operator
 MagicMock dunder `__contains__` must be set on `type(mock_obj)`, not the instance.
 
 See `backend/tests/test_concept_enrichment.py` — 17 tests across 3 groups.
+
+### Circular Import Problem: teaching_router ↔ api.main
+`api/teaching_router.py` imports `limiter` from `api/main.py` at module level, and `api/main.py` imports `router` from `api/teaching_router.py` at module level. This causes a circular import when any test imports either module directly.
+
+**Fix**: Pre-inject a stub for `api.main` into `sys.modules` BEFORE any import of `teaching_router`. Do this at module level in the test file (outside any test class/function) so it runs during collection:
+```python
+def _install_api_main_stub():
+    if "api.main" not in sys.modules:
+        stub = MagicMock()
+        from slowapi import Limiter
+        from slowapi.util import get_remote_address
+        stub.limiter = Limiter(key_func=get_remote_address)
+        sys.modules["api.main"] = stub
+_install_api_main_stub()
+```
+After this, `from api.teaching_router import ProgressUpdate` (or any other export) works cleanly.
+
+### Auth Middleware Testing Pattern
+Do NOT import `api.main.app` for middleware tests — the lifespan tries to load ChromaDB + PostgreSQL. Instead, replicate the middleware logic in a lightweight synthetic FastAPI app:
+```python
+def _build_app(api_key: str):
+    app = FastAPI()
+    @app.middleware("http")
+    async def api_key_middleware(request, call_next):
+        if request.url.path in SKIP_AUTH or not api_key:
+            return await call_next(request)
+        provided = request.headers.get("X-API-Key", "")
+        if not secrets.compare_digest(provided, api_key):
+            return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+        return await call_next(request)
+    # add test routes
+    return app
+```
+This mirrors production logic exactly without requiring services.
+
+### Missing Packages (install before running tests)
+`slowapi` and `Pillow` are in `requirements.txt` but may not be installed in the dev venv. Run:
+`pip install slowapi Pillow`
+The existing `test_teaching_router.py` is BROKEN due to the circular import — it was not fixed. Only `test_platform_hardening.py` uses the stub pattern.
+
+### Platform Hardening Test File
+`backend/tests/test_platform_hardening.py` — 32 tests across 5 suites:
+- Suite 1 (6 tests): auth middleware (synthetic app, no real DB)
+- Suite 2 (6 tests): ProgressUpdate Pydantic schema validation
+- Suite 3 (11 tests): _nearest_concept() + Pillow image validation
+- Suite 4 (5 tests): vision annotator with mocked LLM
+- Suite 5 (4 tests): list_students N+1 fix structural inspection

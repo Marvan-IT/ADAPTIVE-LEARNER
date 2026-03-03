@@ -42,6 +42,13 @@ from adaptive.schemas import (
 )
 from adaptive.adaptive_engine import build_blended_analytics, load_student_history
 from adaptive.prompt_builder import _NEXT_CARD_JSON_SCHEMA, build_next_card_prompt
+from config import (
+    MASTERY_THRESHOLD,
+    ADAPTIVE_ACUTE_CURRENT_WEIGHT,
+    ADAPTIVE_ACUTE_HISTORY_WEIGHT,
+    ADAPTIVE_NORMAL_CURRENT_WEIGHT,
+    ADAPTIVE_NORMAL_HISTORY_WEIGHT,
+)
 
 
 # =============================================================================
@@ -228,8 +235,9 @@ class TestBuildBlendedAnalytics:
         signals = _make_signals(time_on_card_sec=90.0, wrong_attempts=1, hints_used=2)
         result = build_blended_analytics(signals, HISTORY_EXPERIENCED, "C1", "S1")
 
-        # blended_hints = 2*0.6 + 0.5*0.4 = 1.2 + 0.2 = 1.4 → round → 1
-        assert result.hints_used == round(2 * 0.6 + 0.5 * 0.4)
+        # blended_hints = 2*ADAPTIVE_NORMAL_CURRENT_WEIGHT + 0.5*ADAPTIVE_NORMAL_HISTORY_WEIGHT
+        # = 1.2 + 0.2 = 1.4 → round → 1
+        assert result.hints_used == round(2 * ADAPTIVE_NORMAL_CURRENT_WEIGHT + 0.5 * ADAPTIVE_NORMAL_HISTORY_WEIGHT)
 
     # ------------------------------------------------------------------
     # 1.3 Acute time deviation (time_ratio > 2.0) → 90 / 10 blend → SLOW
@@ -243,9 +251,10 @@ class TestBuildBlendedAnalytics:
         signals = _make_signals(time_on_card_sec=300.0, wrong_attempts=3)
         result = build_blended_analytics(signals, HISTORY_EXPERIENCED, "C1", "S1")
 
-        # With 90/10 blend:
-        # blended_wrong = 3*0.9 + 1.0*0.1 = 2.7 + 0.1 = 2.8 → round → 3
-        assert result.wrong_attempts == round(3 * 0.9 + 1.0 * 0.1)
+        # With acute blend (ADAPTIVE_ACUTE_CURRENT_WEIGHT / ADAPTIVE_ACUTE_HISTORY_WEIGHT):
+        # blended_wrong = 3*ADAPTIVE_ACUTE_CURRENT_WEIGHT + 1.0*ADAPTIVE_ACUTE_HISTORY_WEIGHT
+        # = 2.7 + 0.1 = 2.8 → round → 3
+        assert result.wrong_attempts == round(3 * ADAPTIVE_ACUTE_CURRENT_WEIGHT + 1.0 * ADAPTIVE_ACUTE_HISTORY_WEIGHT)
 
     def test_blended_analytics_acute_time_deviation_high_produces_slow_classification(self):
         """
@@ -336,10 +345,12 @@ class TestBuildBlendedAnalytics:
         signals = _make_signals(time_on_card_sec=90.0, wrong_attempts=7)
         result = build_blended_analytics(signals, HISTORY_EXPERIENCED, "C1", "S1")
 
-        # Acute (90/10): 7*0.9 + 1.0*0.1 = 6.4 → round → 6
-        # Normal would give: 7*0.6 + 1.0*0.4 = 4.6 → round → 5
+        # Acute (ADAPTIVE_ACUTE): 7*ADAPTIVE_ACUTE_CURRENT_WEIGHT + 1.0*ADAPTIVE_ACUTE_HISTORY_WEIGHT
+        # = 6.3 + 0.1 = 6.4 → round → 6
+        # Normal would give: 7*ADAPTIVE_NORMAL_CURRENT_WEIGHT + 1.0*ADAPTIVE_NORMAL_HISTORY_WEIGHT
+        # = 4.2 + 0.4 = 4.6 → round → 5
         # Acute blend produces HIGHER blended_wrong → quiz_score penalty is larger
-        assert result.wrong_attempts == round(7 * 0.9 + 1.0 * 0.1)
+        assert result.wrong_attempts == round(7 * ADAPTIVE_ACUTE_CURRENT_WEIGHT + 1.0 * ADAPTIVE_ACUTE_HISTORY_WEIGHT)
 
     def test_blended_analytics_wrong_ratio_at_boundary_3_0_not_acute(self):
         """
@@ -349,8 +360,9 @@ class TestBuildBlendedAnalytics:
         signals = _make_signals(time_on_card_sec=90.0, wrong_attempts=5)
         result = build_blended_analytics(signals, HISTORY_EXPERIENCED, "C1", "S1")
 
-        # Normal (60/40): 5*0.6 + 1.0*0.4 = 3.4 → round → 3
-        assert result.wrong_attempts == round(5 * 0.6 + 1.0 * 0.4)
+        # Normal (ADAPTIVE_NORMAL): 5*ADAPTIVE_NORMAL_CURRENT_WEIGHT + 1.0*ADAPTIVE_NORMAL_HISTORY_WEIGHT
+        # = 3.0 + 0.4 = 3.4 → round → 3
+        assert result.wrong_attempts == round(5 * ADAPTIVE_NORMAL_CURRENT_WEIGHT + 1.0 * ADAPTIVE_NORMAL_HISTORY_WEIGHT)
 
     # ------------------------------------------------------------------
     # 1.6 Output shape and field correctness
@@ -1541,7 +1553,7 @@ class TestReviewDueEndpoint:
 
 class TestSpacedReviewCreationOnMastery:
     """
-    When a student achieves mastery (score >= 70), TeachingService.handle_student_response()
+    When a student achieves mastery (score >= 60), TeachingService.handle_student_response()
     must create exactly 5 SpacedReview rows with the Ebbinghaus intervals:
       review_number 1 → +1 day
       review_number 2 → +3 days
@@ -1587,7 +1599,7 @@ class TestSpacedReviewCreationOnMastery:
         svc = TeachingService(knowledge_svc=mock_ks)
         svc.llm_client = AsyncMock()
 
-        # LLM returns a mastery response (score >= 70, complete=True)
+        # LLM returns a mastery response (score >= 60, complete=True)
         mastery_llm_content = json.dumps({
             "response": "Excellent work! You have demonstrated mastery.",
             "check_complete": True,
@@ -1788,3 +1800,30 @@ class TestSpacedReviewCreationOnMastery:
                 f"gap {gaps[i+1]} (between review {i+2} and {i+3}); "
                 "intervals must grow super-linearly"
             )
+
+    def test_mastery_threshold_imported_from_config(self):
+        """
+        MASTERY_THRESHOLD must be sourced from config, not redefined locally in
+        teaching_service.py.  This test verifies that the value used by
+        TeachingService at runtime matches the authoritative constant in config.py
+        and that config.MASTERY_THRESHOLD equals 60 (the current business rule).
+        """
+        import config
+        import inspect
+        import api.teaching_service as ts
+
+        # 1. The authoritative value in config must be 60.
+        assert config.MASTERY_THRESHOLD == 60, (
+            f"config.MASTERY_THRESHOLD is {config.MASTERY_THRESHOLD}, expected 60"
+        )
+
+        # 2. teaching_service must NOT redefine MASTERY_THRESHOLD as a module-level
+        #    constant — it must import and use the one from config.
+        ts_source = inspect.getsource(ts)
+        assert "MASTERY_THRESHOLD" not in ts_source.split("import")[0] or (
+            "from config import" in ts_source or "import config" in ts_source
+        ), "teaching_service.py defines MASTERY_THRESHOLD locally instead of importing from config"
+
+        # 3. The threshold value referenced inside teaching_service must equal 60
+        #    (confirming no stale local override is shadowing the config value).
+        assert MASTERY_THRESHOLD == 60

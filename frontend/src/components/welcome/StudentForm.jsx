@@ -116,8 +116,11 @@ export default function StudentForm({ onBack }) {
 
       {/* Interests */}
       <div style={{ marginBottom: "1rem" }}>
-        <span style={{ fontSize: "0.95rem", fontWeight: 600, color: "var(--color-text)" }}>
+        <span style={{ fontSize: "0.85rem", fontWeight: 500, color: "var(--color-text-muted)" }}>
           {t("form.interestsLabel")}
+          <span style={{ marginLeft: "0.35rem", fontSize: "0.78rem", fontWeight: 400 }}>
+            ({t("form.optional", "optional")})
+          </span>
         </span>
         {/* Tags */}
         <div style={{ display: "flex", flexWrap: "wrap", gap: "0.4rem", marginTop: "0.5rem" }}>

@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { useTranslation } from "react-i18next";
 import { API_BASE_URL } from "../../utils/constants";
 
 /**
@@ -16,12 +15,10 @@ import { API_BASE_URL } from "../../utils/constants";
  *   className {string}  Optional extra class name on the <figure>
  */
 export default function ConceptImage({ img, maxWidth = "600px", className = "" }) {
-  const { t } = useTranslation();
   const [status, setStatus] = useState("loading"); // "loading" | "loaded" | "error"
 
   // Prefer enriched description; fall back to legacy caption
   const description = img.description || img.caption || null;
-  const relevance = img.relevance || null;
 
   // Skip images that have no description at all (guard at render site already
   // handles this, but be defensive)
@@ -40,7 +37,7 @@ export default function ConceptImage({ img, maxWidth = "600px", className = "" }
         borderRadius: "10px",
         border: "1.5px solid var(--color-border)",
         overflow: "hidden",
-        backgroundColor: "var(--color-surface)",
+        backgroundColor: "#fff",
         maxWidth,
       }}
     >
@@ -59,7 +56,7 @@ export default function ConceptImage({ img, maxWidth = "600px", className = "" }
 
       <img
         src={src}
-        alt={description || t("image.diagram")}
+        alt={description || "Diagram"}
         onLoad={() => setStatus("loaded")}
         onError={() => setStatus("error")}
         style={{
@@ -76,35 +73,19 @@ export default function ConceptImage({ img, maxWidth = "600px", className = "" }
             padding: "0.55rem 0.85rem",
             borderTop: "1px solid var(--color-border)",
             backgroundColor: "var(--color-bg)",
-            fontSize: "0.82rem",
-            lineHeight: 1.45,
           }}
         >
-          <span
+          <p
             style={{
-              fontWeight: 700,
+              fontSize: "0.875rem",
               color: "var(--color-text-muted)",
-              marginRight: "0.3rem",
+              lineHeight: 1.6,
+              marginTop: "0.5rem",
+              fontStyle: "italic",
             }}
           >
-            {t("image.whatItShows")}
-          </span>
-          <span style={{ color: "var(--color-text)" }}>{description}</span>
-
-          {relevance && (
-            <p
-              style={{
-                margin: "0.35rem 0 0",
-                fontStyle: "italic",
-                color: "var(--color-text-muted)",
-              }}
-            >
-              <span style={{ fontWeight: 700, fontStyle: "normal" }}>
-                {t("image.whyItHelps")}
-              </span>{" "}
-              {relevance}
-            </p>
-          )}
+            {description}
+          </p>
         </figcaption>
       )}
 

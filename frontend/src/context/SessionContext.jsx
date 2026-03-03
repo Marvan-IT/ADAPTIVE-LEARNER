@@ -8,10 +8,12 @@ import {
   beginCheck,
   sendResponse,
   completeCardAndGetNext,
+  recordCardInteraction,
 } from "../api/sessions";
 import { useStudent } from "./StudentContext";
 import { useTheme } from "./ThemeContext";
 import { trackEvent } from "../utils/analytics";
+import { useAdaptiveStore } from "../store/adaptiveStore";
 
 const SessionContext = createContext();
 
@@ -40,6 +42,10 @@ const initialState = {
   adaptiveCardLoading: false,
   motivationalNote: null,
   performanceVsBaseline: null,
+  // Adaptive transparency
+  learningProfileSummary: null,
+  adaptationApplied: null,
+  difficultyBias: null,
 };
 
 function sessionReducer(state, action) {
@@ -114,7 +120,11 @@ function sessionReducer(state, action) {
         idleTriggerCount: 0,
         motivationalNote: action.payload.motivational_note ?? null,
         performanceVsBaseline: action.payload.performance_vs_baseline ?? null,
+        learningProfileSummary: action.payload.learning_profile_summary ?? null,
+        adaptationApplied: action.payload.adaptation_applied ?? null,
       };
+    case "SET_DIFFICULTY_BIAS":
+      return { ...state, difficultyBias: action.payload };
     case "ADAPTIVE_CARD_ERROR":
       return {
         ...state,
@@ -215,8 +225,14 @@ export function SessionProvider({ children }) {
 
   const goToNextCard = useCallback(
     async (signals) => {
-      // If no signals provided, session missing, or card ceiling reached, just advance index
-      if (!state.session || !signals || state.cards.length >= MAX_ADAPTIVE_CARDS) {
+      // If no session or no signals, just advance index
+      if (!state.session || !signals) {
+        dispatch({ type: "NEXT_CARD" });
+        return;
+      }
+      // Ceiling reached: record the interaction but skip LLM generation
+      if (state.cards.length >= MAX_ADAPTIVE_CARDS) {
+        recordCardInteraction(state.session.id, signals).catch(() => {});
         dispatch({ type: "NEXT_CARD" });
         return;
       }
@@ -233,6 +249,9 @@ export function SessionProvider({ children }) {
           performance_vs_baseline: res.data.performance_vs_baseline,
         });
         dispatch({ type: "ADAPTIVE_CARD_LOADED", payload: res.data });
+        // Wire XP + mode update from adaptive card response
+        useAdaptiveStore.getState().updateMode(res.data.learning_profile_summary);
+        useAdaptiveStore.getState().awardXP(5);
       } catch (err) {
         dispatch({ type: "ADAPTIVE_CARD_ERROR" });
       }
@@ -279,7 +298,7 @@ export function SessionProvider({ children }) {
   );
 
   // Finish cards → transition to Socratic chat for mastery
-  const finishCards = useCallback(async () => {
+  const finishCards = useCallback(async (signals) => {
     if (!state.session) return;
     dispatch({ type: "TRANSITION_LOADING" });
     const correctCount = Object.values(state.cardAnswers).filter((a) => a.correct).length;
@@ -290,6 +309,10 @@ export function SessionProvider({ children }) {
       concept_title: state.conceptTitle,
     });
     try {
+      // 0. Save the last card's interaction (not recorded via goToNextCard)
+      if (signals) {
+        await recordCardInteraction(state.session.id, signals).catch(() => {});
+      }
       // 1. Complete cards (phase → CARDS_DONE)
       await completeCards(state.session.id);
       // 2. Begin Socratic check (phase → CHECKING)
@@ -321,6 +344,8 @@ export function SessionProvider({ children }) {
               concept_id: state.session?.concept_id,
               concept_title: state.conceptTitle,
             });
+            const xpAwarded = res.data.xp_awarded ?? 50;
+            useAdaptiveStore.getState().awardXP(xpAwarded);
           }
           await refreshMastery();
         }
@@ -341,6 +366,10 @@ export function SessionProvider({ children }) {
     dispatch({ type: "RESET" });
   }, []);
 
+  const setDifficultyBias = useCallback((bias) => {
+    dispatch({ type: "SET_DIFFICULTY_BIAS", payload: bias });
+  }, []);
+
   return (
     <SessionContext.Provider
       value={{
@@ -353,6 +382,7 @@ export function SessionProvider({ children }) {
         finishCards,
         sendAnswer,
         reset,
+        setDifficultyBias,
       }}
     >
       {children}

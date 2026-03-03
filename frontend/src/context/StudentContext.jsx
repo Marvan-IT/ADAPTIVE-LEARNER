@@ -2,6 +2,7 @@ import { createContext, useContext, useState, useEffect, useCallback } from "rea
 import i18n from "i18next";
 import { getStudent, getStudentMastery } from "../api/students";
 import { identifyStudent, resetUser, trackEvent } from "../utils/analytics";
+import { useAdaptiveStore } from "../store/adaptiveStore";
 
 const StudentContext = createContext();
 
@@ -9,6 +10,8 @@ export function StudentProvider({ children }) {
   const [student, setStudentState] = useState(null);
   const [masteredConcepts, setMasteredConcepts] = useState([]);
   const [loading, setLoading] = useState(true);
+
+  const initAdaptive = useAdaptiveStore((s) => s.init);
 
   // Rehydrate from localStorage on mount
   useEffect(() => {
@@ -22,6 +25,10 @@ export function StudentProvider({ children }) {
           // Sync i18n language from student profile
           if (res.data.preferred_language) {
             i18n.changeLanguage(res.data.preferred_language);
+          }
+          // Hydrate Zustand game store from DB values if present
+          if (res.data.xp !== undefined || res.data.streak !== undefined) {
+            initAdaptive({ xp: res.data.xp ?? 0, streak: res.data.streak ?? 0 });
           }
           return getStudentMastery(savedId);
         })
@@ -64,13 +71,17 @@ export function StudentProvider({ children }) {
     if (studentData.preferred_language) {
       i18n.changeLanguage(studentData.preferred_language);
     }
+    // Hydrate game store from DB values
+    if (studentData.xp !== undefined || studentData.streak !== undefined) {
+      initAdaptive({ xp: studentData.xp ?? 0, streak: studentData.streak ?? 0 });
+    }
     try {
       const res = await getStudentMastery(studentData.id);
       setMasteredConcepts(res.data.mastered_concepts || []);
     } catch {
       setMasteredConcepts([]);
     }
-  }, []);
+  }, [initAdaptive]);
 
   const logout = () => {
     trackEvent("student_logout", { student_id: student?.id });

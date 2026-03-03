@@ -5,15 +5,20 @@ Week 2: Pedagogical Loop — teaching sessions with Socratic checks.
 """
 
 import json
+import os
+import secrets
 import sys
 from pathlib import Path
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from openai import AsyncOpenAI
 from pydantic import BaseModel
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
 
 # Ensure src is on the path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -35,6 +40,14 @@ import adaptive.adaptive_router as adaptive_router_module
 from db.connection import init_db, close_db
 from config import OUTPUT_DIR, OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, OPENAI_MODEL_MINI
 from api.prompts import LANGUAGE_NAMES
+
+
+# ── Rate limiter (shared via rate_limiter module to avoid circular imports) ─
+from api.rate_limiter import limiter
+
+# ── Auth constants ─────────────────────────────────────────────────────
+_API_KEY = os.getenv("API_SECRET_KEY", "")
+_SKIP_AUTH = {"/health", "/docs", "/openapi.json", "/redoc"}
 
 
 # ── Lifespan: load services once at startup ────────────────────────
@@ -99,12 +112,33 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Wire slowapi into the app
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[o.strip() for o in os.getenv("FRONTEND_URL", "http://localhost:5173").split(",")],
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ── API-key authentication middleware ──────────────────────────────
+@app.middleware("http")
+async def api_key_middleware(request: Request, call_next):
+    """Reject requests missing a valid X-API-Key header, except for public paths."""
+    api_key = os.getenv("API_SECRET_KEY", "")
+    if (request.method == "OPTIONS"
+            or request.url.path in _SKIP_AUTH
+            or request.url.path.startswith("/images/")
+            or not api_key):
+        return await call_next(request)
+    provided = request.headers.get("X-API-Key", "")
+    if not secrets.compare_digest(provided, api_key):
+        return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+    return await call_next(request)
+
 
 # ── Week 2: Teaching router ──────────────────────────────────────
 app.include_router(teaching_router)

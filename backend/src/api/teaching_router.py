@@ -7,13 +7,24 @@ import re
 from datetime import datetime, timezone
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select, func, and_
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel, Field
+from sqlalchemy import select, func, and_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+import logging
+
+from config import (
+    CARD_HISTORY_DEFAULT_LIMIT,
+    CARD_HISTORY_MAX_LIMIT,
+    XP_MASTERY,
+    XP_MASTERY_BONUS,
+    XP_MASTERY_BONUS_THRESHOLD,
+    XP_CONSOLATION,
+)
 from db.connection import get_db
-from db.models import Student, TeachingSession, ConversationMessage, StudentMastery, SpacedReview
+from db.models import Student, TeachingSession, ConversationMessage, StudentMastery, SpacedReview, CardInteraction
 from api.teaching_schemas import (
     CreateStudentRequest, StudentResponse,
     StartSessionRequest, SessionResponse,
@@ -25,8 +36,54 @@ from api.teaching_schemas import (
     AssistRequest, AssistResponse,
     UpdateLanguageRequest,
 )
+from api.rate_limiter import limiter
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v2", tags=["teaching"])
+
+
+# ── Request / response schemas for new endpoints ──────────────────────────────
+
+class ProgressUpdate(BaseModel):
+    xp_delta: int = Field(default=0, ge=0, description="XP to add (non-negative)")
+    streak: int = Field(default=0, ge=0, description="Absolute new streak value")
+
+
+class RecordInteractionRequest(BaseModel):
+    card_index: int = Field(..., ge=0)
+    time_on_card_sec: float = Field(default=0.0, ge=0)
+    wrong_attempts: int = Field(default=0, ge=0)
+    hints_used: int = Field(default=0, ge=0)
+    idle_triggers: int = Field(default=0, ge=0)
+    adaptation_applied: str | None = None
+
+async def _award_xp(
+    student_id: UUID,
+    xp_delta: int,
+    new_streak: int,
+    mastered: bool,
+    score: int | None,
+    db: AsyncSession,
+) -> None:
+    """Atomically update a student's XP and streak after a session completes."""
+    try:
+        await db.execute(
+            update(Student)
+            .where(Student.id == student_id)
+            .values(xp=Student.xp + xp_delta, streak=new_streak)
+        )
+        await db.commit()
+        logger.info(
+            "[xp-awarded] student_id=%s xp_delta=%d new_streak=%d mastered=%s score=%s",
+            student_id, xp_delta, new_streak, mastered, score,
+        )
+    except Exception as exc:
+        logger.warning(
+            "[xp-award-failed] student_id=%s xp_delta=%d error=%s",
+            student_id, xp_delta, exc,
+        )
+
 
 # Set during app startup in main.py lifespan
 teaching_svc = None
@@ -37,7 +94,8 @@ teaching_svc = None
 # ═══════════════════════════════════════════════════════════════════
 
 @router.post("/students", response_model=StudentResponse)
-async def create_student(req: CreateStudentRequest, db: AsyncSession = Depends(get_db)):
+@limiter.limit("30/minute")
+async def create_student(request: Request, req: CreateStudentRequest, db: AsyncSession = Depends(get_db)):
     """Create a new student profile."""
     student = Student(
         display_name=req.display_name,
@@ -51,41 +109,54 @@ async def create_student(req: CreateStudentRequest, db: AsyncSession = Depends(g
 
 
 @router.get("/students", summary="List all students")
-async def list_students(db: AsyncSession = Depends(get_db)):
-    """List all student profiles with their mastery counts."""
+@limiter.limit("120/minute")
+async def list_students(request: Request, db: AsyncSession = Depends(get_db)):
+    """List all student profiles with their mastery counts (single JOIN query)."""
     result = await db.execute(
-        select(Student).order_by(Student.created_at.desc())
-    )
-    students = result.scalars().all()
-    student_list = []
-    for s in students:
-        count_result = await db.execute(
-            select(func.count()).select_from(StudentMastery).where(
-                StudentMastery.student_id == s.id
-            )
+        select(
+            Student,
+            func.count(StudentMastery.id).label("mastered_count"),
         )
-        student_list.append({
+        .outerjoin(StudentMastery, StudentMastery.student_id == Student.id)
+        .group_by(Student.id)
+        .order_by(Student.created_at.desc())
+    )
+    rows = result.all()
+    return [
+        {
             "id": str(s.id),
             "display_name": s.display_name,
             "interests": s.interests or [],
             "preferred_style": s.preferred_style,
             "preferred_language": s.preferred_language or "en",
-            "mastered_count": count_result.scalar() or 0,
-        })
-    return student_list
+            "mastered_count": count or 0,
+        }
+        for s, count in rows
+    ]
 
 
-@router.get("/students/{student_id}", response_model=StudentResponse)
-async def get_student(student_id: UUID, db: AsyncSession = Depends(get_db)):
-    """Get student profile."""
+@router.get("/students/{student_id}")
+@limiter.limit("120/minute")
+async def get_student(request: Request, student_id: UUID, db: AsyncSession = Depends(get_db)):
+    """Get student profile including xp and streak."""
     student = await db.get(Student, student_id)
     if not student:
         raise HTTPException(404, "Student not found")
-    return student
+    return {
+        "id": str(student.id),
+        "display_name": student.display_name,
+        "interests": student.interests or [],
+        "preferred_style": student.preferred_style,
+        "preferred_language": student.preferred_language or "en",
+        "created_at": student.created_at.isoformat(),
+        "xp": student.xp,
+        "streak": student.streak,
+    }
 
 
 @router.get("/students/{student_id}/mastery")
-async def get_student_mastery(student_id: UUID, db: AsyncSession = Depends(get_db)):
+@limiter.limit("30/minute")
+async def get_student_mastery(request: Request, student_id: UUID, db: AsyncSession = Depends(get_db)):
     """Get all concepts mastered by a student."""
     result = await db.execute(
         select(StudentMastery).where(StudentMastery.student_id == student_id)
@@ -99,8 +170,9 @@ async def get_student_mastery(student_id: UUID, db: AsyncSession = Depends(get_d
 
 
 @router.patch("/students/{student_id}/language", response_model=StudentResponse)
+@limiter.limit("30/minute")
 async def update_student_language(
-    student_id: UUID, req: UpdateLanguageRequest, db: AsyncSession = Depends(get_db)
+    request: Request, student_id: UUID, req: UpdateLanguageRequest, db: AsyncSession = Depends(get_db)
 ):
     """Update a student's preferred language."""
     student = await db.get(Student, student_id)
@@ -111,12 +183,38 @@ async def update_student_language(
     return student
 
 
+@router.patch("/students/{student_id}/progress", summary="Update XP and streak")
+@limiter.limit("30/minute")
+async def update_student_progress(
+    request: Request,
+    student_id: UUID,
+    body: ProgressUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    """Atomically increment a student's XP and set their streak."""
+    result = await db.execute(
+        select(Student).where(Student.id == student_id)
+    )
+    student = result.scalar_one_or_none()
+    if not student:
+        raise HTTPException(404, "Student not found")
+
+    await db.execute(
+        update(Student)
+        .where(Student.id == student_id)
+        .values(xp=Student.xp + body.xp_delta, streak=body.streak)
+    )
+    await db.commit()
+    return {"ok": True}
+
+
 # ═══════════════════════════════════════════════════════════════════
 # TEACHING SESSIONS
 # ═══════════════════════════════════════════════════════════════════
 
 @router.post("/sessions", response_model=SessionResponse)
-async def start_session(req: StartSessionRequest, db: AsyncSession = Depends(get_db)):
+@limiter.limit("30/minute")
+async def start_session(request: Request, req: StartSessionRequest, db: AsyncSession = Depends(get_db)):
     """Start a new teaching session for a student + concept."""
     student = await db.get(Student, req.student_id)
     if not student:
@@ -129,7 +227,8 @@ async def start_session(req: StartSessionRequest, db: AsyncSession = Depends(get
 
 
 @router.post("/sessions/{session_id}/present", response_model=PresentationResponse)
-async def get_presentation(session_id: UUID, db: AsyncSession = Depends(get_db)):
+@limiter.limit("10/minute")
+async def get_presentation(request: Request, session_id: UUID, db: AsyncSession = Depends(get_db)):
     """Generate the metaphor-based explanation for the session's concept."""
     session = await db.get(TeachingSession, session_id)
     if not session:
@@ -178,7 +277,8 @@ async def get_presentation(session_id: UUID, db: AsyncSession = Depends(get_db))
 
 
 @router.post("/sessions/{session_id}/check", response_model=SocraticResponse)
-async def begin_check(session_id: UUID, db: AsyncSession = Depends(get_db)):
+@limiter.limit("10/minute")
+async def begin_check(request: Request, session_id: UUID, db: AsyncSession = Depends(get_db)):
     """Transition from Presentation to Socratic Check. Returns first question."""
     session = await db.get(TeachingSession, session_id)
     if not session:
@@ -201,7 +301,9 @@ async def begin_check(session_id: UUID, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/sessions/{session_id}/respond", response_model=SocraticResponse)
+@limiter.limit("10/minute")
 async def respond_to_check(
+    request: Request,
     session_id: UUID,
     req: StudentResponseRequest,
     db: AsyncSession = Depends(get_db),
@@ -226,6 +328,33 @@ async def respond_to_check(
     )
     exchange_count = len(exchange_result.scalars().all())
 
+    # Award XP when the assessment completes
+    xp_awarded = None
+    if result.get("check_complete"):
+        mastered = result.get("mastered") or False
+        score = result.get("score") or 0
+
+        xp_delta = (
+            XP_MASTERY + (XP_MASTERY_BONUS if score >= XP_MASTERY_BONUS_THRESHOLD else 0)
+            if mastered
+            else XP_CONSOLATION
+        )
+
+        # Fetch the student to get the current streak for the update
+        student_for_xp = await db.get(Student, session.student_id)
+        if student_for_xp is not None:
+            current_streak = student_for_xp.streak or 0
+            new_streak = (current_streak + 1) if mastered else current_streak
+            await _award_xp(
+                student_id=session.student_id,
+                xp_delta=xp_delta,
+                new_streak=new_streak,
+                mastered=mastered,
+                score=score,
+                db=db,
+            )
+        xp_awarded = xp_delta
+
     return SocraticResponse(
         session_id=session.id,
         response=result["response"],
@@ -234,11 +363,14 @@ async def respond_to_check(
         score=result["score"],
         mastered=result["mastered"],
         exchange_count=exchange_count,
+        xp_awarded=xp_awarded,
     )
 
 
 @router.put("/sessions/{session_id}/style")
+@limiter.limit("30/minute")
 async def switch_style(
+    request: Request,
     session_id: UUID,
     req: SwitchStyleRequest,
     db: AsyncSession = Depends(get_db),
@@ -257,7 +389,8 @@ async def switch_style(
 
 
 @router.get("/sessions/{session_id}", response_model=SessionResponse)
-async def get_session(session_id: UUID, db: AsyncSession = Depends(get_db)):
+@limiter.limit("30/minute")
+async def get_session(request: Request, session_id: UUID, db: AsyncSession = Depends(get_db)):
     """Get session status."""
     session = await db.get(TeachingSession, session_id)
     if not session:
@@ -266,7 +399,8 @@ async def get_session(session_id: UUID, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/sessions/{session_id}/history", response_model=SessionHistoryResponse)
-async def get_session_history(session_id: UUID, db: AsyncSession = Depends(get_db)):
+@limiter.limit("30/minute")
+async def get_session_history(request: Request, session_id: UUID, db: AsyncSession = Depends(get_db)):
     """Get full session history with all messages."""
     session = await db.get(
         TeachingSession, session_id,
@@ -286,7 +420,8 @@ async def get_session_history(session_id: UUID, db: AsyncSession = Depends(get_d
 # ═══════════════════════════════════════════════════════════════════
 
 @router.post("/sessions/{session_id}/cards", response_model=CardsResponse)
-async def get_cards(session_id: UUID, db: AsyncSession = Depends(get_db)):
+@limiter.limit("10/minute")
+async def get_cards(request: Request, session_id: UUID, db: AsyncSession = Depends(get_db)):
     """Generate card-based lesson with sub-content cards and quiz questions."""
     session = await db.get(TeachingSession, session_id)
     if not session:
@@ -325,7 +460,9 @@ async def get_cards(session_id: UUID, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/sessions/{session_id}/assist", response_model=AssistResponse)
+@limiter.limit("10/minute")
 async def assist_student(
+    request: Request,
     session_id: UUID,
     req: AssistRequest,
     db: AsyncSession = Depends(get_db),
@@ -349,7 +486,9 @@ async def assist_student(
 
 
 @router.post("/sessions/{session_id}/complete-cards")
+@limiter.limit("30/minute")
 async def complete_cards(
+    request: Request,
     session_id: UUID,
     db: AsyncSession = Depends(get_db),
 ):
@@ -364,12 +503,41 @@ async def complete_cards(
     return result
 
 
+@router.post("/sessions/{session_id}/record-interaction")
+@limiter.limit("30/minute")
+async def record_card_interaction(
+    request: Request,
+    session_id: UUID,
+    req: RecordInteractionRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Save the final card interaction when the student clicks Finish Cards."""
+    session = await db.get(TeachingSession, session_id)
+    if not session:
+        raise HTTPException(404, "Session not found")
+    interaction = CardInteraction(
+        session_id=session.id,
+        student_id=session.student_id,
+        concept_id=session.concept_id,
+        card_index=req.card_index,
+        time_on_card_sec=req.time_on_card_sec,
+        wrong_attempts=req.wrong_attempts,
+        hints_used=req.hints_used,
+        idle_triggers=req.idle_triggers,
+        adaptation_applied=req.adaptation_applied,
+    )
+    db.add(interaction)
+    await db.commit()
+    return {"saved": True}
+
+
 # ═══════════════════════════════════════════════════════════════════
 # SPACED REVIEW
 # ═══════════════════════════════════════════════════════════════════
 
 @router.get("/students/{student_id}/review-due")
-async def get_review_due(student_id: UUID, db: AsyncSession = Depends(get_db)):
+@limiter.limit("30/minute")
+async def get_review_due(request: Request, student_id: UUID, db: AsyncSession = Depends(get_db)):
     """Return concepts due for spaced review for this student."""
     now = datetime.now(timezone.utc)
 
@@ -395,3 +563,107 @@ async def get_review_due(student_id: UUID, db: AsyncSession = Depends(get_db)):
         }
         for r in reviews
     ]
+
+
+@router.get("/students/{student_id}/card-history")
+@limiter.limit("120/minute")
+async def get_student_card_history(
+    request: Request,
+    student_id: UUID,
+    limit: int = CARD_HISTORY_DEFAULT_LIMIT,
+    db: AsyncSession = Depends(get_db),
+):
+    """Return the most recent card interactions for a student. Used for adaptive engine verification."""
+    capped_limit = min(limit, CARD_HISTORY_MAX_LIMIT)
+
+    result = await db.execute(
+        select(CardInteraction)
+        .where(CardInteraction.student_id == student_id)
+        .order_by(CardInteraction.completed_at.desc())
+        .limit(capped_limit)
+    )
+    interactions = result.scalars().all()
+
+    return {
+        "student_id": str(student_id),
+        "total": len(interactions),
+        "interactions": [
+            {
+                "id": str(ci.id),
+                "session_id": str(ci.session_id),
+                "concept_id": ci.concept_id,
+                "card_index": ci.card_index,
+                "time_on_card_sec": ci.time_on_card_sec,
+                "wrong_attempts": ci.wrong_attempts,
+                "hints_used": ci.hints_used,
+                "idle_triggers": ci.idle_triggers,
+                "adaptation_applied": ci.adaptation_applied,
+                "completed_at": ci.completed_at.isoformat(),
+            }
+            for ci in interactions
+        ],
+    }
+
+
+@router.get("/students/{student_id}/sessions")
+@limiter.limit("120/minute")
+async def get_student_sessions(
+    request: Request,
+    student_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """List all meaningful teaching sessions for a student (any phase past PRESENTING)."""
+    result = await db.execute(
+        select(TeachingSession)
+        .where(TeachingSession.student_id == student_id)
+        .where(TeachingSession.phase.in_(["CARDS", "CARDS_DONE", "CHECKING", "COMPLETED"]))
+        .order_by(TeachingSession.started_at.desc())
+        .limit(50)
+    )
+    sessions = result.scalars().all()
+    return {
+        "student_id": str(student_id),
+        "sessions": [
+            {
+                "id": str(s.id),
+                "concept_id": s.concept_id,
+                "phase": s.phase,
+                "check_score": s.check_score,
+                "mastered": s.concept_mastered,
+                "started_at": s.started_at.isoformat() if s.started_at else None,
+                "completed_at": s.completed_at.isoformat() if s.completed_at else None,
+            }
+            for s in sessions
+        ],
+    }
+
+
+@router.get("/sessions/{session_id}/card-interactions")
+@limiter.limit("120/minute")
+async def get_session_card_interactions(
+    request: Request,
+    session_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Return all card interactions for a specific session, ordered by card index."""
+    result = await db.execute(
+        select(CardInteraction)
+        .where(CardInteraction.session_id == session_id)
+        .order_by(CardInteraction.card_index)
+    )
+    interactions = result.scalars().all()
+    return {
+        "session_id": str(session_id),
+        "interactions": [
+            {
+                "card_index": ci.card_index,
+                "time_on_card_sec": ci.time_on_card_sec,
+                "wrong_attempts": ci.wrong_attempts,
+                "hints_used": ci.hints_used,
+                "idle_triggers": ci.idle_triggers,
+                "adaptation_applied": ci.adaptation_applied,
+                "completed_at": ci.completed_at.isoformat(),
+            }
+            for ci in interactions
+        ],
+    }

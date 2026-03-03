@@ -1,6 +1,6 @@
 # Solution Architect Agent Memory — ADA Platform
 
-Last updated: 2026-02-27
+Last updated: 2026-03-01 (platform-hardening added)
 
 ---
 
@@ -109,7 +109,68 @@ Feature directories are kebab-case. Never combine two features in one directory.
 - v2 now owns: Socratic sessions, card completion, spaced review scheduling
 - v3 unchanged: initial adaptive lesson batch generation
 
+### Adaptive Transparency — Key Design Decisions (2026-02-28)
+- **No new ORM/migration:** All Group B features read from existing `card_interactions` columns. `difficulty_bias` is transient (Pydantic-only, not persisted).
+- **`difficulty_bias` field:** Added to `CardBehaviorSignals` as `Literal["TOO_EASY", "TOO_HARD"] | None = None`. Inherited by `NextCardRequest`. Backward compatible.
+- **Bias override mechanism:** `generate_next_card()` calls `profile.model_copy(update={"recommended_next_step": ...})` AFTER `build_learning_profile()` — keeps prompt builder pure.
+- **Wrong-option pattern:** `load_wrong_option_pattern()` async function in `adaptive_engine.py`. Threshold = `WRONG_OPTION_PATTERN_THRESHOLD = 3` in config.py. Failure is graceful (returns None, logs warning).
+- **5-tuple return from `generate_next_card()`:** Now returns `(card, profile, gen_profile, motivational_note, adaptation_label)`. All callers in `adaptive_router.py` must unpack 5 values. Breaking change — grep all call sites before commit.
+- **`difficulty` key forwarded in card dict:** `generate_next_card()` now includes `"difficulty": parsed.get("difficulty", 3)` in the normalised card dict.
+- **Card history endpoint:** `GET /api/v2/students/{id}/card-history?limit=50` in `teaching_router.py`. Constants `CARD_HISTORY_DEFAULT_LIMIT=50`, `CARD_HISTORY_MAX_LIMIT=200` in config.py. Uses `CardHistoryResponse` + `CardInteractionRecord` in `teaching_schemas.py`.
+- **SessionContext additions:** `learningProfileSummary`, `adaptationApplied`, `difficultyBias` added to state. `ADAPTIVE_CARD_LOADED` now clears `difficultyBias` (one-shot semantics). New action: `SET_DIFFICULTY_BIAS`.
+- **AdaptiveSignalTracker:** New component at `frontend/src/components/learning/AdaptiveSignalTracker.jsx`. Reads refs via `setInterval(1000)` — NOT useState on every tick. Props: refs + context values + `onDifficultyBias` callback.
+- **StudentHistoryPage:** Route `/history` in App.jsx. Redirects to `/` if no student in context. Client-side groups by `session_id`. SessionArcSparkline: inline SVG polyline, returns null for < 2 data points.
+- **Group A + Group B sequencing:** Must complete `CardLearningView` Group A changes (P4-5, P4-6) before inserting Group B `AdaptiveSignalTracker` (P5-8, P5-9).
+- **`build_next_card_prompt()` signature extended:** Accepts `wrong_option_pattern: int | None = None` and `difficulty_bias: str | None = None`. Pure function — no side effects.
+
+### Confirmed API Version Assignment (updated)
+- `GET /api/v2/students/{id}/card-history` — added to v2 (student resource pattern)
+- v2 endpoint count: students CRUD, sessions CRUD, cards, assist, complete-card, review-due, card-history
+
 ### Completed Designs
 - `docs/adaptive-learning-engine/` — HLD, DLD, execution-plan (2026-02-25)
 - `docs/concept-enrichment/` — HLD, DLD, execution-plan (2026-02-26)
 - `docs/adaptive-real-tutor/` — HLD, DLD, execution-plan (2026-02-27)
+- `docs/adaptive-transparency/` — HLD, DLD, execution-plan (2026-02-28)
+- `docs/ai-native-learning-os/` — HLD, DLD, execution-plan (2026-03-01)
+- `docs/platform-hardening/` — HLD, execution-plan (2026-03-01); DLD pre-specified by team
+
+### Platform Hardening — Key Design Decisions (2026-03-01)
+- **Auth:** `APIKeyMiddleware` (custom `BaseHTTPMiddleware`) — single shared `API_SECRET_KEY`. Skip paths: `/health`, `/docs`, `/openapi.json`, `/redoc`. Use `secrets.compare_digest()`. Fail fast at startup if key absent.
+- **Rate limiting:** `slowapi` 0.1.x + `SlowAPIMiddleware`. Constants in config.py: `RATE_LIMIT_DEFAULT=60/minute`, `RATE_LIMIT_LLM_HEAVY=10/minute`, `RATE_LIMIT_READ=120/minute`. In-memory (no Redis).
+- **Middleware order:** Auth registered LAST in main.py (Starlette LIFO = executes FIRST). slowapi registered before auth.
+- **XP/streak columns:** `students.xp INTEGER NOT NULL DEFAULT 0`, `students.streak INTEGER NOT NULL DEFAULT 0`. Atomic UPDATE via `xp = xp + :delta`.
+- **New endpoint:** `PATCH /api/v2/students/{id}/progress` — `xp_delta: int (ge=0)`, `streak: int (ge=0)`. Under v2 (student resource).
+- **Frontend XP sync:** Fire-and-forget after card completion. Hydrate from `GET /students/{id}` on app start into Zustand `hydrateProgress()` action.
+- **DB indices (Alembic):** `ix_teaching_sessions_student_id`, `ix_conversation_messages_session_id`, `ix_student_mastery_student_concept` (composite).
+- **Connection pool:** `pool_size=20, max_overflow=80` — requires PostgreSQL `max_connections >= 150`.
+- **Image validation:** Pillow open + `ImageStat.Stat(img).mean < IMAGE_BLACK_THRESHOLD (default=5)` → skip. At extraction time (offline pipeline only).
+- **UNMAPPED resolver:** ±5 pages proximity scan. `UNMAPPED_PROXIMITY_PAGES=5` in config.py. Run after initial concept-assignment pass.
+- **Vision prompt:** Single prose paragraph, 40–120 words. No "What it shows:" / "Why it helps:" labels.
+- **Vision injection:** `[Visual Context]` block appended to presentation, Socratic, and card prompts. No new LLM calls — descriptions already in ChromaDB.
+
+### AI-Native Learning OS — Key Design Decisions (2026-03-01)
+- **New packages (already installed):** `framer-motion ^12.x` + `zustand ^5.x` in `frontend/package.json` — no install step needed.
+- **New store:** `frontend/src/store/adaptiveStore.js` — Zustand, session-scoped only (no persistence). State: `{ mode, xp, level, streak, streakBest, lastXpGain, burnoutScore }`. XP_PER_LEVEL=100, BURNOUT_THRESHOLD=60.
+- **New component dir:** `frontend/src/components/game/` — 5 components: GameBackground (canvas 120-particle), XPBurst (AnimatePresence), StreakMeter, LevelBadge (SVG arc), AdaptiveModeIndicator.
+- **Critical bug fix (ship first, standalone PR):** AssistantPanel sticky: wrapper needs `position: sticky; top: 70px; alignSelf: flex-start` in CardLearningView; panel needs `height: calc(100vh - 86px)` in AssistantPanel. Root cause: sticky requires align-self: flex-start in flex container.
+- **AppShell nav height:** 58px → 64px. Glassmorphism: `backdrop-filter: blur(16px)`. Adaptive glow bottom border.
+- **Mode CSS classes:** `.adaptive-excelling/.adaptive-struggling/.adaptive-slow/.adaptive-bored` applied to card container.
+- **XP per answer:** MCQ correct=10 XP, short-answer correct=5 XP, wrong=0 XP + burnoutScore+20 + streak reset.
+- **Sigma node CSS limitation:** If Sigma uses WebGL (canvas-only), DOM node class application is not feasible — use Sigma color attribute or legend fallback. Verify before starting P7-2.
+- **WBS total:** 31 tasks, ~19.75 engineer-days. With 2 engineers: ~10 calendar days.
+
+### Full Adaptive Upgrade — Key Design Decisions (2026-03-02)
+- **Completed designs:** `docs/full-adaptive-upgrade/` — HLD, DLD, execution-plan (2026-03-02)
+- **generate_cards() wiring:** `asyncio.gather(load_student_history(), load_wrong_option_pattern())` — concurrent, not sequential. Threshold for building LearningProfile = 3 cards (not 5 — lower for card generation vs Socratic).
+- **quiz_score proxy:** `1.0 - min(avg_wrong_attempts * 0.15, 0.9)` — converts avg_wrong_attempts from history into a plausible quiz_score for AnalyticsSummary when used in generate_cards().
+- **New config constants:** `XP_MASTERY=50`, `XP_MASTERY_BONUS=25`, `XP_MASTERY_BONUS_THRESHOLD=90`, `XP_CONSOLATION=10`, `XP_CARD_ADVANCE=5` — all in `config.py`.
+- **XP award implementation:** Inline (not background task) in `teaching_router.py::respond_to_check`. Direct SQLAlchemy UPDATE, not HTTP call to self. `xp_awarded: int | None = None` added to `SocraticResponse`.
+- **session_card_stats dict keys:** `{ total_cards, total_wrong, total_hints, error_rate }` — passed to `build_socratic_system_prompt()` as `session_card_stats` param.
+- **Socratic dynamic min-questions:** error_rate >= 0.4 → 5 questions min; error_rate <= 0.1 and no hints → 3 questions min; else → 4 questions.
+- **FAST/STRONG wording fix location:** `adaptive/prompt_builder.py` ~line 213 — replace "Skip introductory analogies" with "ALL content MUST appear, replace analogies with applications".
+- **`build_cards_system_prompt()` new signature:** `(style, interests, language, learning_profile=None, history=None)` — all new params keyword-only with None default → fully backward compatible.
+- **`build_socratic_system_prompt()` new signature:** adds `session_card_stats: dict | None = None` as last parameter — backward compatible.
+- **AppShell status:** `LevelBadge`, `StreakMeter`, `AdaptiveModeIndicator` already mounted. Only `XPBurst` missing — needs mounting at root div level (overlay).
+- **XP_CARD_ADVANCE in frontend:** Add to `frontend/src/utils/constants.js` — not synced to DB per card (too expensive); Zustand XP corrected by hydration on next GET /students/{id}.
+- **16 tasks, ~12.2 engineer-days, ~5-6 calendar days** with 2 engineers + 1 tester.
