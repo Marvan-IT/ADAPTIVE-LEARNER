@@ -213,7 +213,7 @@ class TestVisionAnnotator:
         # Assert — API must have been called exactly once
         mock_client.chat.completions.create.assert_called_once()
         assert result["description"] == "test desc"
-        assert result["relevance"] == "test rel"
+        assert result["relevance"] is None  # relevance field removed from prompt, kept as None for schema compat
         assert result["is_educational"] is True
 
     async def test_diagram_image_calls_vision_api(self):
@@ -262,7 +262,7 @@ class TestVisionAnnotator:
         assert expected_cache_file.exists()
         cached_data = json.loads(expected_cache_file.read_text(encoding="utf-8"))
         assert cached_data["description"] == "test desc"
-        assert cached_data["relevance"] == "test rel"
+        assert cached_data["relevance"] is None  # relevance field removed from prompt, kept as None
         assert cached_data["is_educational"] is True
 
     async def test_cached_annotation_returned_on_second_call(self, tmp_path):

@@ -4,7 +4,7 @@ Teaching sessions, Socratic checks, style switching.
 """
 
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -32,9 +32,14 @@ from api.teaching_schemas import (
     StudentResponseRequest, SocraticResponse,
     SwitchStyleRequest,
     SessionHistoryResponse, MessageResponse,
-    CardsResponse, LessonCard, CardQuestion,
+    CardsResponse, LessonCard,
     AssistRequest, AssistResponse,
     UpdateLanguageRequest,
+    RemediationCardsResponse,
+    RecheckResponse,
+    StudentAnalyticsResponse,
+    ConceptReadinessResponse,
+    RegenerateMCQRequest, RegenerateMCQResponse,
 )
 from api.rate_limiter import limiter
 
@@ -110,8 +115,14 @@ async def create_student(request: Request, req: CreateStudentRequest, db: AsyncS
 
 @router.get("/students", summary="List all students")
 @limiter.limit("120/minute")
-async def list_students(request: Request, db: AsyncSession = Depends(get_db)):
-    """List all student profiles with their mastery counts (single JOIN query)."""
+async def list_students(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    limit: int = 50,
+    offset: int = 0,
+):
+    """List student profiles with their mastery counts (paginated)."""
+    limit = min(max(1, limit), 200)
     result = await db.execute(
         select(
             Student,
@@ -120,6 +131,8 @@ async def list_students(request: Request, db: AsyncSession = Depends(get_db)):
         .outerjoin(StudentMastery, StudentMastery.student_id == Student.id)
         .group_by(Student.id)
         .order_by(Student.created_at.desc())
+        .limit(limit)
+        .offset(offset)
     )
     rows = result.all()
     return [
@@ -159,7 +172,9 @@ async def get_student(request: Request, student_id: UUID, db: AsyncSession = Dep
 async def get_student_mastery(request: Request, student_id: UUID, db: AsyncSession = Depends(get_db)):
     """Get all concepts mastered by a student."""
     result = await db.execute(
-        select(StudentMastery).where(StudentMastery.student_id == student_id)
+        select(StudentMastery)
+        .where(StudentMastery.student_id == student_id)
+        .limit(2000)
     )
     records = result.scalars().all()
     return {
@@ -167,6 +182,176 @@ async def get_student_mastery(request: Request, student_id: UUID, db: AsyncSessi
         "mastered_concepts": [r.concept_id for r in records],
         "count": len(records),
     }
+
+
+@router.get("/students/{student_id}/analytics", response_model=StudentAnalyticsResponse)
+@limiter.limit("60/minute")
+async def get_student_analytics(
+    request: Request,
+    student_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Aggregate learning analytics for a student across all four interaction tables."""
+    student = await db.get(Student, student_id)
+    if not student:
+        raise HTTPException(404, "Student not found")
+
+    now = datetime.now(timezone.utc)
+
+    # ── Query 1: StudentMastery ───────────────────────────────────────────────
+    mastery_result = await db.execute(
+        select(StudentMastery)
+        .where(StudentMastery.student_id == student_id)
+        .order_by(StudentMastery.mastered_at.asc())
+        .limit(2000)
+    )
+    mastery_rows = mastery_result.scalars().all()
+    total_concepts_mastered = len(mastery_rows)
+    mastery_timeline = [
+        {"concept_id": r.concept_id, "mastered_at": r.mastered_at.isoformat()}
+        for r in mastery_rows
+    ]
+
+    # ── Query 2: TeachingSession ──────────────────────────────────────────────
+    sessions_result = await db.execute(
+        select(TeachingSession)
+        .where(TeachingSession.student_id == student_id)
+        .limit(2000)
+    )
+    all_sessions = sessions_result.scalars().all()
+
+    attempted_concept_ids = {s.concept_id for s in all_sessions if s.completed_at is not None}
+    total_concepts_attempted = len(attempted_concept_ids)
+
+    if total_concepts_attempted > 0:
+        mastery_rate = round(total_concepts_mastered / total_concepts_attempted, 3)
+    else:
+        mastery_rate = 0.0
+
+    socratic_phases = {"CHECKING", "REMEDIATING", "RECHECKING", "COMPLETED", "ATTEMPTS_EXHAUSTED"}
+    check_scores = [s.check_score for s in all_sessions if s.check_score is not None]
+    avg_check_score = round(sum(check_scores) / len(check_scores), 3) if check_scores else None
+    total_socratic_sessions = sum(1 for s in all_sessions if s.phase in socratic_phases)
+
+    # ── Query 3: CardInteraction ──────────────────────────────────────────────
+    cards_result = await db.execute(
+        select(CardInteraction)
+        .where(CardInteraction.student_id == student_id)
+        .limit(10000)
+    )
+    card_rows = cards_result.scalars().all()
+    total_cards = len(card_rows)
+
+    if total_cards > 0:
+        avg_wrong_attempts_per_card = round(
+            sum(c.wrong_attempts or 0 for c in card_rows) / total_cards, 3
+        )
+        avg_hints_per_card = round(
+            sum(c.hints_used or 0 for c in card_rows) / total_cards, 3
+        )
+        avg_time_on_card_sec = round(
+            sum(c.time_on_card_sec or 0.0 for c in card_rows) / total_cards, 3
+        )
+    else:
+        avg_wrong_attempts_per_card = 0.0
+        avg_hints_per_card = 0.0
+        avg_time_on_card_sec = 0.0
+
+    # Hardest concept: concept_id with highest total wrong_attempts
+    hardest_concept_id: str | None = None
+    hardest_concept_wrong_attempts: int = 0
+    if card_rows:
+        wrong_by_concept: dict[str, int] = {}
+        for c in card_rows:
+            wrong_by_concept[c.concept_id] = (
+                wrong_by_concept.get(c.concept_id, 0) + (c.wrong_attempts or 0)
+            )
+        hardest_concept_id = max(wrong_by_concept, key=lambda k: wrong_by_concept[k])
+        hardest_concept_wrong_attempts = wrong_by_concept[hardest_concept_id]
+
+    # ── Query 4: SpacedReview ─────────────────────────────────────────────────
+    reviews_result = await db.execute(
+        select(SpacedReview).where(
+            and_(
+                SpacedReview.student_id == student_id,
+                SpacedReview.completed_at.is_(None),
+            )
+        )
+    )
+    pending_reviews = reviews_result.scalars().all()
+
+    reviews_due_now = sum(1 for r in pending_reviews if r.due_at <= now)
+    window_end = now + timedelta(days=7)
+    reviews_upcoming_7d = sum(
+        1 for r in pending_reviews if now < r.due_at <= window_end
+    )
+
+    logger.info(
+        "[analytics] student_id=%s mastered=%d attempted=%d cards=%d",
+        student_id, total_concepts_mastered, total_concepts_attempted, total_cards,
+    )
+
+    return StudentAnalyticsResponse(
+        student_id=str(student_id),
+        display_name=student.display_name,
+        xp=student.xp or 0,
+        streak=student.streak or 0,
+        total_concepts_mastered=total_concepts_mastered,
+        total_concepts_attempted=total_concepts_attempted,
+        mastery_rate=mastery_rate,
+        mastery_timeline=mastery_timeline,
+        avg_check_score=avg_check_score,
+        total_socratic_sessions=total_socratic_sessions,
+        avg_wrong_attempts_per_card=avg_wrong_attempts_per_card,
+        avg_hints_per_card=avg_hints_per_card,
+        avg_time_on_card_sec=avg_time_on_card_sec,
+        reviews_due_now=reviews_due_now,
+        reviews_upcoming_7d=reviews_upcoming_7d,
+        hardest_concept_id=hardest_concept_id,
+        hardest_concept_wrong_attempts=hardest_concept_wrong_attempts,
+    )
+
+
+@router.get("/concepts/{concept_id}/readiness", response_model=ConceptReadinessResponse)
+@limiter.limit("60/minute")
+async def get_concept_readiness(
+    request: Request,
+    concept_id: str,
+    student_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Check whether all prerequisites for a concept are mastered by the student."""
+    # Fetch all mastered concept IDs for this student
+    mastery_result = await db.execute(
+        select(StudentMastery.concept_id).where(StudentMastery.student_id == student_id)
+    )
+    mastered_ids = {row for row in mastery_result.scalars().all()}
+
+    graph = teaching_svc.knowledge_svc.graph
+
+    if concept_id not in graph:
+        return ConceptReadinessResponse(
+            concept_id=concept_id,
+            all_prerequisites_met=True,
+            unmet_prerequisites=[],
+        )
+
+    unmet = []
+    for prereq_id in graph.predecessors(concept_id):
+        if prereq_id not in mastered_ids:
+            title = graph.nodes[prereq_id].get("title", prereq_id)
+            unmet.append({"concept_id": prereq_id, "concept_title": title})
+
+    logger.info(
+        "[readiness] concept_id=%s student_id=%s unmet=%d",
+        concept_id, student_id, len(unmet),
+    )
+
+    return ConceptReadinessResponse(
+        concept_id=concept_id,
+        all_prerequisites_met=len(unmet) == 0,
+        unmet_prerequisites=unmet,
+    )
 
 
 @router.patch("/students/{student_id}/language", response_model=StudentResponse)
@@ -312,25 +497,27 @@ async def respond_to_check(
     session = await db.get(TeachingSession, session_id)
     if not session:
         raise HTTPException(404, "Session not found")
-    if session.phase != "CHECKING":
+    if session.phase not in ("CHECKING", "RECHECKING", "RECHECKING_2"):
         raise HTTPException(
             400, f"Cannot respond: session is in {session.phase} phase"
         )
 
     result = await teaching_svc.handle_student_response(db, session, req.message)
 
-    # Count student exchanges in the CHECKING phase
+    # Count student exchanges across all check phases (CHECKING, RECHECKING, RECHECKING_2)
     exchange_result = await db.execute(
         select(ConversationMessage)
         .where(ConversationMessage.session_id == session_id)
-        .where(ConversationMessage.phase == "CHECKING")
+        .where(ConversationMessage.phase.in_(["CHECKING", "RECHECKING", "RECHECKING_2"]))
         .where(ConversationMessage.role == "user")
     )
     exchange_count = len(exchange_result.scalars().all())
 
-    # Award XP when the assessment completes
+    # Award XP only when the session truly completes (phase == COMPLETED).
+    # When remediation_needed=True the session moves to REMEDIATING, not COMPLETED,
+    # so no XP is awarded yet — it will be awarded on the final successful (or exhausted) check.
     xp_awarded = None
-    if result.get("check_complete"):
+    if result.get("check_complete") and result.get("phase") == "COMPLETED":
         mastered = result.get("mastered") or False
         score = result.get("score") or 0
 
@@ -364,6 +551,10 @@ async def respond_to_check(
         mastered=result["mastered"],
         exchange_count=exchange_count,
         xp_awarded=xp_awarded,
+        remediation_needed=result.get("remediation_needed", False),
+        attempt=result.get("attempt", 0),
+        locked=result.get("locked", False),
+        best_score=result.get("best_score"),
     )
 
 
@@ -434,19 +625,8 @@ async def get_cards(request: Request, session_id: UUID, db: AsyncSession = Depen
     student = await db.get(Student, session.student_id)
     result = await teaching_svc.generate_cards(db, session, student)
 
-    # Build validated response
-    cards = []
-    for card_data in result.get("cards", []):
-        questions = [
-            CardQuestion(**q) for q in card_data.get("questions", [])
-        ]
-        cards.append(LessonCard(
-            index=card_data["index"],
-            title=card_data["title"],
-            content=card_data["content"],
-            questions=questions,
-            images=card_data.get("images", []),
-        ))
+    # Build validated response — Pydantic coerces card dicts to LessonCard
+    cards = [LessonCard(**card_data) for card_data in result.get("cards", [])]
 
     return CardsResponse(
         session_id=session.id,
@@ -501,6 +681,70 @@ async def complete_cards(
 
     result = await teaching_svc.complete_cards(db, session)
     return result
+
+
+@router.post(
+    "/sessions/{session_id}/remediation-cards",
+    response_model=RemediationCardsResponse,
+    summary="Generate targeted re-teaching cards for failed topics",
+)
+@limiter.limit("10/minute")
+async def get_remediation_cards(
+    request: Request,
+    session_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Generate remediation cards after a failed Socratic check.
+    Session must be in REMEDIATING or REMEDIATING_2 phase.
+    Returns TEACH + EXAMPLE + RECAP cards focused on the failed topics.
+    """
+    session = await db.get(TeachingSession, session_id)
+    if not session:
+        raise HTTPException(404, "Session not found")
+    if session.phase not in ("REMEDIATING", "REMEDIATING_2"):
+        raise HTTPException(
+            400,
+            f"Cannot generate remediation cards: session is in {session.phase} phase "
+            "(expected REMEDIATING or REMEDIATING_2)"
+        )
+
+    cards = await teaching_svc.generate_remediation_cards(session_id, db)
+    return RemediationCardsResponse(cards=cards, session_phase=session.phase)
+
+
+@router.post(
+    "/sessions/{session_id}/recheck",
+    response_model=RecheckResponse,
+    summary="Begin a new Socratic check focused on previously failed topics",
+)
+@limiter.limit("10/minute")
+async def begin_recheck(
+    request: Request,
+    session_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Start a re-check Socratic session after remediation cards have been studied.
+    Session must be in REMEDIATING or REMEDIATING_2 phase.
+    Transitions session to RECHECKING or RECHECKING_2 and returns the opening question.
+    """
+    session = await db.get(TeachingSession, session_id)
+    if not session:
+        raise HTTPException(404, "Session not found")
+    if session.phase not in ("REMEDIATING", "REMEDIATING_2"):
+        raise HTTPException(
+            400,
+            f"Cannot begin recheck: session is in {session.phase} phase "
+            "(expected REMEDIATING or REMEDIATING_2)"
+        )
+
+    result = await teaching_svc.begin_recheck(session_id, db)
+    return RecheckResponse(
+        response=result["response"],
+        phase=result["phase"],
+        attempt=result["attempt"],
+    )
 
 
 @router.post("/sessions/{session_id}/record-interaction")
@@ -563,6 +807,30 @@ async def get_review_due(request: Request, student_id: UUID, db: AsyncSession = 
         }
         for r in reviews
     ]
+
+
+@router.post("/spaced-reviews/{review_id}/complete")
+@limiter.limit("30/minute")
+async def complete_spaced_review(
+    request: Request, review_id: UUID, db: AsyncSession = Depends(get_db)
+):
+    """Mark a spaced review as completed."""
+    review = await db.get(SpacedReview, review_id)
+    if not review:
+        raise HTTPException(404, "Review not found")
+    if review.completed_at is not None:
+        return {
+            "ok": True,
+            "already_completed": True,
+            "completed_at": review.completed_at.isoformat(),
+        }
+    review.completed_at = datetime.now(timezone.utc)
+    await db.commit()
+    return {
+        "ok": True,
+        "already_completed": False,
+        "completed_at": review.completed_at.isoformat(),
+    }
 
 
 @router.get("/students/{student_id}/card-history")
@@ -638,6 +906,22 @@ async def get_student_sessions(
     }
 
 
+@router.post("/sessions/{session_id}/regenerate-mcq", response_model=RegenerateMCQResponse)
+@limiter.limit("30/minute")
+async def regenerate_mcq_endpoint(
+    request: Request,
+    session_id: UUID,
+    body: RegenerateMCQRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Generate a replacement MCQ after a wrong answer — same concept, different scenario."""
+    session = await db.get(TeachingSession, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    new_mcq = await teaching_svc.regenerate_mcq(body)
+    return RegenerateMCQResponse(question=new_mcq)
+
+
 @router.get("/sessions/{session_id}/card-interactions")
 @limiter.limit("120/minute")
 async def get_session_card_interactions(
@@ -650,6 +934,7 @@ async def get_session_card_interactions(
         select(CardInteraction)
         .where(CardInteraction.session_id == session_id)
         .order_by(CardInteraction.card_index)
+        .limit(CARD_HISTORY_MAX_LIMIT)
     )
     interactions = result.scalars().all()
     return {

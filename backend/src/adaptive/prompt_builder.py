@@ -341,7 +341,11 @@ def build_next_card_prompt(
         + _NEXT_CARD_JSON_SCHEMA
         + "\n\nGenerate EXACTLY 1 card (the JSON object above — NOT wrapped in an array).\n"
         "Do NOT include a 'concept_explanation' key.\n"
-        f"Set difficulty = {max(1, min(5, 1 + math.ceil(4 * card_index / max(card_index + 3, 4))))}"
+        f"Set difficulty = {max(1, min(5, 1 + math.ceil(4 * card_index / max(card_index + 3, 4))))}\n\n"
+        "MCQ QUALITY RULE: The question MUST test understanding, reasoning, or application "
+        "in a NEW scenario — NEVER ask a question whose answer is explicitly written verbatim "
+        "in the card content above it. BAD: content says 'total is 215' → asks 'What is the total?'. "
+        "GOOD: 'If you added 3 more tens, what would the new total be?'"
     )
     system_prompt = base_sys + sys_overrides
 

@@ -224,6 +224,7 @@ export default function AssistantPanel() {
                     <ReactMarkdown
                       remarkPlugins={[remarkMath]}
                       rehypePlugins={[rehypeKatex]}
+                      skipHtml={true}
                     >
                       {msg.content}
                     </ReactMarkdown>

@@ -65,6 +65,47 @@ Key design:
 
 Config constants added: `ADAPTIVE_ERROR_PENALTY_WEIGHT = 0.4`, `ADAPTIVE_HINT_PENALTY_WEIGHT = 0.2`
 
+## Master System Prompt Upgrade (implemented 2026-03-05)
+
+### New config constants (all now in config.py)
+`MASTERY_THRESHOLD = 70` (raised from 60), `MAX_SOCRATIC_EXCHANGES = 20` (raised from 7),
+`SOCRATIC_MAX_ATTEMPTS = 3`, `SOCRATIC_PROGRESS_INTERVAL = 3`,
+`CARDS_MID_SESSION_CHECK_INTERVAL = 12`, `ADAPTIVE_CARD_CEILING = 20`
+
+### New TeachingSession fields (db/models.py — Alembic migration needed)
+`socratic_attempt_count: int`, `questions_asked: int`, `questions_correct: float`,
+`best_check_score: int | None`, `remediation_context: str | None` (JSON string of failed topics)
+
+### Valid TeachingSession phase values
+PRESENTING, CARDS, CARDS_DONE, CHECKING, REMEDIATING, RECHECKING,
+REMEDIATING_2, RECHECKING_2, COMPLETED
+
+### New prompts.py functions
+- `build_remediation_socratic_prompt(failed_topics, concept_title, concept_text, ...)` — for RECHECKING phase
+- `build_mid_session_checkin_card() -> dict` — pure Python, returns CHECKIN card dict
+- `build_socratic_system_prompt()` — extended with CONVERSATIONAL FLOW RULES block
+- `build_cards_system_prompt()` — now supports 6 card types: TEACH, EXAMPLE, VISUAL, QUESTION, RECAP, FUN
+  New JSON schema adds `card_type` and `quick_check` fields to each card.
+  TEACH/EXAMPLE: quick_check required; QUESTION: 2 MCQ + 2 T/F in questions; others: null quick_check.
+
+### New teaching_service.py methods
+- `_get_phase_messages(db, session_id, phase)` — generic phase message fetcher
+- `_extract_failed_topics(session_id, db) -> list[str]` — heuristic extraction from check messages
+- `generate_remediation_cards(session_id, db) -> list[dict]` — TEACH+EXAMPLE+RECAP, no QUESTION cards
+- `begin_recheck(session_id, db) -> dict` — transitions to RECHECKING/RECHECKING_2 phase
+- `handle_student_response()` now accepts CHECKING, RECHECKING, RECHECKING_2 phases
+  Remediation loop: score < 70 and attempts < 3 → REMEDIATING; exhausted → COMPLETED (not locked)
+- `generate_cards()` now inserts CHECKIN cards every CARDS_MID_SESSION_CHECK_INTERVAL positions
+
+### New teaching_router.py endpoints
+- `POST /api/v2/sessions/{session_id}/remediation-cards` — phase must be REMEDIATING or REMEDIATING_2
+- `POST /api/v2/sessions/{session_id}/recheck` — phase must be REMEDIATING or REMEDIATING_2
+XP now only awarded when session.phase == "COMPLETED" (not on intermediate REMEDIATING steps).
+
+### Updated teaching_schemas.py
+SocraticResponse now includes: `remediation_needed: bool`, `attempt: int`, `locked: bool`, `best_score: int | None`
+New schemas: `RemediationCardsResponse`, `RecheckResponse`
+
 ## DB Schema
 - `students` — id (UUID PK), display_name, interests, preferred_style, preferred_language
 - `student_mastery` — id, student_id (FK), concept_id, mastered_at, session_id

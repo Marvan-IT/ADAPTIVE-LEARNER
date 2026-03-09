@@ -84,6 +84,27 @@ class TeachingSession(Base):
         onupdate=lambda: datetime.now(timezone.utc),
     )
 
+    # ── Socratic remediation tracking ─────────────────────────────────────
+    # Valid phase values:
+    #   PRESENTING, CARDS, CARDS_DONE, CHECKING, REMEDIATING, RECHECKING,
+    #   REMEDIATING_2, RECHECKING_2, COMPLETED
+    # (phase is stored as a plain String — no DB-level enum constraint)
+    socratic_attempt_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    questions_asked: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    questions_correct: Mapped[float] = mapped_column(
+        Float, default=0.0, server_default="0.0", nullable=False
+    )
+    best_check_score: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    remediation_context: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )
+
     student: Mapped["Student"] = relationship(back_populates="sessions")
     messages: Mapped[list["ConversationMessage"]] = relationship(
         back_populates="session",

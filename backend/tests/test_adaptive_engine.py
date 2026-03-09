@@ -230,40 +230,39 @@ class TestClassifyComprehension:
 
 
 class TestClassifyEngagement:
-    """BORED is checked before OVERWHELMED; both conditions required for OVERWHELMED."""
+    """BORED = fast+no errors; OVERWHELMED = many hints; ENGAGED = everything else."""
 
-    def test_classify_engagement_bored_skip_0_36(self):
-        # 0.36 > 0.35 → BORED (strict >)
-        assert classify_engagement(0.36, 0, 0) == "BORED"
+    def test_classify_engagement_bored_fast_no_errors(self):
+        # time=30 < expected=120*0.35=42, wrong=0 → BORED
+        assert classify_engagement(30.0, 120.0, 0, 0) == "BORED"
 
-    def test_classify_engagement_not_bored_skip_0_35(self):
-        # 0.35 is NOT > 0.35 — boundary is exclusive → not BORED
-        # hints=5, revisits=2 → OVERWHELMED
-        assert classify_engagement(0.35, 5, 2) == "OVERWHELMED"
+    def test_classify_engagement_not_bored_at_boundary(self):
+        # time=42 == expected*0.35=42 — boundary NOT strict → not BORED, hints=5 → OVERWHELMED
+        assert classify_engagement(42.0, 120.0, 0, 5) == "OVERWHELMED"
 
     def test_classify_engagement_not_bored_and_not_overwhelmed_returns_engaged(self):
-        # skip=0.35, hints=4, revisits=0 → ENGAGED
-        assert classify_engagement(0.35, 4, 0) == "ENGAGED"
+        # time=90, expected=120, wrong=2, hints=4 → ENGAGED
+        assert classify_engagement(90.0, 120.0, 2, 4) == "ENGAGED"
 
-    def test_classify_engagement_overwhelmed_requires_both_hints_and_revisits(self):
-        # hints=5, revisits=2 — both conditions met → OVERWHELMED
-        assert classify_engagement(0.0, 5, 2) == "OVERWHELMED"
+    def test_classify_engagement_overwhelmed_by_hints_alone(self):
+        # hints=5, no revisit requirement → OVERWHELMED
+        assert classify_engagement(60.0, 120.0, 0, 5) == "OVERWHELMED"
 
-    def test_classify_engagement_not_overwhelmed_only_hints_condition_met(self):
-        # hints=5 but revisits=1 < 2 — only one condition → ENGAGED
-        assert classify_engagement(0.0, 5, 1) == "ENGAGED"
+    def test_classify_engagement_not_overwhelmed_below_hint_threshold(self):
+        # hints=4 < 5 → not OVERWHELMED → ENGAGED
+        assert classify_engagement(60.0, 120.0, 0, 4) == "ENGAGED"
 
-    def test_classify_engagement_not_overwhelmed_only_revisits_condition_met(self):
-        # revisits=2 but hints=4 < 5 — only one condition → ENGAGED
-        assert classify_engagement(0.0, 4, 2) == "ENGAGED"
+    def test_classify_engagement_not_bored_when_wrong_attempts_exist(self):
+        # time=10 (very fast) but wrong=2 → BORED guard requires wrong_attempts==0
+        assert classify_engagement(10.0, 120.0, 2, 0) == "ENGAGED"
 
-    def test_classify_engagement_bored_takes_priority_over_overwhelmed_signals(self):
-        # skip=0.4 > 0.35 AND hints=5 AND revisits=2 — BORED checked first
-        assert classify_engagement(0.4, 5, 2) == "BORED"
+    def test_classify_engagement_bored_takes_priority_over_hints(self):
+        # time=20 < expected*0.35=42, wrong=0, hints=10 — BORED checked first
+        assert classify_engagement(20.0, 120.0, 0, 10) == "BORED"
 
-    def test_classify_engagement_overwhelmed_exact_boundary_values(self):
-        # hints exactly 5, revisits exactly 2 — boundary inclusive
-        assert classify_engagement(0.0, 5, 2) == "OVERWHELMED"
+    def test_classify_engagement_overwhelmed_exact_boundary(self):
+        # hints exactly 5 — inclusive boundary → OVERWHELMED
+        assert classify_engagement(90.0, 120.0, 1, 5) == "OVERWHELMED"
 
 
 class TestComputeConfidenceScore:

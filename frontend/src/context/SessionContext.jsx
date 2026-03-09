@@ -9,6 +9,8 @@ import {
   sendResponse,
   completeCardAndGetNext,
   recordCardInteraction,
+  loadRemediationCards as loadRemediationCardsAPI,
+  beginRecheck as beginRecheckAPI,
 } from "../api/sessions";
 import { useStudent } from "./StudentContext";
 import { useTheme } from "./ThemeContext";
@@ -46,7 +48,17 @@ const initialState = {
   learningProfileSummary: null,
   adaptationApplied: null,
   difficultyBias: null,
+  // Remediation / re-check flow
+  socraticAttempt: 0,
+  remediationNeeded: false,
+  checkScore: null,
+  checkPassed: null,
+  conceptLocked: false,
+  bestScore: null,
 };
+
+// Valid phases: IDLE, LOADING, CARDS, CHECKING, COMPLETED,
+//               REMEDIATING, RECHECKING, REMEDIATING_2, RECHECKING_2, ATTEMPTS_EXHAUSTED
 
 function sessionReducer(state, action) {
   switch (action.type) {
@@ -154,22 +166,102 @@ function sessionReducer(state, action) {
         ],
         checkLoading: true,
       };
-    case "CHECK_RESPONDED":
-      return {
+    case "CHECK_RESPONDED": {
+      const base = {
         ...state,
         messages: [
           ...state.messages,
           { role: "assistant", content: action.payload.response },
         ],
         checkLoading: false,
-        ...(action.payload.check_complete
-          ? {
-              phase: "COMPLETED",
-              score: action.payload.score,
-              mastered: action.payload.mastered,
-            }
-          : {}),
       };
+      if (!action.payload.check_complete) return base;
+
+      const { passed, mastered, remediation_needed, score, attempt, locked, best_score } = action.payload;
+
+      // Mastered or passed on this attempt
+      if (passed || mastered) {
+        return {
+          ...base,
+          phase: "COMPLETED",
+          score,
+          mastered: mastered ?? passed,
+          checkPassed: true,
+          checkScore: score,
+          bestScore: best_score ?? score,
+        };
+      }
+
+      // Remediation needed (still have attempts left)
+      if (remediation_needed) {
+        const nextRemPhase = attempt <= 1 ? "REMEDIATING" : "REMEDIATING_2";
+        return {
+          ...base,
+          phase: nextRemPhase,
+          remediationNeeded: true,
+          checkScore: score,
+          checkPassed: false,
+          socraticAttempt: attempt ?? state.socraticAttempt,
+          bestScore: best_score ?? score,
+        };
+      }
+
+      // All attempts exhausted (locked === false means concept NOT hard-locked, but session done)
+      return {
+        ...base,
+        phase: "ATTEMPTS_EXHAUSTED",
+        score,
+        mastered: false,
+        checkPassed: false,
+        checkScore: score,
+        bestScore: best_score ?? score,
+        conceptLocked: locked ?? false,
+      };
+    }
+    case "SOCRATIC_FAILED": {
+      const nextPhase = action.payload.attempt <= 1 ? "REMEDIATING" : "REMEDIATING_2";
+      return {
+        ...state,
+        phase: nextPhase,
+        remediationNeeded: true,
+        checkScore: action.payload.score,
+        checkPassed: false,
+        socraticAttempt: action.payload.attempt,
+      };
+    }
+    case "ATTEMPTS_EXHAUSTED":
+      return {
+        ...state,
+        phase: "ATTEMPTS_EXHAUSTED",
+        score: action.payload.score,
+        mastered: false,
+        checkPassed: false,
+        checkScore: action.payload.score,
+        bestScore: action.payload.bestScore,
+      };
+    case "SET_LOADING":
+      return { ...state, loading: action.payload };
+    case "REMEDIATION_CARDS_LOADED": {
+      // Determine which remediation phase we are entering
+      const remPhase = state.socraticAttempt <= 1 ? "REMEDIATING" : "REMEDIATING_2";
+      return {
+        ...state,
+        cards: action.payload,
+        currentCardIndex: 0,
+        phase: remPhase,
+        loading: false,
+        remediationNeeded: false,
+      };
+    }
+    case "RECHECK_STARTED": {
+      const recheckPhase = action.payload.phase || (state.socraticAttempt <= 1 ? "RECHECKING" : "RECHECKING_2");
+      return {
+        ...state,
+        phase: recheckPhase,
+        messages: [{ role: "assistant", content: action.payload.response }],
+        loading: false,
+      };
+    }
     case "RESET":
       return initialState;
     case "ERROR":
@@ -179,7 +271,7 @@ function sessionReducer(state, action) {
   }
 }
 
-const MAX_ADAPTIVE_CARDS = 8;
+const MAX_ADAPTIVE_CARDS = 20;
 
 export function SessionProvider({ children }) {
   const [state, dispatch] = useReducer(sessionReducer, initialState);
@@ -232,7 +324,7 @@ export function SessionProvider({ children }) {
       }
       // Ceiling reached: record the interaction but skip LLM generation
       if (state.cards.length >= MAX_ADAPTIVE_CARDS) {
-        recordCardInteraction(state.session.id, signals).catch(() => {});
+        recordCardInteraction(state.session.id, signals).catch((err) => console.error("[SessionContext] card interaction failed:", err));
         dispatch({ type: "NEXT_CARD" });
         return;
       }
@@ -311,7 +403,7 @@ export function SessionProvider({ children }) {
     try {
       // 0. Save the last card's interaction (not recorded via goToNextCard)
       if (signals) {
-        await recordCardInteraction(state.session.id, signals).catch(() => {});
+        await recordCardInteraction(state.session.id, signals).catch((err) => console.error("[SessionContext] card interaction failed:", err));
       }
       // 1. Complete cards (phase → CARDS_DONE)
       await completeCards(state.session.id);
@@ -323,7 +415,7 @@ export function SessionProvider({ children }) {
     }
   }, [state.session, state.cardAnswers, state.conceptTitle]);
 
-  // Send answer during Socratic chat
+  // Send answer during Socratic chat (CHECKING or RECHECKING/RECHECKING_2)
   const sendAnswer = useCallback(
     async (message) => {
       if (!state.session) return;
@@ -335,10 +427,13 @@ export function SessionProvider({ children }) {
           trackEvent("lesson_completed", {
             score: res.data.score,
             mastered: res.data.mastered,
+            passed: res.data.passed,
+            remediation_needed: res.data.remediation_needed,
+            attempt: res.data.attempt,
             concept_id: state.session?.concept_id,
             concept_title: state.conceptTitle,
           });
-          if (res.data.mastered) {
+          if (res.data.mastered || res.data.passed) {
             trackEvent("mastered", {
               score: res.data.score,
               concept_id: state.session?.concept_id,
@@ -362,6 +457,31 @@ export function SessionProvider({ children }) {
     [state.session, state.conceptTitle, refreshMastery]
   );
 
+  // Load remediation cards after Socratic check failure
+  const loadRemediationCards = useCallback(async (sessionId) => {
+    dispatch({ type: "SET_LOADING", payload: true });
+    try {
+      const res = await loadRemediationCardsAPI(sessionId);
+      dispatch({ type: "REMEDIATION_CARDS_LOADED", payload: res.data.cards });
+    } catch (err) {
+      dispatch({ type: "ERROR", payload: friendlyError(err) });
+    }
+  }, []);
+
+  // Begin re-check Socratic session after remediation cards
+  const startRecheck = useCallback(async (sessionId) => {
+    dispatch({ type: "SET_LOADING", payload: true });
+    try {
+      const res = await beginRecheckAPI(sessionId);
+      dispatch({
+        type: "RECHECK_STARTED",
+        payload: { response: res.data.response, phase: res.data.phase },
+      });
+    } catch (err) {
+      dispatch({ type: "ERROR", payload: friendlyError(err) });
+    }
+  }, []);
+
   const reset = useCallback(() => {
     dispatch({ type: "RESET" });
   }, []);
@@ -381,6 +501,8 @@ export function SessionProvider({ children }) {
         sendAssistMessage,
         finishCards,
         sendAnswer,
+        loadRemediationCards,
+        startRecheck,
         reset,
         setDifficultyBias,
       }}

@@ -30,7 +30,29 @@
       "Bash(rtk ls:*)",
       "Bash(alembic:*)",
       "Bash(rtk git status)",
-      "Read(//tmp/**)"
+      "Read(//tmp/**)",
+      "Bash(rtk python -m pytest tests/ -v)",
+      "Bash(npm run build)",
+      "Bash(KEY=\"e36e77ba81581c1b6c1a00c44112db727fc1d00a8b073c5ea54be454ae778c22\")",
+      "Bash(python3 -c \":*)",
+      "Bash(cmd /c \"taskkill /PID 143228 /F & taskkill /PID 143584 /F & taskkill /PID 159900 /F & taskkill /PID 120480 /F\")",
+      "Bash(cmd /c \"taskkill /PID 143228 /F\")",
+      "Bash(cmd /c \"taskkill /PID 143584 /F\")",
+      "Bash(cmd /c \"taskkill /PID 159900 /F\")",
+      "Bash(cmd /c \"taskkill /PID 120480 /F\")",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(d.get\\(''info'',{}\\).get\\(''version'',''?''\\)\\)\")",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(f''OK - {len\\(d\\)} students''\\)\")",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(''Students OK:'', len\\(d\\)\\)\")",
+      "Bash(# Check if this might be a VSCode server or other process powershell -Command \"\"Get-Process | Where-Object { \\\\$_.Id -in @\\(120480\\) } | Select-Object Id,Name,Path\"\" # Also check parent-child relationship ps -ef)",
+      "Bash(pip show python-dotenv)",
+      "Bash(/c/Users/Muhammed Marvan/AppData/Local/Programs/Python/Python313/python.exe -c \"import dotenv; print\\(''dotenv:'', dotenv.__version__\\)\")",
+      "Bash(/c/Users/Muhammed Marvan/AppData/Local/Programs/Python/Python313/python.exe -c \"import os; print\\(''sys python API_SECRET_KEY:'', os.getenv\\(''API_SECRET_KEY'', ''NOT_SET''\\)[:10]\\)\")",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(''Students:'', len\\(d\\)\\)\")",
+      "Bash(read -t 3 x)",
+      "Bash(__NEW_LINE_9d0a0ccae763b352__ echo \"Backend:\")",
+      "Bash(__NEW_LINE_9d0a0ccae763b352__ echo \"Auth:\")",
+      "Bash(__NEW_LINE_321688dbdc648119__ echo \"Frontend:\")",
+      "Read(//c/Users/Muhammed Marvan/.claude/projects/c--files-Desktop-ADA/e90111be-9da5-4c43-9dda-ca61ea6a9466/tool-results/**)"
     ]
   }
 }

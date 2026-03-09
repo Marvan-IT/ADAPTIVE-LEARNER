@@ -63,7 +63,7 @@ export default function PresentationView() {
           className="markdown-content"
           style={{ padding: "1.75rem 2rem" }}
         >
-          <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+          <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]} skipHtml={true}>
             {presentation}
           </ReactMarkdown>
 

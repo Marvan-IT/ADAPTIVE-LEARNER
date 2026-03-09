@@ -67,3 +67,12 @@ export const completeCardAndGetNext = (sessionId, signals) =>
     },
     { timeout: COMPLETE_CARD_TIMEOUT }
   );
+
+export const loadRemediationCards = (sessionId) =>
+  api.post(`/api/v2/sessions/${sessionId}/remediation-cards`, {}, { timeout: CARDS_TIMEOUT });
+
+export const beginRecheck = (sessionId) =>
+  api.post(`/api/v2/sessions/${sessionId}/recheck`, {}, { timeout: LLM_TIMEOUT });
+
+export const regenerateMCQ = (sessionId, body) =>
+  api.post(`/api/v2/sessions/${sessionId}/regenerate-mcq`, body, { timeout: LLM_TIMEOUT });

@@ -134,6 +134,7 @@ Feature directories are kebab-case. Never combine two features in one directory.
 - `docs/adaptive-transparency/` — HLD, DLD, execution-plan (2026-02-28)
 - `docs/ai-native-learning-os/` — HLD, DLD, execution-plan (2026-03-01)
 - `docs/platform-hardening/` — HLD, execution-plan (2026-03-01); DLD pre-specified by team
+- `docs/unified-card-schema/` — HLD, DLD, execution-plan (2026-03-06)
 
 ### Platform Hardening — Key Design Decisions (2026-03-01)
 - **Auth:** `APIKeyMiddleware` (custom `BaseHTTPMiddleware`) — single shared `API_SECRET_KEY`. Skip paths: `/health`, `/docs`, `/openapi.json`, `/redoc`. Use `secrets.compare_digest()`. Fail fast at startup if key absent.
@@ -159,6 +160,18 @@ Feature directories are kebab-case. Never combine two features in one directory.
 - **XP per answer:** MCQ correct=10 XP, short-answer correct=5 XP, wrong=0 XP + burnoutScore+20 + streak reset.
 - **Sigma node CSS limitation:** If Sigma uses WebGL (canvas-only), DOM node class application is not feasible — use Sigma color attribute or legend fallback. Verify before starting P7-2.
 - **WBS total:** 31 tasks, ~19.75 engineer-days. With 2 engineers: ~10 calendar days.
+
+### Unified Card Schema — Key Design Decisions (2026-03-06)
+- **No DB changes:** Pure prompt + service logic change. No migration required.
+- **LLM owns image placement:** `image_indices` + `[IMAGE:N]` markers in content. Backend resolves indices → image objects. Backend no longer calls `.pop("image_indices")` or round-robins.
+- **Unified question field:** All cards use `question: {text, options[4], correct_index, explanation}`. No `card_type`, no `quick_check`, no `questions[]`, no True/False anywhere.
+- **CHECKIN exception:** CHECKIN cards (backend-generated, not LLM) have no `question`; detected by frontend as `!card.question && Array.isArray(card.options)`.
+- **Removed constants:** `ADAPTIVE_CARD_CEILING` deleted from `config.py`. Sub-section soft cap (10) deleted from `teaching_service.py`.
+- **Card counter:** "Card N" only (no total). i18n key `learning.cardN = "Card {{n}}"` added to all 13 locales.
+- **Frontend parser:** `parseInlineImages(content, images)` — regex `/\[IMAGE:(\d+)\]/gi`; returns array of `{type: "text"}` / `{type: "image"}` segments.
+- **Out-of-scope:** `build_next_card_prompt()` adaptive per-card schema is NOT updated — coexists with old schema until follow-up feature.
+- **`difficulty` field ambiguity:** Not included in unified LLM schema spec — open stakeholder question whether to add it back or default to 3.
+- **Effort:** ~15.25 engineer-days, ~5-6 calendar days with 2 engineers + 1 tester.
 
 ### Full Adaptive Upgrade — Key Design Decisions (2026-03-02)
 - **Completed designs:** `docs/full-adaptive-upgrade/` — HLD, DLD, execution-plan (2026-03-02)

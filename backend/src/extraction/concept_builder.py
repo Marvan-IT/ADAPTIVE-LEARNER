@@ -19,6 +19,7 @@ from models import PageText, SectionBoundary, ConceptBlock
 from config import MATHPIX_DPI, OUTPUT_DIR
 from extraction.text_cleaner import clean_section_text
 from extraction.content_filter import filter_section_content
+from extraction.mmd_parser import MmdSection
 
 
 def build_concept_blocks(
@@ -205,6 +206,80 @@ def build_concept_blocks(
               f"({total} total sections)")
 
     return concept_blocks
+
+
+def build_concept_blocks_from_mmd(
+    sections: list[MmdSection],
+    book_config: dict,
+    image_annotations: dict[str, dict],
+) -> list[ConceptBlock]:
+    """
+    Build ConceptBlock objects from pre-parsed MMD sections (whole-PDF pipeline).
+
+    Images in the MMD are already inline as ![]( filename). We replace each
+    image reference with its vision-annotated description as alt text so the
+    LLM card generator receives a coherent text document with image context
+    at the correct reading positions.
+
+    Non-educational images (checklists, decorative) are removed entirely.
+
+    Args:
+        sections: Parsed MmdSection objects from mmd_parser.parse_mmd()
+        book_config: Book entry from BOOK_REGISTRY (book_code, book_slug, title)
+        image_annotations: filename → {description, is_educational} from vision_annotator
+
+    Returns:
+        List of ConceptBlock objects ready for ChromaDB storage.
+    """
+    book_code = book_config["book_code"]
+    book_title = book_config["title"]
+    book_slug = book_config["book_slug"]
+    blocks = []
+
+    for sec in sections:
+        content = sec.content_mmd
+
+        # Replace ![]( filename) placeholders with annotated alt text or remove
+        for filename in sec.image_filenames:
+            ann = image_annotations.get(filename, {})
+            is_educational = ann.get("is_educational", True)
+            description = ann.get("description", "")
+
+            if not is_educational or not description:
+                # Remove non-educational or unannotated images
+                content = content.replace(f"![]({filename})", "")
+                content = content.replace(f"![image]({filename})", "")
+                content = content.replace(f"![Image]({filename})", "")
+            else:
+                # Embed description as alt text so LLM sees image content
+                desc = description[:200]
+                content = content.replace(
+                    f"![]({filename})",
+                    f"![{desc}]({filename})"
+                )
+
+        if not content.strip():
+            continue
+
+        concept_name = _generate_concept_name(sec.section_title)
+        concept_id = (
+            f"{book_code}.C{sec.chapter_number}"
+            f".S{sec.section_in_chapter}.{concept_name}"
+        )
+
+        blocks.append(ConceptBlock(
+            concept_id=concept_id,
+            concept_title=sec.section_title,
+            book_slug=book_slug,
+            book=book_title,
+            chapter=str(sec.chapter_number),
+            section=sec.section_number,
+            text=content,
+            latex=[],          # Mathpix already embeds $...$ inline in the text
+            source_pages=[],   # Not tracked in whole-PDF approach
+        ))
+
+    return blocks
 
 
 def _generate_concept_name(section_title: str) -> str:

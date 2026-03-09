@@ -35,7 +35,8 @@ export function StudentProvider({ children }) {
         .then((res) => {
           setMasteredConcepts(res.data.mastered_concepts || []);
         })
-        .catch(() => {
+        .catch((err) => {
+          console.error("[StudentContext] Failed to load student:", err);
           localStorage.removeItem("ada_student_id");
         })
         .finally(() => setLoading(false));

@@ -99,7 +99,22 @@ class SocraticResponse(BaseModel):
     score: int | None = None
     mastered: bool | None = None
     exchange_count: int
-    xp_awarded: int | None = None   # Populated only when check_complete=True
+    xp_awarded: int | None = None       # Populated only when check_complete=True
+    remediation_needed: bool = False    # True when session moves to REMEDIATING phase
+    attempt: int = 0                    # socratic_attempt_count at time of response
+    locked: bool = False                # True would mean permanently locked (not used currently)
+    best_score: int | None = None       # Best score across all attempts
+
+
+class RemediationCardsResponse(BaseModel):
+    cards: list[dict]
+    session_phase: str
+
+
+class RecheckResponse(BaseModel):
+    response: str
+    phase: str
+    attempt: int
 
 
 class MessageResponse(BaseModel):
@@ -118,22 +133,28 @@ class SessionHistoryResponse(BaseModel):
 
 # ── Card-Based Learning Schemas ──────────────────────────────
 
-class CardQuestion(BaseModel):
-    id: str = Field(..., description="e.g., c0_q0")
-    type: str = Field(..., pattern="^(mcq|true_false|fill_blank)$")
-    question: str
-    options: list[str] | None = Field(default=None, description="MCQ choices")
-    correct_index: int | None = Field(default=None, description="MCQ correct option index")
-    correct_answer: str | None = Field(default=None, description="true_false/fill_blank answer")
+class CardMCQ(BaseModel):
+    """Unified MCQ question — one per card in the new card schema."""
+    text: str
+    options: list[str] = Field(..., min_length=4, max_length=4)
+    correct_index: int = Field(..., ge=0, le=3)
     explanation: str = ""
 
 
 class LessonCard(BaseModel):
+    """
+    Unified card schema. Every LLM-generated card has a `question` (MCQ).
+    CHECKIN cards (backend-generated) have no `question` but have a top-level `options` list.
+    Frontend detects CHECKIN by: !card.question && Array.isArray(card.options).
+    """
     index: int
     title: str
-    content: str = Field(..., description="AI-generated markdown explanation")
-    questions: list[CardQuestion]
-    images: list[dict] = Field(default_factory=list)
+    content: str = Field(..., description="Markdown content, may contain [IMAGE:N] inline markers")
+    image_indices: list[int] = Field(default_factory=list, description="0-based indices into available images")
+    images: list[dict] = Field(default_factory=list, description="Resolved image objects with url, caption, etc.")
+    question: CardMCQ | None = Field(default=None, description="MCQ question; None for CHECKIN cards")
+    options: list[str] | None = Field(default=None, description="Present only on CHECKIN cards")
+    difficulty: int = Field(default=3, ge=1, le=5)
 
 
 class CardsResponse(BaseModel):
@@ -143,7 +164,20 @@ class CardsResponse(BaseModel):
     style: str
     phase: str
     cards: list[LessonCard]
-    total_questions: int
+    total_questions: int = 0  # Retained for backward compat; no longer a meaningful count
+
+
+class RegenerateMCQRequest(BaseModel):
+    """Request body for generating a replacement MCQ after a wrong answer."""
+    card_content: str = Field(..., description="The card's markdown content (context for LLM)")
+    card_title: str
+    concept_id: str
+    previous_question: str = Field(..., description="The question text just answered wrong — must not reuse")
+    language: str = "en"
+
+
+class RegenerateMCQResponse(BaseModel):
+    question: CardMCQ
 
 
 class AssistRequest(BaseModel):
@@ -213,3 +247,43 @@ class CardHistoryResponse(BaseModel):
     student_id: str
     total_returned: int
     interactions: list[CardInteractionRecord]
+
+
+# ── Analytics Schemas ─────────────────────────────────────────────────────────
+
+class MasteryEvent(BaseModel):
+    concept_id: str
+    mastered_at: str
+
+
+class StudentAnalyticsResponse(BaseModel):
+    student_id: str
+    display_name: str
+    xp: int
+    streak: int
+    total_concepts_mastered: int
+    total_concepts_attempted: int
+    mastery_rate: float
+    mastery_timeline: list[MasteryEvent]
+    avg_check_score: float | None
+    total_socratic_sessions: int
+    avg_wrong_attempts_per_card: float
+    avg_hints_per_card: float
+    avg_time_on_card_sec: float
+    reviews_due_now: int
+    reviews_upcoming_7d: int
+    hardest_concept_id: str | None
+    hardest_concept_wrong_attempts: int
+
+
+# ── Concept Readiness Schemas ─────────────────────────────────────────────────
+
+class UnmetPrerequisite(BaseModel):
+    concept_id: str
+    concept_title: str
+
+
+class ConceptReadinessResponse(BaseModel):
+    concept_id: str
+    all_prerequisites_met: bool
+    unmet_prerequisites: list[UnmetPrerequisite]

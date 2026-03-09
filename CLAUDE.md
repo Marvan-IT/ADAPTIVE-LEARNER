@@ -38,6 +38,7 @@ ADA/
 │   │   ├── graph/            # NetworkX dependency graph
 │   │   ├── storage/          # ChromaDB vector store wrapper
 │   │   ├── images/           # PDF image extraction + Mathpix OCR
+│   │   ├── adaptive/         # Adaptive learning engine: profiling, XP, card generation
 │   │   ├── config.py         # All constants, paths, API keys
 │   │   ├── models.py         # Data models
 │   │   └── pipeline.py       # End-to-end extraction orchestration
@@ -86,7 +87,7 @@ ADA/
 | Framework | React 19 + Vite 7 |
 | Routing | React Router DOM 7 |
 | Styling | Tailwind CSS 4 + PostCSS |
-| Graph Viz | Sigma 3 + React-Sigma 5 + Graphology |
+| Graph Viz | Custom SVG component (`ConceptGraph.jsx`) with pan/zoom/blink |
 | HTTP | Axios 1.13 |
 | Math Render | KaTeX 0.16 + remark-math + rehype-katex |
 | Markdown | react-markdown 10 |
@@ -113,12 +114,14 @@ OPENAI_MODEL_MINI=gpt-4o-mini
 MATHPIX_APP_ID=
 MATHPIX_APP_KEY=
 DATABASE_URL=postgresql+asyncpg://postgres:<password>@localhost:5432/AdaptiveLearner
+API_SECRET_KEY=            # random 32-char hex string — required for API auth
 ```
 
 ### Frontend (`frontend/.env`)
 ```
 VITE_API_BASE_URL=http://localhost:8000
 VITE_POSTHOG_KEY=
+VITE_API_SECRET_KEY=       # must match backend API_SECRET_KEY
 ```
 
 ---
@@ -148,7 +151,7 @@ Results are enriched with student mastery context before being passed to the LLM
 Teaching sessions run through two phases managed by `teaching_service.py`:
 1. **Presentation** — metaphor-based explanation using LLM + knowledge base context
 2. **Socratic Check** — guided questioning; the assistant never gives direct answers
-3. **Mastery threshold** — 70% score required to mark a concept as mastered (constant in `config.py`)
+3. **Mastery threshold** — 60 points (out of 100) required to mark a concept as mastered (constant in `config.py`)
 
 ### Data Extraction Pipeline
 ```
@@ -253,14 +256,14 @@ docs/
 - All config values (paths, model names, thresholds) go in `config.py` — no magic strings in business logic
 - Use Python `logging` module with structured format — never `print()` in production paths
 - Alembic migration required for every schema change — alert the devops-engineer when models change
-- Mastery threshold is `0.70` — defined in `config.py`, not hardcoded in service files
+- Mastery threshold is `70` (score out of 100) — defined in `config.py` as `MASTERY_THRESHOLD = 70`, not hardcoded
 
 ### Frontend (JavaScript/JSX)
 - React 19 functional components only — no class components
 - All API calls go through `src/api/` client wrappers — no direct `fetch`/axios in components
 - State that crosses routes lives in a Context (`src/context/`) — no prop drilling beyond 2 levels
 - i18n: all user-visible strings use `useTranslation()` hook — no hardcoded English strings
-- Tailwind utility classes only — no inline styles, no custom CSS unless unavoidable
+- Inline `style={{}}` objects are the primary styling approach for components; Tailwind classes are used for utility tokens only
 - Handle all three UI states: loading, error, and empty
 - Math content renders via KaTeX through `react-markdown` + `remark-math` + `rehype-katex`
 
@@ -273,9 +276,38 @@ docs/
 
 ---
 
-## Known Technical Debt
+## Deployment Readiness Status
 
-These are real gaps identified in the codebase that must be addressed by the `devops-engineer` agent:
+### ✅ Completed Security & Stability Fixes (2026-03-08)
+
+| Issue | Fix Applied | File |
+|---|---|---|
+| `GET /students` no pagination | `limit`/`offset` params, max 200 | `teaching_router.py` |
+| XSS via react-markdown | `skipHtml={true}` on all instances | `CardLearningView.jsx`, `SocraticChat.jsx`, `ChatBubble.jsx`, `PresentationView.jsx`, `ConceptImage.jsx`, `AssistantPanel.jsx` |
+| OpenAI no timeout (600s) | `timeout=30.0` + exponential backoff | `teaching_service.py` |
+| Unbounded DB queries | `.limit()` on mastery, analytics, card-interactions | `teaching_router.py` |
+| Bare `except Exception:` hides errors | Changed to `logger.exception()` | `teaching_service.py` |
+| slowapi per-worker rate limiter | Optional Redis backend via `REDIS_URL` env var | `rate_limiter.py` |
+| Translation cache per-worker | Shared `_openai_client` singleton via lifespan | `main.py` |
+| `print()` in API layer | Replaced with `logger.info/error()` | `main.py` |
+| Empty `.catch(() => {})` in React | Logs to `console.error` | `SessionContext.jsx` |
+| SQLAlchemy/OpenAI/Pydantic unpinned | Pinned to safe version ranges | `requirements.txt` |
+| axios outdated | Updated to `^1.7.0` | `package.json` |
+| LearningPage silent prereq fallback | Logs error before fallback | `LearningPage.jsx` |
+| StudentContext promise chain | Granular error logging | `StudentContext.jsx` |
+
+### ✅ UX & Pedagogical Fixes (2026-03-09)
+
+| Issue | Fix Applied | Files |
+|---|---|---|
+| MCQ questions trivially answered from lesson text | `MCQ QUESTION QUALITY RULE` added to both card prompts | `prompts.py`, `prompt_builder.py` |
+| Dangling "shows..." text with no image | `MATH_DIAGRAM` marker system + SVG renderer component | `prompts.py`, `MathDiagram.jsx`, `CardLearningView.jsx` |
+| Socratic ADA over-explains on "don't know" | `RESPONSE LENGTH LIMIT` rule + Socratic `max_tokens` 600→150 | `prompts.py`, `teaching_service.py` |
+| Same MCQ reappears after wrong answer | New `POST /sessions/{id}/regenerate-mcq` endpoint; frontend replaces question after timeout | `teaching_schemas.py`, `teaching_service.py`, `teaching_router.py`, `sessions.js`, `CardLearningView.jsx` |
+| Cards generated in random order | `CARD SEQUENCE ORDER` mandatory rule in system prompt + ordinal section labels in user prompt + FUN/RECAP safety-net sort | `prompts.py`, `teaching_service.py` |
+| Mastery readiness bar showing stale historical data | Bar now computed from live in-session `cardStates` (correct/total MCQs seen); color-coded green/primary/amber | `CardLearningView.jsx` |
+
+### ⚠️ Known Technical Debt (Requires devops-engineer)
 
 | Issue | File | Priority |
 |---|---|---|
@@ -283,12 +315,17 @@ These are real gaps identified in the codebase that must be addressed by the `de
 | No Dockerfile | — | Critical |
 | No `docker-compose.yml` | — | Critical |
 | No CI/CD pipeline | — | Critical |
-| No `pytest.ini` or `conftest.py` | `backend/tests/` (empty) | High |
 | No frontend test framework (no vitest) | `frontend/package.json` | High |
 | No `.env.example` files | `backend/`, `frontend/` | High |
-| Bare `print()` statements as logging | `backend/src/api/main.py` | Medium |
 | No startup env variable validation | `backend/src/config.py` | Medium |
 | `backend/src/models.py` duplicates `db/models.py` | `backend/src/models.py` | Low |
+
+### 🏗️ Out of Scope (Architectural — Defer)
+
+- **ChromaDB local storage**: Cannot scale horizontally. Requires Chroma Cloud / Pinecone / Weaviate.
+- **Translation cache persistence**: Per-worker dict; use PostgreSQL `concept_translations` table for multi-worker.
+- **Circuit breaker for OpenAI**: Requires `tenacity` library.
+- **C1 Per-student authorization**: Full COPPA/FERPA compliance requires auth middleware overhaul.
 
 ---
 
@@ -299,7 +336,9 @@ These are real gaps identified in the codebase that must be addressed by the `de
 cd backend
 source ../.venv/Scripts/activate   # Windows: source ../.venv/Scripts/activate.bat
 pip install -r requirements.txt
-uvicorn src.api.main:app --reload --port 8000
+# IMPORTANT: use python -m uvicorn (not bare uvicorn) to ensure venv deps are loaded
+# Port 8888 is used (8000/8001 may be held by stale OS processes from previous sessions)
+python -m uvicorn src.api.main:app --reload --port 8888
 ```
 
 ### Frontend
@@ -307,6 +346,8 @@ uvicorn src.api.main:app --reload --port 8000
 cd frontend
 npm install
 npm run dev
+# Dev server runs on http://localhost:5173 (or 5174 if 5173 is taken)
+# VITE_API_BASE_URL in frontend/.env must match the backend port (e.g. http://localhost:8888)
 ```
 
 ### Database (initial setup)
@@ -332,14 +373,21 @@ python -m src.pipeline --book prealgebra
 |---|---|
 | `backend/src/api/main.py` | FastAPI app entrypoint, CORS, lifespan, routers |
 | `backend/src/api/knowledge_service.py` | RAG + graph query orchestration |
-| `backend/src/api/teaching_service.py` | Pedagogical loop (presentation + Socratic check) |
-| `backend/src/api/prompts.py` | All LLM system prompts (including multi-language) |
+| `backend/src/api/teaching_service.py` | Pedagogical loop (presentation + Socratic check) + card generation |
+| `backend/src/api/prompts.py` | All LLM system prompts — card generation, Socratic, adaptive |
+| `backend/src/api/teaching_schemas.py` | Pydantic request/response schemas including `RegenerateMCQRequest` |
+| `backend/src/api/teaching_router.py` | All `/api/v2/sessions/` endpoints including `regenerate-mcq` |
 | `backend/src/db/models.py` | SQLAlchemy ORM tables |
 | `backend/src/config.py` | All constants: paths, model names, thresholds, book slugs |
+| `backend/src/adaptive/adaptive_engine.py` | Adaptive learning engine: student profiling, XP, card difficulty |
+| `backend/src/adaptive/prompt_builder.py` | Single-card adaptive prompt builder |
 | `frontend/src/App.jsx` | Root component with React Router routes |
 | `frontend/src/pages/ConceptMapPage.jsx` | Dependency graph visualization (Sigma) |
 | `frontend/src/pages/LearningPage.jsx` | Teaching session interface |
 | `frontend/src/context/` | StudentContext, SessionContext, ThemeContext |
+| `frontend/src/components/learning/CardLearningView.jsx` | Card-based lesson UI: MCQ, mastery bar, diagram rendering |
+| `frontend/src/components/learning/MathDiagram.jsx` | SVG renderer for `[MATH_DIAGRAM:type:params]` markers |
+| `frontend/src/api/sessions.js` | Axios wrappers for all session endpoints |
 | `docs/` | All HLD/DLD/execution-plan artifacts (source of truth for design) |
 | `.claude/agents/` | Subagent definitions for the 5-agent workflow |
 | `.claude/agent-memory/` | Persistent per-agent memory (do not delete) |

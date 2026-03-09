@@ -23,7 +23,11 @@ from adaptive.schemas import AdaptiveLessonRequest, AdaptiveLesson, NextCardRequ
 from adaptive.adaptive_engine import generate_adaptive_lesson
 from db.connection import get_db
 from db.models import Student, StudentMastery
-from config import ADAPTIVE_CARD_CEILING, ADAPTIVE_CARD_MODEL
+from config import ADAPTIVE_CARD_MODEL
+
+# Maximum number of adaptive (AI-generated next-card) completions per session.
+# This caps the adaptive /complete-card loop, NOT the regular card generation count.
+_ADAPTIVE_CARD_CEILING = 20
 
 logger = logging.getLogger(__name__)
 
@@ -214,7 +218,7 @@ async def complete_card(
         except Exception:
             existing_cards = []
 
-    if len(existing_cards) >= ADAPTIVE_CARD_CEILING:
+    if len(existing_cards) >= _ADAPTIVE_CARD_CEILING:
         await db.commit()
         raise HTTPException(status_code=409, detail={"ceiling": True})
 

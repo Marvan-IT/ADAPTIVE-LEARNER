@@ -104,6 +104,18 @@ This mirrors production logic exactly without requiring services.
 `pip install slowapi Pillow`
 The existing `test_teaching_router.py` is BROKEN due to the circular import — it was not fixed. Only `test_platform_hardening.py` uses the stub pattern.
 
+### TeachingService Test File
+`backend/tests/test_teaching_service.py` — 27 tests across 7 groups (all passing).
+Key facts confirmed by reading teaching_service.py:
+- SOCRATIC_MAX_ATTEMPTS=3; exhaustion fires when `attempt_count >= 3` (NOT `< 3`). Test exhaustion with attempt_count=3, not 2.
+- result dict from handle_student_response has NO "passed" key; use "mastered" instead.
+- generate_cards() imports load_student_history/load_wrong_option_pattern locally inside the method. Patch targets: `"adaptive.adaptive_engine.load_student_history"` and `"adaptive.adaptive_engine.load_wrong_option_pattern"` (not via teaching_service).
+- build_learning_profile: patch as `"adaptive.profile_builder.build_learning_profile"`.
+- generate_remediation_cards(session_id: UUID, db) — first arg is UUID; session fetched internally via db.get.
+- CHECKIN insertion: `(i+1) % INTERVAL == 0 and (i+1) < len(raw_cards)` — needs N+1 cards (13 for interval=12).
+- SpacedReview uses PostgreSQL-specific pg_insert — keep db.execute as generic AsyncMock.
+- begin_recheck: db.get receives cls (not str); mock with `async def _db_get(cls, pk)` pattern.
+
 ### Platform Hardening Test File
 `backend/tests/test_platform_hardening.py` — 32 tests across 5 suites:
 - Suite 1 (6 tests): auth middleware (synthetic app, no real DB)

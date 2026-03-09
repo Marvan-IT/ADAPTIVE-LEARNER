@@ -17,3 +17,8 @@ export const getConceptImages = (conceptId) =>
 
 export const translateConceptTitles = (titles, language) =>
   api.post("/api/v2/concepts/translate-titles", { titles, language }, { timeout: 180_000 });
+
+export const checkConceptReadiness = (conceptId, studentId) =>
+  api.get(`/api/v2/concepts/${encodeURIComponent(conceptId)}/readiness`, {
+    params: { student_id: studentId },
+  });

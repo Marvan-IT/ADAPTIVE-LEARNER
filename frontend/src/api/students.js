@@ -36,3 +36,6 @@ export const getSessions = (studentId) =>
 
 export const getSessionCardInteractions = (sessionId) =>
   api.get(`/api/v2/sessions/${sessionId}/card-interactions`);
+
+export const getStudentAnalytics = (studentId) =>
+  api.get(`/api/v2/students/${studentId}/analytics`);

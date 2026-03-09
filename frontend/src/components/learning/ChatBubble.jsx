@@ -50,7 +50,7 @@ export default function ChatBubble({ role, content }) {
           }}
         >
           {isAda ? (
-            <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+            <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]} skipHtml={true}>
               {content}
             </ReactMarkdown>
           ) : (

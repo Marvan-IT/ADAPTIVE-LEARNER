@@ -1,6 +1,12 @@
 """
 ChromaDB Store — manages the vector database for concept block storage and retrieval.
 Uses OpenAI embeddings for vector representation.
+
+Embedding strategy: LaTeX-heavy math sections can exceed the 8192-token embedding limit.
+We pre-compute embeddings from a 3000-word truncation of each text (safe: ~6300 tokens)
+but store the FULL text as the ChromaDB document — no data loss. When `embeddings=` is
+passed to collection.upsert(), ChromaDB skips its own embedding call and stores the
+documents as-is.
 """
 
 import json
@@ -10,6 +16,7 @@ from typing import Optional
 
 import chromadb
 from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
+import openai
 
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -24,6 +31,21 @@ from config import (
 from models import ConceptBlock, DependencyEdge
 
 logger = logging.getLogger(__name__)
+
+# Max words used when computing the embedding (not for storage).
+# LaTeX math runs ~2.1 tokens/word; 3000w × 2.1 ≈ 6300 tokens < 8192-token limit.
+_EMBED_MAX_WORDS = 3000
+
+
+def _compute_embeddings(texts: list[str]) -> list[list[float]]:
+    """Call the OpenAI embeddings API for a batch of texts. Returns embedding vectors."""
+    client = openai.OpenAI(
+        api_key=OPENAI_API_KEY,
+        base_url=OPENAI_BASE_URL or None,
+    )
+    response = client.embeddings.create(input=texts, model=EMBEDDING_MODEL)
+    sorted_data = sorted(response.data, key=lambda d: d.index)
+    return [item.embedding for item in sorted_data]
 
 
 def initialize_collection(
@@ -94,6 +116,8 @@ def store_concept_blocks(
         documents = []
         metadatas = []
 
+        embed_inputs = []  # truncated text for embedding (token-safe)
+
         for block in batch:
             prereqs = prereq_map.get(block.concept_id, [])
             dependents = dependent_map.get(block.concept_id, [])
@@ -107,8 +131,15 @@ def store_concept_blocks(
                     latex_byte_len,
                 )
 
+            # Embed only the first _EMBED_MAX_WORDS words (token-safe for LaTeX-heavy text),
+            # but store block.text in full — no data loss for the LLM context.
+            words = block.text.split()
+            embed_inputs.append(
+                " ".join(words[:_EMBED_MAX_WORDS]) if len(words) > _EMBED_MAX_WORDS else block.text
+            )
+
             ids.append(block.concept_id)
-            documents.append(block.text)
+            documents.append(block.text)  # full text — no truncation
             metadatas.append({
                 "book_slug": block.book_slug,
                 "book": block.book,
@@ -125,10 +156,15 @@ def store_concept_blocks(
                 "prerequisite_count": len(prereqs),
             })
 
+        # Pre-compute embeddings from truncated text, then upsert with full documents.
+        # Passing embeddings= tells ChromaDB to skip its own embedding call and store
+        # documents as-is — so the full text is persisted without token-limit errors.
+        embeddings = _compute_embeddings(embed_inputs)
         collection.upsert(
             ids=ids,
             documents=documents,
             metadatas=metadatas,
+            embeddings=embeddings,
         )
         stored += len(batch)
         logger.info("Stored batch %d: %d concepts", i // batch_size + 1, len(batch))

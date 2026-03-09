@@ -3,12 +3,14 @@ import { useTranslation } from "react-i18next";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { useSession } from "../context/SessionContext";
 import { useTheme } from "../context/ThemeContext";
+import { useStudent } from "../context/StudentContext";
 import ProgressBar from "../components/learning/ProgressBar";
 import CardLearningView from "../components/learning/CardLearningView";
 import SocraticChat from "../components/learning/SocraticChat";
 import CompletionView from "../components/learning/CompletionView";
 import { trackEvent } from "../utils/analytics";
-import { AlertCircle, LogOut } from "lucide-react";
+import { AlertCircle, LogOut, MapPin } from "lucide-react";
+import { checkConceptReadiness } from "../api/concepts";
 
 export default function LearningPage() {
   const { t } = useTranslation();
@@ -19,23 +21,41 @@ export default function LearningPage() {
     phase, startLesson, error, reset,
     session, conceptTitle, currentCardIndex,
     cards, cardAnswers, messages,
+    checkScore, bestScore,
   } = useSession();
   const { setStyle } = useTheme();
+  const { student } = useStudent();
 
   const [lessonInterests, setLessonInterests] = useState([]);
   const [interestInput, setInterestInput] = useState("");
   const [showCustomize, setShowCustomize] = useState(false);
+  const [prereqWarning, setPrereqWarning] = useState(null); // null | { unmet: [...], style, interests }
+  const [prereqChecked, setPrereqChecked] = useState(false);
 
   useEffect(() => {
-    if (conceptId && phase === "IDLE") {
+    if (conceptId && phase === "IDLE" && !prereqChecked) {
+      setPrereqChecked(true);
       const lessonStyle = searchParams.get("style");
       const interestsParam = searchParams.get("interests");
       const urlInterests = interestsParam ? interestsParam.split(",").map(s => s.trim()).filter(Boolean) : [];
       const mergedInterests = [...new Set([...urlInterests, ...lessonInterests])];
       if (lessonStyle) setStyle(lessonStyle);
-      startLesson(decodeURIComponent(conceptId), lessonStyle, mergedInterests);
+
+      checkConceptReadiness(decodeURIComponent(conceptId), student.id)
+        .then(res => {
+          const data = res.data;
+          if (!data.all_prerequisites_met && data.unmet_prerequisites.length > 0) {
+            setPrereqWarning({ unmet: data.unmet_prerequisites, style: lessonStyle, interests: mergedInterests });
+          } else {
+            startLesson(decodeURIComponent(conceptId), lessonStyle, mergedInterests);
+          }
+        })
+        .catch((err) => {
+          console.error("[LearningPage] prereq check failed:", err);
+          startLesson(decodeURIComponent(conceptId), lessonStyle, mergedInterests);
+        });
     }
-  }, [conceptId, phase, startLesson]);
+  }, [conceptId, phase, prereqChecked]);
 
   useEffect(() => {
     return () => reset();
@@ -211,14 +231,214 @@ export default function LearningPage() {
     );
   }
 
+  // Attempts exhausted — session ended without mastery
+  if (phase === "ATTEMPTS_EXHAUSTED") {
+    return (
+      <div style={{
+        maxWidth: "600px",
+        margin: "0 auto",
+        padding: "3rem 1.5rem",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        gap: "1.25rem",
+        textAlign: "center",
+      }}>
+        <div style={{
+          width: "72px",
+          height: "72px",
+          borderRadius: "50%",
+          backgroundColor: "color-mix(in srgb, var(--color-primary) 12%, var(--color-surface))",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontSize: "2rem",
+        }}>
+          {"📚"}
+        </div>
+        <h2 style={{ fontWeight: 800, fontSize: "1.5rem", color: "var(--color-text)", margin: 0 }}>
+          That was tough — but you gave it your best!
+        </h2>
+        <p style={{ color: "var(--color-text-muted)", fontSize: "1rem", lineHeight: 1.6, maxWidth: "480px", margin: 0 }}>
+          You worked through three rounds on <strong>{conceptTitle}</strong> and scored{" "}
+          <strong>{bestScore ?? checkScore ?? 0}%</strong> at your best. This concept needs a bit more time to click — and that is completely normal.
+        </p>
+        <p style={{ color: "var(--color-text-muted)", fontSize: "0.95rem", lineHeight: 1.5, maxWidth: "460px", margin: 0 }}>
+          You can tap it on the Concept Map to start fresh whenever you are ready. Every attempt builds understanding.
+        </p>
+        <button
+          onClick={() => { reset(); navigate("/map"); }}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "0.5rem",
+            padding: "0.75rem 1.75rem",
+            borderRadius: "12px",
+            border: "none",
+            backgroundColor: "var(--color-primary)",
+            color: "#fff",
+            fontWeight: 700,
+            fontSize: "1rem",
+            cursor: "pointer",
+            fontFamily: "inherit",
+            boxShadow: "0 4px 12px rgba(var(--color-primary-rgb, 99,102,241), 0.3)",
+            marginTop: "0.5rem",
+          }}
+        >
+          <MapPin size={18} />
+          Back to Concept Map
+        </button>
+      </div>
+    );
+  }
+
+  // Determine max width based on phase
+  const isCardPhase = phase === "CARDS" || phase === "REMEDIATING" || phase === "REMEDIATING_2";
+  const isChatPhase = phase === "CHECKING" || phase === "RECHECKING" || phase === "RECHECKING_2";
+
   return (
     <div style={{
-      maxWidth: phase === "CARDS" ? "1100px" : "800px",
+      maxWidth: isCardPhase ? "1100px" : "800px",
       margin: "0 auto",
       padding: "1.5rem 1.5rem 3rem",
     }}>
-      {/* ── Exit bar (CARDS + CHECKING only) ── */}
-      {(phase === "CARDS" || phase === "CHECKING") && (
+      {/* ── Prerequisite Warning Modal ── */}
+      {prereqWarning && (
+        <div style={{
+          position: "fixed",
+          inset: 0,
+          zIndex: 1000,
+          backgroundColor: "rgba(0, 0, 0, 0.55)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: "1rem",
+        }}>
+          <div style={{
+            backgroundColor: "var(--color-bg-card)",
+            borderRadius: "var(--radius-xl)",
+            padding: "2rem",
+            maxWidth: "480px",
+            width: "100%",
+            boxShadow: "0 20px 60px rgba(0,0,0,0.3)",
+            display: "flex",
+            flexDirection: "column",
+            gap: "1rem",
+          }}>
+            {/* Header */}
+            <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+              <AlertCircle size={28} color="var(--color-danger)" style={{ flexShrink: 0 }} />
+              <h2 style={{
+                margin: 0,
+                fontSize: "1.25rem",
+                fontWeight: 800,
+                color: "var(--color-text)",
+                lineHeight: 1.3,
+              }}>
+                Not quite ready yet!
+              </h2>
+            </div>
+
+            {/* Subtitle */}
+            <p style={{
+              margin: 0,
+              fontSize: "0.95rem",
+              color: "var(--color-text-muted)",
+              lineHeight: 1.6,
+            }}>
+              To get the most from this lesson, it helps to master these first:
+            </p>
+
+            {/* Unmet prerequisites list */}
+            <ul style={{
+              margin: 0,
+              paddingLeft: "1.25rem",
+              display: "flex",
+              flexDirection: "column",
+              gap: "0.35rem",
+            }}>
+              {prereqWarning.unmet.map((prereq) => (
+                <li
+                  key={prereq.concept_id}
+                  style={{
+                    fontSize: "0.95rem",
+                    color: "var(--color-text)",
+                    fontWeight: 600,
+                    lineHeight: 1.5,
+                  }}
+                >
+                  {prereq.concept_title}
+                </li>
+              ))}
+            </ul>
+
+            {/* Action buttons */}
+            <div style={{
+              display: "flex",
+              gap: "0.75rem",
+              marginTop: "0.5rem",
+              flexWrap: "wrap",
+            }}>
+              <button
+                onClick={() => {
+                  setPrereqWarning(null);
+                  navigate("/map");
+                }}
+                style={{
+                  flex: "1 1 auto",
+                  padding: "0.65rem 1.25rem",
+                  borderRadius: "var(--radius-md)",
+                  border: "none",
+                  backgroundColor: "var(--color-primary)",
+                  color: "#fff",
+                  fontSize: "0.95rem",
+                  fontWeight: 700,
+                  cursor: "pointer",
+                  fontFamily: "inherit",
+                  transition: "opacity 0.15s",
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.opacity = "0.88")}
+                onMouseLeave={(e) => (e.currentTarget.style.opacity = "1")}
+              >
+                Learn prerequisites first
+              </button>
+              <button
+                onClick={() => {
+                  const { style, interests } = prereqWarning;
+                  setPrereqWarning(null);
+                  startLesson(decodeURIComponent(conceptId), style, interests);
+                }}
+                style={{
+                  flex: "1 1 auto",
+                  padding: "0.65rem 1.25rem",
+                  borderRadius: "var(--radius-md)",
+                  border: "1px solid var(--color-border)",
+                  backgroundColor: "transparent",
+                  color: "var(--color-text-muted)",
+                  fontSize: "0.95rem",
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  fontFamily: "inherit",
+                  transition: "color 0.15s, border-color 0.15s",
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.color = "var(--color-text)";
+                  e.currentTarget.style.borderColor = "var(--color-text-muted)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.color = "var(--color-text-muted)";
+                  e.currentTarget.style.borderColor = "var(--color-border)";
+                }}
+              >
+                Start anyway
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Exit bar (CARDS + CHECKING + remediation + recheck phases) ── */}
+      {(isCardPhase || isChatPhase) && (
         <div style={{
           display: "flex", justifyContent: "flex-end", alignItems: "center",
           marginBottom: "0.75rem", gap: "0.75rem",
@@ -277,9 +497,21 @@ export default function LearningPage() {
       )}
 
       <ProgressBar phase={phase} />
+
+      {/* Primary learning phases */}
       {phase === "CARDS" && <CardLearningView />}
       {phase === "CHECKING" && <SocraticChat />}
       {phase === "COMPLETED" && <CompletionView />}
+
+      {/* Remediation phases — cards with remediation banner */}
+      {(phase === "REMEDIATING" || phase === "REMEDIATING_2") && (
+        <CardLearningView remediationMode={true} />
+      )}
+
+      {/* Re-check phases — Socratic chat with recheck banner */}
+      {(phase === "RECHECKING" || phase === "RECHECKING_2") && (
+        <SocraticChat recheckMode={true} />
+      )}
     </div>
   );
 }

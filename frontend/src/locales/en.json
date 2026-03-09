@@ -61,7 +61,7 @@
   "learning.next": "Next",
   "learning.finishCards": "Finish Cards",
   "learning.startingChat": "Starting Practice Chat...",
-  "learning.cardProgress": "Card {{current}} of {{total}}",
+  "learning.cardProgress": "Card {{current}}",
   "learning.correct": "Correct!",
   "learning.incorrect": "Not quite — try the next question!",
   "learning.lesson": "LESSON",

@@ -5,6 +5,7 @@ Week 2: Pedagogical Loop — teaching sessions with Socratic checks.
 """
 
 import json
+import logging
 import os
 import secrets
 import sys
@@ -42,6 +43,8 @@ from config import OUTPUT_DIR, OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, OP
 from api.prompts import LANGUAGE_NAMES
 
 
+logger = logging.getLogger(__name__)
+
 # ── Rate limiter (shared via rate_limiter module to avoid circular imports) ─
 from api.rate_limiter import limiter
 
@@ -53,6 +56,7 @@ _SKIP_AUTH = {"/health", "/docs", "/openapi.json", "/redoc"}
 # ── Lifespan: load services once at startup ────────────────────────
 
 knowledge_svc: KnowledgeService = None
+_openai_client: AsyncOpenAI = None
 
 # Persistent translation cache: { (language, concept_id): translated_title }
 _title_translation_cache: dict[tuple[str, str], str] = {}
@@ -70,9 +74,9 @@ def _load_translation_cache() -> None:
             _title_translation_cache = {
                 tuple(k.split("|", 1)): v for k, v in raw.items()
             }
-            print(f"[translation-cache] Loaded {len(_title_translation_cache)} entries from disk.")
+            logger.info("[translation-cache] Loaded %d entries from disk.", len(_title_translation_cache))
         except Exception as e:
-            print(f"[translation-cache] Failed to load cache: {e}")
+            logger.error("[translation-cache] Failed to load cache: %s", e)
 
 
 def _save_translation_cache() -> None:
@@ -82,27 +86,28 @@ def _save_translation_cache() -> None:
         with open(_TRANSLATION_CACHE_FILE, "w", encoding="utf-8") as f:
             json.dump(serialisable, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        print(f"[translation-cache] Failed to save cache: {e}")
+        logger.error("[translation-cache] Failed to save cache: %s", e)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global knowledge_svc
-    print("Loading KnowledgeService (ChromaDB + NetworkX)...")
+    global knowledge_svc, _openai_client
+    logger.info("Loading KnowledgeService (ChromaDB + NetworkX)...")
     knowledge_svc = KnowledgeService(book_slug="prealgebra")
-    print("Initializing PostgreSQL...")
+    logger.info("Initializing PostgreSQL...")
     await init_db()
     teaching_router_module.teaching_svc = TeachingService(knowledge_svc)
     adaptive_router_module.adaptive_knowledge_svc = knowledge_svc
     adaptive_router_module.adaptive_llm_client = AsyncOpenAI(
         api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL
     )
+    _openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
     _load_translation_cache()
-    print("Services loaded. API ready.")
+    logger.info("Services loaded. API ready.")
     yield
     _save_translation_cache()
     await close_db()
-    print("Shutting down.")
+    logger.info("Shutting down.")
 
 
 app = FastAPI(
@@ -132,6 +137,7 @@ async def api_key_middleware(request: Request, call_next):
     if (request.method == "OPTIONS"
             or request.url.path in _SKIP_AUTH
             or request.url.path.startswith("/images/")
+            or request.url.path.startswith("/static/")
             or not api_key):
         return await call_next(request)
     provided = request.headers.get("X-API-Key", "")
@@ -151,6 +157,11 @@ app.include_router(adaptive_cards_router)
 _images_dir = OUTPUT_DIR / "prealgebra" / "images"
 if _images_dir.exists():
     app.mount("/images", StaticFiles(directory=str(_images_dir)), name="images")
+
+# Serve whole-PDF extracted images (Mathpix /v3/pdf output)
+# Mounted at /static/output/{book_slug}/mathpix_extracted/{filename}
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+app.mount("/static/output", StaticFiles(directory=str(OUTPUT_DIR)), name="static_output")
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -342,9 +353,8 @@ async def translate_concept_titles(req: TranslateTitlesRequest):
     numbered = "\n".join(f"{i+1}. {title}" for i, (_, title) in enumerate(items))
 
     try:
-        client = AsyncOpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
         translation_model = OPENAI_MODEL_MINI  # mini is sufficient for mechanical JSON translation
-        response = await client.chat.completions.create(
+        response = await _openai_client.chat.completions.create(
             model=translation_model,
             messages=[
                 {
@@ -361,6 +371,7 @@ async def translate_concept_titles(req: TranslateTitlesRequest):
             ],
             temperature=0.3,
             max_tokens=1000,
+            timeout=20.0,
         )
 
         if not response.choices:
@@ -389,9 +400,7 @@ async def translate_concept_titles(req: TranslateTitlesRequest):
         _save_translation_cache()
 
     except Exception as e:
-        import traceback
-        print(f"[translate-titles] ERROR: {e}")
-        traceback.print_exc()
+        logger.error("[translate-titles] ERROR: %s", e, exc_info=True)
         # On error, return English titles as fallback
         for cid, title in untranslated.items():
             translations[cid] = title

@@ -16,6 +16,7 @@
 - **compare_type=True**: set in `context.configure()` so column type changes are detected by autogenerate
 - **Migration runbook**: `cd backend && alembic upgrade head` | rollback: `alembic downgrade -1`
 - **connection.py init_db()**: replaced `create_all` with a connectivity ping (`SELECT 1`) — no DDL in app startup
+- **Migration chain**: e3c02cf4c22e → 92b08c7eb40b → 003_add_xp_streak_and_indices → 004_add_socratic_remediation_fields (head)
 - See `migrations.md` for detailed migration history
 
 ## Files Created / Owned
@@ -28,6 +29,9 @@
 | `backend/alembic.ini` | Alembic config: script_location, prepend_sys_path=src, blank sqlalchemy.url |
 | `backend/alembic/env.py` | Async-compatible env: asyncio.run + run_sync pattern |
 | `backend/alembic/versions/e3c02cf4c22e_*.py` | Initial migration: card_interactions + spaced_reviews |
+| `backend/alembic/versions/92b08c7eb40b_*.py` | card_interactions composite index + spaced_reviews unique constraint |
+| `backend/alembic/versions/003_add_xp_streak_and_indices.py` | students.xp, students.streak, three FK indexes |
+| `backend/alembic/versions/004_add_socratic_remediation_fields.py` | TeachingSession remediation columns + 3 new indexes |
 
 ## Tech Debt Status
 

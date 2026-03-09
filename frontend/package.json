@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@react-sigma/core": "^5.0.6",
-    "axios": "^1.13.5",
+    "axios": "^1.7.0",
     "framer-motion": "^12.34.3",
     "graphology": "^0.26.0",
     "graphology-layout-forceatlas2": "^0.10.1",

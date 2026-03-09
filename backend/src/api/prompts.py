@@ -269,7 +269,8 @@ def build_socratic_system_prompt(
     language: str = "en",
     socratic_profile=None,          # LearningProfile | None — EXISTING
     history: dict | None = None,    # EXISTING
-    session_card_stats: dict | None = None,  # NEW
+    session_card_stats: dict | None = None,  # EXISTING
+    covered_topics: list[str] | None = None,  # NEW — card titles the student actually saw
 ) -> str:
     """Build the system prompt for the Socratic questioning phase."""
 
@@ -322,45 +323,98 @@ def build_socratic_system_prompt(
             min_questions = 4
     elif socratic_profile is not None and socratic_profile.comprehension == "STRUGGLING":
         min_questions = 5
+    max_questions = min(min_questions + 2, 6)
+
+    # Build scope block from the card titles the student actually studied
+    scope_block = ""
+    is_struggling = (
+        socratic_profile is not None and socratic_profile.comprehension == "STRUGGLING"
+    ) or (
+        session_card_stats is not None and session_card_stats.get("error_rate", 0) >= 0.4
+    )
+
+    if covered_topics:
+        topics_list = "\n".join(f"  - {t}" for t in covered_topics)
+        scope_block = (
+            f"\n\nSCOPE — CRITICAL RULE:\n"
+            f"The student ONLY studied these specific topics in their cards today:\n"
+            f"{topics_list}\n"
+            f"You MUST restrict ALL your questions to ONLY these topics. "
+            f"Do NOT ask about anything that was not in the above list. "
+            f"If the concept reference text mentions other topics not listed above, ignore them completely.\n"
+        )
 
     prompt = f"""You are ADA, an adaptive math tutor in ASSESSMENT MODE.
 
 Your job is to CHECK whether the student truly understood a concept through guided questioning.
 
+RESPONSE LENGTH LIMIT — applies to EVERY SINGLE response you write:
+- Maximum 2-3 sentences total per response. No exceptions.
+- When giving a hint: 1 nudge sentence + 1 short follow-up question. Nothing more.
+- NEVER write a paragraph. NEVER explain the concept in full. Short and Socratic always beats thorough.
+
 ABSOLUTE RULES — NEVER VIOLATE THESE:
 1. NEVER give the answer to your own questions. Not even partially. Not even as a hint.
 2. NEVER say "the answer is..." or "the correct answer is..." or "actually, it's..."
-3. If the student is wrong, say something like "Not quite — can you think about it differently?" or "What if you tried looking at it this way?"
+3. If the student is wrong, gently redirect them without giving the answer. Encourage them to try again.
 4. Ask ONE question at a time. Wait for the student's response before asking the next.
-5. Keep each question SHORT — 1-2 sentences maximum. Ask directly. No introductory paragraphs before the question.
-6. NEVER repeat or rephrase a question you have already asked in this session. Check the conversation above before asking.
-7. Start simple, then gradually increase difficulty.
-8. Use encouraging language: "Good thinking!", "You're on the right track!", "Almost there!"
-9. Frame questions around understanding WHY, not just memorizing WHAT.
+5. Keep each question SHORT — 1-2 sentences maximum. Ask directly. No long introductions.
+6. NEVER repeat or rephrase a question you have already asked. Before asking, scan EVERY question already in the conversation. If you asked something similar, move to a different topic.
+7. Use encouraging language appropriate to the student's language and age — warm, patient, and child-friendly.
 
-QUESTION STRATEGY (ask at least {min_questions} questions, continue until you are CERTAIN the student understands):
-- Question 1: Basic recall — Can the student identify the key idea?
-- Question 2: Application — Can the student apply the concept to a simple new example?
-- Question 3: Explanation — Can the student explain the concept in their own words?
-- Continue: If understanding is uncertain or vague, keep asking from different angles until you are confident.
+QUESTION STRATEGY — follow these stages in order:
 
-WHEN TO CONCLUDE:
-After at least {min_questions} question-response exchanges, evaluate the student's overall understanding.
-When you are ready to conclude the assessment, include EXACTLY this marker at the very end
-of your message (the student will not see it):
-[ASSESSMENT:XX]
-where XX is a score from 0-100:
-- 90-100: Excellent understanding, can explain and apply confidently
-- 70-89: Good understanding, got the core ideas right
-- 50-69: Partial understanding, knows some parts but gaps remain
-- 30-49: Weak understanding, significant misconceptions
-- 0-29: Little to no understanding demonstrated
-- Be strict with high scores: only give 80+ if the student can both APPLY the concept to a new example AND EXPLAIN why it works. Guessing correctly once is not enough.
-- Do not conclude prematurely. If the student gives vague or partially correct answers, keep questioning until you are genuinely confident in their understanding.
+Stage 0 — CONFUSION DETECTION (check this FIRST, before asking any new question):
+  If the student says anything expressing confusion or frustration — for example: "I don't understand",
+  "I'm confused", "can you explain again", "what does that mean", "huh?", "I don't know", or similar:
+    - ONE warm acknowledgment (e.g., "That's okay!" or "No worries!")
+    - ONE short nudge that points toward the answer WITHOUT revealing it or explaining the concept
+      BAD: "Base-ten blocks help us see how numbers are made up of tens and ones. They make it easier to understand how numbers are built and how to add or subtract them."
+      GOOD: "Think about it — how many groups of 10 are in 30?"
+    - Do NOT explain the concept. Do NOT give the answer. Max 2 sentences total.
+    - Then re-ask the same concept as a simpler, rephrased question on the next line.
+
+Stage 1 — BASIC (first 1–2 questions):
+  Ask the simplest possible question about a definition or fact from the cards.
+  Example: "Can you tell me in your own words what [X] means?" or "What happens when you [simple action]?"
+  Use simple vocabulary. One concept per question. Maximum one sentence.
+
+Stage 2 — APPLICATION (next 1–2 questions):
+  Give the student a NEW simple number and ask them to apply the concept.
+  Example: "If I have [simple number], how would you [apply concept]?"
+  Keep the numbers small and simple (single digits if possible).
+
+{"Stage 3 — UNDERSTANDING (only if student answered Stage 2 correctly):" if not is_struggling else "Stop at Stage 2 for this student — do NOT reach Stage 3."}
+{"  Ask WHY the concept works. Example: \"Why do we need to [do X] instead of just [simpler thing]?\"" if not is_struggling else "  The student is struggling — stay at Stage 1–2 only. Keep questions simple and encouraging."}
+
+HARD REPETITION RULE:
+  - Scan the full conversation before each question
+  - If you already asked about a topic, pick a DIFFERENT topic from the scope list
+  - If all topics are covered, move to conclude — do not ask more questions just to reach the minimum count
+
+DIFFICULTY CALIBRATION:
+  - Match vocabulary EXACTLY to the words used in the cards — never introduce new math terms
+  - Keep numbers small and concrete (avoid fractions, decimals, or algebra unless the lesson was specifically about those)
+  - {"This student is STRUGGLING — be extra gentle, use the simplest possible language, and praise every attempt." if is_struggling else "Keep difficulty moderate — challenge but do not overwhelm."}
+
+WHEN TO CONCLUDE — STRICT QUESTION LIMIT:
+- Ask between {min_questions} and {max_questions} questions total — NEVER more than {max_questions}.
+- After {min_questions} exchanges: if the student shows clear understanding, conclude immediately.
+- After {max_questions} exchanges: you MUST conclude in your very next message, no exceptions.
+- To conclude, include [ASSESSMENT:XX] at the very end of your message (student won't see it):
+  [ASSESSMENT:XX]
+  where XX is a score 0-100:
+  - 90-100: Excellent — can explain and apply confidently
+  - 70-89: Good — got the core ideas right
+  - 50-69: Partial — knows some parts but gaps remain
+  - 30-49: Weak — significant misconceptions
+  - 0-29: Little to no understanding demonstrated
+  - Give 80+ only if the student can APPLY the concept, not just recognise it.
+- Do NOT keep asking more questions hoping for a better answer. Conclude cleanly and encourage the student.
 
 ---
 CURRENT CONCEPT: {concept_title}
-
+{scope_block}
 CONCEPT REFERENCE (for your internal use only — NEVER share this with the student):
 {concept_text[:1200]}
 {interests_text}{image_context}{style_text}{_language_instruction(language)}"""
@@ -375,6 +429,137 @@ CONCEPT REFERENCE (for your internal use only — NEVER share this with the stud
             f"\nNote: This student has attempted this concept {n} time(s) without mastering it. "
             "Be especially encouraging and patient."
         )
+
+    prompt += """
+
+---
+CONVERSATIONAL FLOW RULES — NON-NEGOTIABLE:
+You are a warm, patient tutor talking with a child. NOT an interrogation machine.
+
+RULE 1 — ONE QUESTION AT A TIME:
+  Ask exactly ONE question. Stop. Wait for the student to answer.
+  Never ask a follow-up before they respond.
+
+RULE 2 — ALWAYS BREATHE BEFORE THE NEXT QUESTION:
+  After each answer, you MUST do ALL of the following before the next question:
+    a) Acknowledge their answer warmly and SPECIFICALLY (not just "Good job" — reference what they said)
+    b) Give a brief explanation, gentle correction, or a fun fact about their answer
+    c) Add one of: encouragement, a real-world connection, or a progress update
+    ONLY THEN may you ask the next question.
+
+  WRONG: "What is X? Also, what about Y?"
+  RIGHT: Ask X → student answers → "You got that right! The reason is [explanation].
+            Fun fact: [connection]! Now for the next one..."
+
+PASS/FAIL RULES:
+  - You MUST ask EVERY question in your planned set before computing a final score.
+  - Do NOT stop early even if the student has already crossed 70%.
+  - Every 3 questions, acknowledge progress warmly in the student's language.
+  - Scoring: Correct = 1 point, Partially correct = 0.5 points, Incorrect = 0 points
+  - After ALL questions are answered, compute: score = (total_points / total_questions) x 100
+  - If score >= 70: celebrate warmly, announce the score, emit [ASSESSMENT:XX] where XX is the score
+  - If score < 70: encourage gently, announce the score, briefly note what was tricky,
+    emit [ASSESSMENT:XX] where XX is the score.
+    Then warmly invite the student to revisit those parts for a clearer explanation.
+
+QUESTION DIVERSITY:
+  - Cover ALL key concepts from the cards the student studied.
+  - Use at least 3 different question types across the check: definition, application, error-spotting, comparison, visual-based.
+  - Never ask two questions about the same sub-topic back to back.
+  - Use simple, friendly, child-appropriate language — not textbook style.
+    WRONG: "Describe the commutative property of addition."
+    RIGHT: "If you flip the numbers in 3 + 5 and write 5 + 3 instead, do you get the same answer? Why?"
+"""
+
+    return prompt
+
+
+def build_remediation_socratic_prompt(
+    failed_topics: list[str],
+    concept_title: str,
+    concept_text: str,
+    student_interests: list[str] | None = None,
+    style: str = "default",
+    language: str = "en",
+    session_stats: dict | None = None,
+) -> str:
+    """
+    Build the system prompt for the RECHECKING phase after remediation.
+    Focuses questions on the failed topics first, then adds lighter review questions.
+    """
+    style_modifier = STYLE_MODIFIERS.get(style, "")
+    style_text = f"\n\n{style_modifier}" if style_modifier else ""
+
+    interests_text = ""
+    if student_interests:
+        interests_text = (
+            f"\nThe student is interested in: {', '.join(student_interests)}. "
+            "Use these in your examples when possible."
+        )
+
+    failed_topics_text = (
+        ", ".join(failed_topics[:5]) if failed_topics else "the key concepts of this section"
+    )
+
+    prompt = f"""You are ADA, an adaptive math tutor in RE-ASSESSMENT MODE.
+
+Last time, {failed_topics_text} were a bit tricky. Let's see how much clearer they are now!
+I know you've got this now!
+
+Your job is to CHECK whether the student now understands the concepts they previously struggled with.
+
+QUESTION STRUCTURE FOR THIS RE-CHECK:
+  - Start with 2-3 questions focused specifically on: {failed_topics_text}
+  - Then ask 1-2 review questions about topics they answered correctly before
+  - Keep the difficulty slightly lower than a standard check — build confidence first
+
+ABSOLUTE RULES — NEVER VIOLATE THESE:
+1. NEVER give the answer to your own questions. Not even partially. Not even as a hint.
+2. NEVER say "the answer is..." or "the correct answer is..." or "actually, it's..."
+3. If the student is wrong, say something like "Not quite — can you think about it differently?" or "What if you tried looking at it this way?"
+4. Ask ONE question at a time. Wait for the student's response before asking the next.
+5. Keep each question SHORT — 1-2 sentences maximum.
+6. NEVER repeat or rephrase a question you have already asked in this re-check.
+7. Use extra encouraging language throughout: "I knew you'd get it!", "See? You do know this!", "That's exactly right!"
+
+CONVERSATIONAL FLOW RULES — NON-NEGOTIABLE:
+You are a warm, patient tutor talking with a child. NOT an interrogation machine.
+
+RULE 1 — ONE QUESTION AT A TIME:
+  Ask exactly ONE question. Stop. Wait for the student to answer.
+  Never ask a follow-up before they respond.
+
+RULE 2 — ALWAYS BREATHE BEFORE THE NEXT QUESTION:
+  After each answer, you MUST do ALL of the following before the next question:
+    a) Acknowledge their answer warmly and SPECIFICALLY (reference what they said)
+    b) Give a brief explanation, gentle correction, or a fun fact about their answer
+    c) Add one of: encouragement, a real-world connection, or a progress update
+    ONLY THEN may you ask the next question.
+
+PASS/FAIL RULES:
+  - You MUST ask EVERY question in your planned set before computing a final score.
+  - Do NOT stop early even if the student has already crossed 70%.
+  - Every 3 questions, include a brief progress update: "Great work — 3 down, 4 to go!"
+  - Scoring: Correct = 1 point, Partially correct = 0.5 points, Incorrect = 0 points
+  - After ALL questions are answered, compute: score = (total_points / total_questions) x 100
+  - If score >= 70: celebrate warmly with extra enthusiasm (they improved!), announce the score,
+    emit [ASSESSMENT:XX] where XX is the score
+  - If score < 70: encourage gently — remind them everyone learns at their own pace,
+    announce the score, emit [ASSESSMENT:XX] where XX is the score.
+    Then say warmly: "Let's take another look together — you're getting closer each time!"
+
+QUESTION DIVERSITY:
+  - Focus FIRST on the specific weak areas listed above.
+  - Use simple, friendly, child-appropriate language — not textbook style.
+  - Use at least 2 different question types: definition, application, error-spotting, or comparison.
+
+---
+CURRENT CONCEPT: {concept_title}
+TOPICS TO FOCUS ON: {failed_topics_text}
+
+CONCEPT REFERENCE (for your internal use only — NEVER share this with the student):
+{concept_text[:1200]}
+{interests_text}{style_text}{_language_instruction(language)}"""
 
     return prompt
 
@@ -395,7 +580,7 @@ def _build_card_profile_block(learning_profile, history: dict | None) -> str:
         f"Speed: {learning_profile.speed} | "
         f"Comprehension: {learning_profile.comprehension} | "
         f"Engagement: {learning_profile.engagement} | "
-        f"Confidence: {learning_profile.confidence_score:.0%}"
+        f"Confidence: {float(learning_profile.confidence_score):.0%}"
     )
 
     # Mode-specific generation instructions
@@ -454,10 +639,15 @@ def build_cards_system_prompt(
     style: str = "default",
     interests: list[str] | None = None,
     language: str = "en",
-    learning_profile=None,   # LearningProfile | None — NEW
-    history: dict | None = None,  # NEW
+    learning_profile=None,   # LearningProfile | None
+    history: dict | None = None,
+    images: list[dict] | None = None,
 ) -> str:
-    """Build the system prompt for card-based lesson generation."""
+    """Build the system prompt for unified card-based lesson generation.
+
+    Every card uses the same schema: title, content, image_indices, question (MCQ).
+    No card_type, no quick_check, no questions[], no True/False anywhere.
+    """
 
     interests_text = ""
     if interests:
@@ -469,108 +659,181 @@ def build_cards_system_prompt(
     style_modifier = STYLE_MODIFIERS.get(style, "")
     style_text = f"\n\n{style_modifier}" if style_modifier else ""
 
+    # Build available-images block so the LLM knows which indices to assign
+    images_block = ""
+    if images:
+        _CHECKLIST_KEYWORDS = (
+            "checklist", "self-assessment", "i can", "confidently",
+            "with some help", "rubric", "evaluate my understanding", "learning target",
+        )
+        useful = [
+            img for img in images
+            if img.get("image_type", "").upper() in ("DIAGRAM", "FORMULA")
+            and img.get("is_educational", True)
+            and img.get("description")
+            and not any(
+                kw in (img.get("description") or "").lower()
+                for kw in _CHECKLIST_KEYWORDS
+            )
+        ]
+        if useful:
+            lines = []
+            for i, img in enumerate(useful):
+                vision_desc = (img.get("description") or "")[:200]
+                img_type = img.get("image_type", "DIAGRAM")
+                lines.append(f"  Index {i}: {vision_desc} (type: {img_type})")
+            images_block = (
+                f"\n\nAVAILABLE IMAGES FOR THIS SECTION ({len(useful)} total):\n"
+                + "\n".join(lines)
+                + "\n\nIMAGE ASSIGNMENT RULES:\n"
+                "- In each card's `image_indices` field, list 0-based indices of images that belong on that card.\n"
+                "- Choose images based on their description matching the card's content topic.\n"
+                "- Embed [IMAGE:N] in the content text at the EXACT point where that image is referenced.\n"
+                "  Example: \"The number line below shows integers: [IMAGE:0] Each tick mark is one unit.\"\n"
+                "- Each image appears on exactly ONE card. Use `image_indices: []` if no image fits.\n"
+                "- NEVER put all images on card 1. Distribute based on topic relevance."
+            )
+
     base_prompt = f"""You are ADA, an adaptive math tutor for children. You create interactive learning cards.
 
-Your job is to take textbook sub-sections and transform each into an engaging learning card with:
-1. A clear, child-friendly explanation (80-150 words per card)
-2. Quiz questions: 2 multiple-choice + 2 true/false per card (one shown, one backup)
+Your job is to take textbook sub-sections and transform them into an engaging sequence of typed learning cards.
 
-EXPLANATION RULES:
+CARD TYPES — choose the best type for each sub-section:
+- TEACH   : Main explanation — definition, concept, property, or new idea
+- EXAMPLE : Worked example with step-by-step solution
+- VISUAL  : Image-heavy card — use when a diagram IS the explanation
+- RECAP   : Summary or consolidation of 2+ prior topics
+- FUN     : Engagement hook — surprising fact, real-world mystery, or puzzle that motivates the concept
+- QUESTION: Standalone practice problem (no new content, just a challenge)
+
+CARD SEQUENCE ORDER — NON-NEGOTIABLE:
+1. The sub-sections in the user prompt are in the EXACT curriculum order of the textbook.
+   Generate cards in THAT order. Sub-section 1 cards come FIRST, sub-section 2 cards come
+   NEXT, and so on. NEVER move a later sub-section's cards ahead of an earlier one.
+2. Within each sub-section topic group, enforce this type order:
+   TEACH → VISUAL → EXAMPLE → QUESTION
+   - TEACH card(s) always appear BEFORE any EXAMPLE card on the same topic.
+   - VISUAL cards accompany the TEACH card they illustrate — place directly after it.
+   - QUESTION cards come AFTER the TEACH and EXAMPLE cards for that topic.
+3. FUN card rule: A FUN card may only appear as the VERY FIRST card of the entire lesson
+   (engagement opener before all teaching). Never insert FUN mid-sequence. Only add a FUN
+   card if the concept has a genuinely surprising real-world hook worth leading with.
+4. RECAP card rule: A RECAP card may only appear as the VERY LAST card of the entire
+   lesson. Never insert RECAP in the middle of the card sequence.
+5. A student must NEVER encounter an advanced concept card before seeing the foundational
+   concept it depends on. The sub-section order IS the dependency order — follow it exactly.
+
+EXPLANATION RULES (apply to every card):
 - Use everyday language a 10-year-old can understand
-- Use metaphors and analogies to make abstract ideas concrete
-- Be warm and encouraging, never condescending
-- Use markdown: **bold** key terms, use bullet points for lists
-- Include $...$ for math notation and explain what symbols mean
+- Use metaphors, analogies, and real-world connections to make abstract ideas concrete
+- Be warm, encouraging, and never condescending
+- MARKDOWN ONLY — NEVER use HTML tags. Bold with **text**, bullets with "- item", math with $...$
+- FORBIDDEN in card content: <p>, <ul>, <li>, <strong>, <em>, <br>, <markdown>, or ANY XML/HTML tag
+- Include $...$ for math notation and explain what each symbol means
 - Each card should be self-contained — understandable on its own
-- TEXTBOOK ACCURACY IS NON-NEGOTIABLE: every key definition, formula, theorem, and property in the sub-section MUST appear in the card. Never paraphrase away a formula. Never summarize a theorem without stating it. Students must be able to answer any textbook question using only what your cards taught them.
+- TEXTBOOK ACCURACY IS NON-NEGOTIABLE: every key definition, formula, theorem, and property
+  in the sub-section MUST appear across the cards. Never paraphrase away a formula.
+  Never summarize a theorem without stating it.
+- WORKED EXAMPLES ARE MANDATORY — if the source contains a step-by-step example, include
+  ALL steps in full. Never summarize or skip a worked example step.
+- COMPLETE COVERAGE: if a sub-section covers multiple topics, your cards MUST address every one.
 
-QUESTION RULES:
-- TWO types only: "mcq" (multiple choice) and "true_false"
-- Each card MUST have exactly 2 mcq questions and 2 true_false questions (4 total)
-- The 2 questions of each type should cover different aspects of the card's content
-- MCQ: exactly 4 options, one correct (correct_index is 0-based)
-- true_false: correct_answer must be exactly "true" or "false"
-- Every question needs a brief explanation of why the answer is correct
-- Make the second question of each type slightly harder than the first
+CARD SCHEMA — every card must have exactly these fields:
 
-IMAGE RULES:
-- Visual diagrams and formula images for this concept will be displayed alongside your card content automatically
-- Write engaging content that naturally refers to the visual aids: "The diagram below shows...", "Look at the number line to see...", "The formula image below illustrates..."
-- Do NOT include image_indices in your JSON — images are handled automatically by the backend
+{{
+  "card_type": "TEACH|EXAMPLE|VISUAL|RECAP|FUN|QUESTION",
+  "title": "<concise card title — 3-8 words>",
+  "content": "<markdown. Embed [IMAGE:N] at the exact line where image N is contextually relevant.>",
+  "image_indices": [<0-based indices of images used — empty [] if none>],
+  "question": {{
+    "text": "<MCQ question stem — math notation with $...$>",
+    "options": ["<A>", "<B>", "<C>", "<D>"],
+    "correct_index": <0-based int, value in [0, 3]>,
+    "explanation": "<1-3 sentences explaining why the correct option is right>"
+  }}
+}}
 
-OUTPUT FORMAT — You MUST respond with valid JSON:
+CARD COUNT: Generate as many cards as the content requires.
+Cover every sub-topic fully. Do NOT consolidate to save tokens.
+
+MCQ RULE: Every card has exactly ONE multiple-choice question. NO True/False.
+The field is named "question" (not "quick_check", not "questions").
+
+MCQ QUESTION QUALITY RULE — CRITICAL:
+- NEVER write a question whose answer is explicitly stated verbatim in the card content above it.
+  BAD: Content says "the total value is 215" → Question asks "What is the total value?"
+  BAD: Content says "Whole numbers include 0" → Question asks "Do whole numbers include 0?"
+  GOOD: "If you replaced the 2 hundreds with 4 hundreds, what would the new total be?"
+  GOOD: "Which set of blocks represents a value greater than 300?"
+- Questions MUST test UNDERSTANDING, REASONING, or APPLICATION — not reading comprehension.
+- All 4 answer choices must be plausible (no obviously silly distractors).
+- For EXAMPLE and TEACH cards: question must apply the concept to a NEW scenario with different numbers/context.
+
+IMAGE RULE: If you reference an image in content, write [IMAGE:N] at that exact position
+(N = 0-based index from the AVAILABLE IMAGES list). Also add N to image_indices.
+If no image fits, set image_indices to [] and do not write [IMAGE:N].
+Do NOT put all images on card 1 — distribute based on topic.
+
+MATH DIAGRAM RULE (when NO images are available):
+- If the image list is EMPTY, do NOT write dangling sentences like "shows how these blocks look",
+  "as shown in the diagram", "the figure below shows", or any phrase that references a visual
+  that does not exist in the available image list.
+- Instead, for standard math visuals, embed a MATH_DIAGRAM marker at the exact position:
+    [MATH_DIAGRAM:base10:hundreds=2,tens=1,ones=5]         ← base-10 block diagram
+    [MATH_DIAGRAM:place_value_chart]                        ← Ones → Hundred-Trillions chart
+    [MATH_DIAGRAM:number_line:start=0,end=20,mark=7]       ← number line with optional highlight
+    [MATH_DIAGRAM:fraction_bar:numerator=3,denominator=4]  ← fraction bar
+- Write the FULL sentence before the marker: "The blocks below show the value 215: [MATH_DIAGRAM:base10:hundreds=2,tens=1,ones=5]"
+- NEVER leave a dangling fragment. If no MATH_DIAGRAM type fits, describe the visual in plain text only.
+
+OUTPUT FORMAT — respond with valid JSON only:
 {{
   "cards": [
     {{
-      "title": "First card title",
-      "content": "Explanation referencing visuals. Look at the diagram below to see how this concept works.",
-      "questions": [
-        {{
-          "type": "mcq",
-          "question": "First MCQ question?",
-          "options": ["Option A", "Option B", "Option C", "Option D"],
-          "correct_index": 0,
-          "explanation": "Why this is correct"
-        }},
-        {{
-          "type": "mcq",
-          "question": "Backup MCQ question?",
-          "options": ["Option A", "Option B", "Option C", "Option D"],
-          "correct_index": 2,
-          "explanation": "Why this is correct"
-        }},
-        {{
-          "type": "true_false",
-          "question": "First true/false statement.",
-          "correct_answer": "true",
-          "explanation": "Why this is true"
-        }},
-        {{
-          "type": "true_false",
-          "question": "Backup true/false statement.",
-          "correct_answer": "false",
-          "explanation": "Why this is false"
-        }}
-      ]
-    }},
-    {{
-      "title": "Second card title",
-      "content": "Explanation for next topic. Look at the diagram below to see the formula in action.",
-      "questions": [
-        {{
-          "type": "mcq",
-          "question": "MCQ for second card?",
-          "options": ["Option A", "Option B", "Option C", "Option D"],
-          "correct_index": 1,
-          "explanation": "Why this is correct"
-        }},
-        {{
-          "type": "mcq",
-          "question": "Backup MCQ for second card?",
-          "options": ["Option A", "Option B", "Option C", "Option D"],
-          "correct_index": 3,
-          "explanation": "Why this is correct"
-        }},
-        {{
-          "type": "true_false",
-          "question": "True/false for second card.",
-          "correct_answer": "false",
-          "explanation": "Why this is false"
-        }},
-        {{
-          "type": "true_false",
-          "question": "Backup true/false for second card.",
-          "correct_answer": "true",
-          "explanation": "Why this is true"
-        }}
-      ]
+      "card_type": "TEACH",
+      "title": "Short descriptive heading",
+      "content": "Explanation text. [IMAGE:0] appears inline where the image is relevant.",
+      "image_indices": [0],
+      "question": {{
+        "text": "What does X mean?",
+        "options": ["Option A", "Option B", "Option C", "Option D"],
+        "correct_index": 0,
+        "explanation": "Because..."
+      }}
     }}
   ]
-}}{interests_text}{style_text}{_language_instruction(language)}"""
+}}{images_block}{interests_text}{style_text}{_language_instruction(language)}"""
 
     # Append adaptive student profile block (empty string if learning_profile is None)
     profile_block = _build_card_profile_block(learning_profile, history)
     return base_prompt + profile_block
+
+
+def _build_user_prompt_profile_block(
+    language: str,
+    interests: list | None,
+    style: str,
+    learning_profile,
+) -> str:
+    """Return a student-profile customization block appended to the cards user prompt."""
+    lines = ["\n\nSTUDENT PROFILE (tailor ALL card text to this):"]
+    if language and language != "en":
+        lang_name = LANGUAGE_NAMES.get(language, language)
+        lines.append(f"- Language: Write ALL content (titles, explanations, questions, options) in {lang_name}")
+    if interests:
+        lines.append(f"- Interests: {', '.join(interests[:3])} — weave these into examples and analogies")
+    if style and style != "default":
+        lines.append(f"- Style: {style} persona — match the vocabulary and tone throughout every card")
+    comp = getattr(learning_profile, "comprehension", None) if learning_profile else None
+    speed = getattr(learning_profile, "speed", None) if learning_profile else None
+    if comp == "STRUGGLING":
+        lines.append(
+            "- Level: STRUGGLING — use very simple words, give a concrete real-world example "
+            "before any formula, define all jargon immediately"
+        )
+    elif comp == "STRONG" and speed == "FAST":
+        lines.append("- Level: ADVANCED — go deeper, add challenge, skip excessive hand-holding")
+    return "\n".join(lines) if len(lines) > 1 else ""
 
 
 def build_cards_user_prompt(
@@ -578,15 +841,24 @@ def build_cards_user_prompt(
     sub_sections: list[dict],
     latex: list[str] | None = None,
     images: list[dict] | None = None,
-    wrong_option_pattern: int | None = None,  # NEW
+    wrong_option_pattern: int | None = None,
+    language: str = "en",
+    interests: list | None = None,
+    style: str = "default",
+    learning_profile=None,
 ) -> str:
     """Build the user prompt for card-based lesson generation."""
     import re
 
-    # Format sub-sections
+    # Format sub-sections with ordinal labels so the LLM understands dependency order
     sections_text = ""
+    total_sections = len(sub_sections)
     for i, sec in enumerate(sub_sections, 1):
-        sections_text += f"\n--- SUB-SECTION {i}: {sec['title']} ---\n{sec['text']}\n"
+        ordinal = f"SECTION {i} of {total_sections}"
+        foundational_note = " — FOUNDATIONAL (teach this first)" if i == 1 else (
+            f" — builds on Section {i - 1}" if i > 1 else ""
+        )
+        sections_text += f"\n--- {ordinal}{foundational_note}: {sec['title']} ---\n{sec['text']}\n"
 
     # Filter meaningful LaTeX
     latex_text = ""
@@ -605,32 +877,39 @@ def build_cards_user_prompt(
                 + "\n".join(f"- {expr}" for expr in key_latex)
             )
 
-    # Describe available images
+    # Describe available images with 0-based indices so the LLM can assign them to cards.
+    # Filter to educational DIAGRAM/FORMULA images that have a real vision description
+    # and are not self-assessment checklists/rubrics.
+    _CHECKLIST_KEYWORDS = (
+        "checklist", "self-assessment", "i can", "confidently",
+        "with some help", "rubric", "evaluate my understanding", "learning target",
+    )
     image_text = ""
     if images:
         diagrams = [
             img for img in images
             if img.get("image_type", "").upper() in ("DIAGRAM", "FORMULA")
+            and img.get("is_educational", True)
+            and img.get("description")
+            and not any(
+                kw in (img.get("description") or "").lower()
+                for kw in _CHECKLIST_KEYWORDS
+            )
         ]
         if diagrams:
-            desc = []
-            for i, img in enumerate(diagrams[:20], 1):
-                page = img.get("page", "?")
-                vision_desc = img.get("description") or ""
-                relevance = img.get("relevance") or ""
-                if vision_desc and relevance:
-                    desc.append(f"  Diagram {i} (page {page}): {vision_desc[:200]} | Why it helps: {relevance[:200]}")
-                elif vision_desc:
-                    desc.append(f"  Diagram {i} (page {page}): {vision_desc[:300]}")
-                else:
-                    desc.append(f"  Diagram {i} (page {page})")
+            desc_lines = []
+            for i, img in enumerate(diagrams):  # Show all educational images — LLM picks contextually
+                vision_desc = (img.get("description") or "")[:200]
+                filename = img.get("filename", "unknown")
+                if vision_desc:
+                    desc_lines.append(f"  Index {i}: {vision_desc} (filename: {filename})")
             image_text = (
-                "\n\nAVAILABLE DIAGRAMS AND FORMULAS:\n"
-                + "\n".join(desc)
-                + "\n\nAssign EVERY image to a card via image_indices. "
-                "Use the description and 'Why it helps' field to decide which card each image fits best. "
-                "All images listed above are confirmed as relevant to this concept — do not skip any. "
-                "For each assigned image, write a sentence in the card's content explaining what it shows: 'Look at the diagram below to see how...'"
+                "\n\nEDUCATIONAL IMAGES available for this concept:\n"
+                + "\n".join(desc_lines)
+                + "\n\nReference images naturally in your content with [IMAGE:N] at the exact "
+                "position where the image adds value (N = index from list above). "
+                "Also add N to that card's image_indices. Distribute images based on topic relevance — "
+                "do NOT assign all images to the first card."
             )
         else:
             image_text = "\n\nNo diagrams available."
@@ -639,11 +918,13 @@ def build_cards_user_prompt(
 
 **Concept:** {concept_title}
 
-**Sub-sections to transform into cards (one card per sub-section):**
+**Sub-sections in EXACT curriculum order (Section 1 is most foundational):**
 {sections_text}
 {latex_text}{image_text}
 
-Transform each sub-section into an engaging learning card with explanation + questions.
+ORDERING REQUIREMENT: Generate cards in the order of the sections above.
+Section 1 → first card(s). Section 2 → next card(s). Never reorder sections.
+Within each section: TEACH card first, then EXAMPLE, then QUESTION.
 Respond with valid JSON only."""
 
     # Inject misconception alert when a persistent wrong-option pattern is detected
@@ -657,7 +938,37 @@ Respond with valid JSON only."""
             "must clearly explain WHY it is wrong."
         )
 
+    # Append student profile personalisation block
+    profile_block = _build_user_prompt_profile_block(language, interests, style, learning_profile)
+    if profile_block:
+        prompt += profile_block
+
     return prompt
+
+
+def build_mid_session_checkin_card() -> dict:
+    """
+    Return a static mid-session check-in card (no LLM call needed).
+    Inserted automatically by generate_cards() at every CARDS_MID_SESSION_CHECK_INTERVAL position.
+
+    Unified schema shape: no card_type, no quick_check, no questions[].
+    CHECKIN cards have a top-level `options` list and no `question` field.
+    Frontend detects CHECKIN by: !card.question && Array.isArray(card.options).
+    """
+    return {
+        "card_type": "CHECKIN",
+        "title": "Quick Check-In",
+        "content": "How are you feeling about the material so far?",
+        "image_indices": [],
+        "images": [],
+        "options": [
+            "I'm getting it!",
+            "It's a bit tricky",
+            "I'm lost",
+            "I need a break",
+        ],
+        # No "question" key — absence is how the frontend detects a CHECKIN card
+    }
 
 
 # ── Assistant Sidebar Prompt ─────────────────────────────────

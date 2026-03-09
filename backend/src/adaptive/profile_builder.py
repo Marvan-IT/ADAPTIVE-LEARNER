@@ -71,22 +71,27 @@ def classify_comprehension(
 
 # ── Engagement ─────────────────────────────────────────────────────────────────
 
-def classify_engagement(skip_rate: float, hints_used: int, revisits: int) -> str:
+def classify_engagement(
+    time_spent_sec: float,
+    expected_time_sec: float,
+    wrong_attempts: int,
+    hints_used: int,
+) -> str:
     """
-    Classify a student's engagement level.
+    Classify a student's engagement level using signals that are actually captured.
 
     Rules (evaluated in order):
-      BORED       — skip_rate > 0.35
-                    (checked first: heavy skipping + many hints = still BORED,
-                    because the student is likely skipping to find answers)
-      OVERWHELMED — hints_used >= 5  AND  revisits >= 2
+      BORED       — completing cards very quickly with no errors (rushing, not engaging)
+                    time_spent < 35% of expected AND wrong_attempts == 0
+      OVERWHELMED — needs many hints (concept is genuinely too difficult)
+                    hints_used >= 5
       ENGAGED     — everything else
 
     Returns one of: "BORED", "ENGAGED", "OVERWHELMED"
     """
-    if skip_rate > 0.35:
+    if expected_time_sec > 0 and time_spent_sec < expected_time_sec * 0.35 and wrong_attempts == 0:
         return "BORED"
-    if hints_used >= 5 and revisits >= 2:
+    if hints_used >= 5:
         return "OVERWHELMED"
     return "ENGAGED"
 
@@ -180,9 +185,10 @@ def build_learning_profile(
         analytics.hints_used,
     )
     engagement = classify_engagement(
-        analytics.skip_rate,
+        analytics.time_spent_sec,
+        analytics.expected_time_sec,
+        analytics.wrong_attempts,
         analytics.hints_used,
-        analytics.revisits,
     )
     confidence = compute_confidence_score(
         analytics.quiz_score,

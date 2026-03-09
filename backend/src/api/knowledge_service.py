@@ -8,6 +8,7 @@ dependency graph traversal in a single query.
 
 import json
 import logging
+import re as _re
 import sys
 import os
 from pathlib import Path
@@ -23,6 +24,32 @@ from graph.graph_store import load_graph_json, get_graph_stats, get_topological_
 from config import OUTPUT_DIR
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_image_urls(
+    text: str,
+    book_slug: str,
+    base_url: str = "http://localhost:8000",
+) -> str:
+    """
+    Replace relative image filenames in MMD text with full static URLs so the
+    frontend and LLM receive loadable <img> hrefs.
+
+    Input:  ![A number line showing 0 to 5](image_001.jpg)
+    Output: ![A number line showing 0 to 5](http://localhost:8000/static/output/prealgebra/mathpix_extracted/image_001.jpg)
+
+    R6: Without this, images are stored as relative paths and the browser cannot
+    load them — they need absolute URLs pointing to the FastAPI static mount.
+    """
+    def _replace(m: "_re.Match") -> str:
+        alt = m.group(1)
+        filename = m.group(2)
+        if filename.startswith("http") or filename.startswith("/"):
+            return m.group(0)  # already absolute — leave untouched
+        url = f"{base_url}/static/output/{book_slug}/mathpix_extracted/{filename}"
+        return f"![{alt}]({url})"
+
+    return _re.sub(r'!\[([^\]]*)\]\(([^)]+)\)', _replace, text)
 
 
 class KnowledgeService:
@@ -175,12 +202,17 @@ class KnowledgeService:
         # latex_expressions without making a second ChromaDB round-trip.
         latex = self._get_latex(concept_id, chroma_metadata=metadata)
 
+        # R6: Resolve relative image filenames to full static URLs so the
+        # frontend and LLM can load them. No-op if there are no image refs.
+        book_slug = metadata.get("book_slug", self.book_slug)
+        text = _resolve_image_urls(concept["text"], book_slug)
+
         return {
             "concept_id": concept_id,
             "concept_title": metadata.get("concept_title", ""),
             "chapter": str(metadata.get("chapter", "")),
             "section": str(metadata.get("section", "")),
-            "text": concept["text"],
+            "text": text,
             "latex": latex,
             "images": self.get_concept_images(concept_id),
             "prerequisites": prerequisites,

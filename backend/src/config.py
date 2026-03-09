@@ -42,11 +42,19 @@ ADAPTIVE_ERROR_PENALTY_WEIGHT: float = 0.4   # Weight for error rate in confiden
 ADAPTIVE_HINT_PENALTY_WEIGHT: float = 0.2    # Weight for hint usage in confidence score
 
 # ── Mastery ───────────────────────────────────────────────────────────────────
-MASTERY_THRESHOLD = 60  # Score out of 100 required to mark a concept as mastered
+MASTERY_THRESHOLD = 70  # Score out of 100 required to mark a concept as mastered
+
+# ── Socratic check settings ───────────────────────────────────────────────────
+MAX_SOCRATIC_EXCHANGES      = 20  # Maximum back-and-forth exchanges in a Socratic session
+SOCRATIC_MAX_ATTEMPTS       = 3   # Maximum remediation + recheck cycles before session ends
+SOCRATIC_PROGRESS_INTERVAL  = 3   # Show progress summary every N questions
+
+# ── Card session settings ─────────────────────────────────────────────────────
+CARDS_MID_SESSION_CHECK_INTERVAL = 12  # Mood/engagement check-in every N cards
 
 # ── Adaptive card generation ──────────────────────────────────────────────────
 ADAPTIVE_CARD_MODEL   = OPENAI_MODEL_MINI   # gpt-4o-mini: fast for single-card generation
-ADAPTIVE_CARD_CEILING = 8                   # Maximum adaptive cards per session
+# ADAPTIVE_CARD_CEILING removed — card count is determined by content, not a ceiling
 
 # ── XP Award Values ────────────────────────────────────────────────────────────
 XP_MASTERY: int = 50                  # Base XP awarded on concept mastery

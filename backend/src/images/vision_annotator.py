@@ -32,26 +32,50 @@ SYSTEM_PROMPT = (
     "OpenStax mathematics textbooks.\n\n"
     "Respond ONLY with a JSON object in this exact format — no markdown, no "
     "code blocks, no extra text:\n"
-    '{"description": "<2-4 sentences written naturally as if explaining to a curious student. '
-    "Describe what the image shows AND why it helps understand the concept in a single flowing paragraph. "
-    "Do NOT use headings, bullet points, or labels. "
-    "Do NOT start with phrases like 'This image shows' or 'Description:'. "
-    "Just describe it conversationally — for example: "
-    "'Three lines are drawn on the same coordinate plane, each with a different slope. "
-    "The steeper the line, the larger the slope value, making it easy to see how changing "
-    "the coefficient in y = mx changes how fast the line rises.'\", "
-    '"is_educational": <true if this is genuine math content such as a formula, equation, '
-    "number line, graph, or diagram that helps a student learn; "
-    "false if it is a logo, icon, institutional photo, or decorative illustration>}\n\n"
-    "If the image is decorative or non-mathematical, set is_educational to false and description to null."
+    '{"description": "<2-4 sentences describing exactly what mathematical objects are shown '
+    "and how they help a student understand the concept in the section. "
+    "Be concrete — name the objects (axes, number line, triangle, graph, equation, etc.) and "
+    "explain the insight. Write as if pointing to it while tutoring: "
+    "'The number line here goes from 0 to 6 with tick marks at every integer. "
+    "Moving right means getting bigger, so you can see at a glance that 4 > 2 because "
+    "4 is further right — this makes the abstract idea of ordering numbers completely concrete.'\", "
+    '"is_educational": <true ONLY if a teacher would explicitly point to this image during a lesson '
+    "to explain a mathematical concept — e.g. a number line, coordinate graph, geometric figure, "
+    "worked-out equation, labelled diagram, or table of numerical data showing a mathematical pattern. "
+    "Set to false for ALL of the following: logos, icons, photos of people or places, "
+    "decorative borders, colour swatches, small bullets or arrows, chapter/section heading art, "
+    "page number ornaments, self-assessment checklists, rubrics, learning-objective boxes, "
+    "'try it' or 'be prepared' boxes without mathematical diagrams, "
+    "or any image whose primary purpose is decoration or navigation rather than "
+    "explaining a mathematical idea directly>}\n\n"
+    "DESCRIPTION QUALITY STANDARD — every description MUST include:\n"
+    "1. The EXACT visual math objects present (e.g., 'a number line from −5 to 5 with tick marks "
+    "at each integer', 'a fraction bar divided into 8 equal parts with 3 parts shaded in blue')\n"
+    "2. Any NUMBERS, LABELS, or ANNOTATIONS visible in the image — read them exactly as shown\n"
+    "3. The TYPE of visual aid — choose one: number line / fraction bar / area model / coordinate grid "
+    "/ geometric figure / place value chart / balance scale / bar model / percent bar / pie chart "
+    "/ step-by-step diagram / table / other\n"
+    "4. ONE sentence on how this visual specifically helps a student understand the concept\n\n"
+    "BAD description (too vague): 'A diagram showing numbers.'\n"
+    "GOOD description: 'A horizontal number line from 0 to 10 with integer tick marks. The point at 7 "
+    "is marked with a red dot labeled \"7\". An arrow sweeps right from 0 to 7 labeled \"+7\", "
+    "illustrating counting forward on the number line to find a sum.'\n\n"
+    "Be STRICT: when in doubt, set is_educational to false. "
+    "Only mark true if the image would genuinely help a student understand or visualise "
+    "the mathematics described in the section title."
 )
 
 
-def _user_prompt(concept_title: str, image_type: str) -> str:
+def _user_prompt(concept_title: str, image_type: str, concept_context: str = "") -> str:
     """Build the user-turn message for the vision API call."""
+    context_line = (
+        f"\nConcept context (first lines of textbook explanation): {concept_context[:400]}"
+        if concept_context
+        else ""
+    )
     return (
-        f"This image was extracted from a section titled '{concept_title}'. "
-        f"It has been classified as a {image_type} image. "
+        f"This image was extracted from a section titled '{concept_title}'.\n"
+        f"It has been classified as a {image_type} image.{context_line}\n"
         "Describe its mathematical content and pedagogical relevance."
     )
 
@@ -72,18 +96,24 @@ async def annotate_image(
     llm_client: AsyncOpenAI,
     model: str = OPENAI_MODEL,
     cache_dir: Path | None = None,
+    concept_context: str = "",
 ) -> dict:
     """
     Annotate a single image using GPT-4o Vision.
 
     Args:
-        image_bytes:   Raw binary image data.
-        concept_title: Title of the concept this image belongs to.
-        image_type:    "FORMULA" or "DIAGRAM" (DECORATIVE is skipped).
-        llm_client:    Shared AsyncOpenAI client instance.
-        model:         OpenAI model to use (defaults to OPENAI_MODEL from config).
-        cache_dir:     Directory for caching annotation results. If None,
-                       caching is disabled.
+        image_bytes:     Raw binary image data.
+        concept_title:   Title of the concept this image belongs to.
+        image_type:      "FORMULA" or "DIAGRAM" (DECORATIVE is skipped).
+        llm_client:      Shared AsyncOpenAI client instance.
+        model:           OpenAI model to use (defaults to OPENAI_MODEL from config).
+        cache_dir:       Directory for caching annotation results. If None,
+                         caching is disabled.
+        concept_context: Optional first ~400 chars of the section's textbook text.
+                         Included in the user message to ground the description.
+                         Note: changing this value changes the user prompt and
+                         therefore will not hit the MD5-keyed cache from prior
+                         runs that lacked context.
 
     Returns:
         {"description": str | None, "relevance": str | None}
@@ -139,7 +169,7 @@ async def annotate_image(
                         },
                         {
                             "type": "text",
-                            "text": _user_prompt(concept_title, image_type),
+                            "text": _user_prompt(concept_title, image_type, concept_context),
                         },
                     ],
                 },

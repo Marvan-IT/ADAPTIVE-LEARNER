@@ -1129,8 +1129,8 @@ class TestCompleteCardEndpoint:
         mock_llm = AsyncMock()
 
         with patch(
-            "adaptive.adaptive_router.generate_next_card",
-            new=AsyncMock(return_value=(card_dict, mock_profile, mock_gen_profile, "Well done!")),
+            "adaptive.adaptive_engine.generate_next_card",
+            new=AsyncMock(return_value=(card_dict, mock_profile, mock_gen_profile, "Well done!", "ACCELERATED")),
         ):
             ar.adaptive_llm_client = mock_llm
             client = TestClient(app, raise_server_exceptions=False)
@@ -1171,7 +1171,7 @@ class TestCompleteCardEndpoint:
         session_id = uuid.uuid4()
         student_id = uuid.uuid4()
 
-        existing_8_cards = json.dumps([{"index": i} for i in range(8)])
+        existing_8_cards = json.dumps([{"index": i} for i in range(20)])
 
         mock_session = MagicMock()
         mock_session.id = session_id
@@ -1315,7 +1315,7 @@ class TestCompleteCardEndpoint:
         ar.adaptive_knowledge_svc.get_concept_detail.return_value = dict(SAMPLE_CONCEPT_DETAIL)
 
         with patch(
-            "adaptive.adaptive_router.generate_next_card",
+            "adaptive.adaptive_engine.generate_next_card",
             new=AsyncMock(side_effect=ValueError("LLM failed after 3 attempts")),
         ):
             client = TestClient(app, raise_server_exceptions=False)
@@ -1597,18 +1597,14 @@ class TestSpacedReviewCreationOnMastery:
         mock_ks.graph.predecessors.return_value = iter([])
 
         svc = TeachingService(knowledge_svc=mock_ks)
-        svc.llm_client = AsyncMock()
+        svc.openai = AsyncMock()
 
-        # LLM returns a mastery response (score >= 60, complete=True)
-        mastery_llm_content = json.dumps({
-            "response": "Excellent work! You have demonstrated mastery.",
-            "check_complete": True,
-            "score": 85,
-        })
+        # LLM returns a mastery response — must contain [ASSESSMENT:XX] marker
+        mastery_llm_content = "Excellent work! You have demonstrated mastery. [ASSESSMENT:85]"
         mock_llm_response = MagicMock()
         mock_llm_response.choices = [MagicMock()]
         mock_llm_response.choices[0].message.content = mastery_llm_content
-        svc.llm_client.chat.completions.create = AsyncMock(return_value=mock_llm_response)
+        svc.openai.chat.completions.create = AsyncMock(return_value=mock_llm_response)
 
         session_id = uuid.uuid4()
         student_id = uuid.uuid4()
@@ -1622,7 +1618,9 @@ class TestSpacedReviewCreationOnMastery:
         mock_session.style = "default"
         mock_session.book_slug = "prealgebra"
         mock_session.check_score = None
+        mock_session.best_check_score = None
         mock_session.concept_mastered = False
+        mock_session.socratic_attempt_count = 0
 
         mock_student = MagicMock()
         mock_student.id = student_id
@@ -1640,10 +1638,21 @@ class TestSpacedReviewCreationOnMastery:
         mock_db.flush = AsyncMock()
         mock_db.commit = AsyncMock()
 
-        # Messages query (conversation history for Socratic context)
+        # Set up execute side-effects:
+        # 1) _get_phase_messages → scalars().all() → []
+        # 2) _get_message_count → scalar_one() → 0
+        # 3) StudentMastery check → scalar_one_or_none() → None (first mastery)
         messages_result = MagicMock()
         messages_result.scalars.return_value.all.return_value = []
-        mock_db.execute = AsyncMock(return_value=messages_result)
+        count_result = MagicMock()
+        count_result.scalar_one.return_value = 0
+        mastery_check_result = MagicMock()
+        mastery_check_result.scalar_one_or_none.return_value = None
+        mock_db.execute = AsyncMock(side_effect=[
+            messages_result,
+            count_result,
+            mastery_check_result,
+        ])
 
         await svc.handle_student_response(mock_db, mock_session, "I understand now")
 
@@ -1670,17 +1679,13 @@ class TestSpacedReviewCreationOnMastery:
         mock_ks.graph.predecessors.return_value = iter([])
 
         svc = TeachingService(knowledge_svc=mock_ks)
-        svc.llm_client = AsyncMock()
+        svc.openai = AsyncMock()
 
-        mastery_llm_content = json.dumps({
-            "response": "Mastery achieved!",
-            "check_complete": True,
-            "score": 90,
-        })
+        mastery_llm_content = "Mastery achieved! [ASSESSMENT:90]"
         mock_llm_response = MagicMock()
         mock_llm_response.choices = [MagicMock()]
         mock_llm_response.choices[0].message.content = mastery_llm_content
-        svc.llm_client.chat.completions.create = AsyncMock(return_value=mock_llm_response)
+        svc.openai.chat.completions.create = AsyncMock(return_value=mock_llm_response)
 
         session_id = uuid.uuid4()
         student_id = uuid.uuid4()
@@ -1693,7 +1698,9 @@ class TestSpacedReviewCreationOnMastery:
         mock_session.style = "default"
         mock_session.book_slug = "prealgebra"
         mock_session.check_score = None
+        mock_session.best_check_score = None
         mock_session.concept_mastered = False
+        mock_session.socratic_attempt_count = 0
 
         mock_student = MagicMock()
         mock_student.id = student_id
@@ -1709,7 +1716,15 @@ class TestSpacedReviewCreationOnMastery:
 
         messages_result = MagicMock()
         messages_result.scalars.return_value.all.return_value = []
-        mock_db.execute = AsyncMock(return_value=messages_result)
+        count_result = MagicMock()
+        count_result.scalar_one.return_value = 0
+        mastery_check_result = MagicMock()
+        mastery_check_result.scalar_one_or_none.return_value = None
+        mock_db.execute = AsyncMock(side_effect=[
+            messages_result,
+            count_result,
+            mastery_check_result,
+        ])
 
         before = datetime.now(timezone.utc)
         await svc.handle_student_response(mock_db, mock_session, "I understand!")
@@ -1744,17 +1759,13 @@ class TestSpacedReviewCreationOnMastery:
         mock_ks.graph.predecessors.return_value = iter([])
 
         svc = TeachingService(knowledge_svc=mock_ks)
-        svc.llm_client = AsyncMock()
+        svc.openai = AsyncMock()
 
-        mastery_llm_content = json.dumps({
-            "response": "Mastery achieved!",
-            "check_complete": True,
-            "score": 75,
-        })
+        mastery_llm_content = "Mastery achieved! [ASSESSMENT:75]"
         mock_llm_response = MagicMock()
         mock_llm_response.choices = [MagicMock()]
         mock_llm_response.choices[0].message.content = mastery_llm_content
-        svc.llm_client.chat.completions.create = AsyncMock(return_value=mock_llm_response)
+        svc.openai.chat.completions.create = AsyncMock(return_value=mock_llm_response)
 
         session_id = uuid.uuid4()
         student_id = uuid.uuid4()
@@ -1767,7 +1778,9 @@ class TestSpacedReviewCreationOnMastery:
         mock_session.style = "default"
         mock_session.book_slug = "prealgebra"
         mock_session.check_score = None
+        mock_session.best_check_score = None
         mock_session.concept_mastered = False
+        mock_session.socratic_attempt_count = 0
 
         added_objects = []
         mock_db = AsyncMock()
@@ -1777,7 +1790,15 @@ class TestSpacedReviewCreationOnMastery:
 
         messages_result = MagicMock()
         messages_result.scalars.return_value.all.return_value = []
-        mock_db.execute = AsyncMock(return_value=messages_result)
+        count_result = MagicMock()
+        count_result.scalar_one.return_value = 0
+        mastery_check_result = MagicMock()
+        mastery_check_result.scalar_one_or_none.return_value = None
+        mock_db.execute = AsyncMock(side_effect=[
+            messages_result,
+            count_result,
+            mastery_check_result,
+        ])
 
         await svc.handle_student_response(mock_db, mock_session, "I get it!")
 
@@ -1812,9 +1833,9 @@ class TestSpacedReviewCreationOnMastery:
         import inspect
         import api.teaching_service as ts
 
-        # 1. The authoritative value in config must be 60.
-        assert config.MASTERY_THRESHOLD == 60, (
-            f"config.MASTERY_THRESHOLD is {config.MASTERY_THRESHOLD}, expected 60"
+        # 1. The authoritative value in config must be 70.
+        assert config.MASTERY_THRESHOLD == 70, (
+            f"config.MASTERY_THRESHOLD is {config.MASTERY_THRESHOLD}, expected 70"
         )
 
         # 2. teaching_service must NOT redefine MASTERY_THRESHOLD as a module-level
@@ -1824,6 +1845,6 @@ class TestSpacedReviewCreationOnMastery:
             "from config import" in ts_source or "import config" in ts_source
         ), "teaching_service.py defines MASTERY_THRESHOLD locally instead of importing from config"
 
-        # 3. The threshold value referenced inside teaching_service must equal 60
+        # 3. The threshold value referenced inside teaching_service must equal 70
         #    (confirming no stale local override is shadowing the config value).
-        assert MASTERY_THRESHOLD == 60
+        assert MASTERY_THRESHOLD == 70
