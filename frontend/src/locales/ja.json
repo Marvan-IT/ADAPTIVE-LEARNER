@@ -87,8 +87,10 @@
   "assist.thinking": "考え中...",
   "completion.mastered": "コンセプトをマスター！",
   "completion.masteredMsg": "{{title}}をしっかり理解できたね。すばらしい！",
+  "completion.excellent": "素晴らしい！",
   "completion.almostThere": "もう少し！",
   "completion.almostMsg": "{{title}}よく頑張ったね。もう一度復習しよう！",
+  "completion.keepPracticing": "練習を続けよう！",
   "completion.outOf": "100点中",
   "completion.tryAgain": "もう一度挑戦",
   "completion.next": "次へ：{{title}}",
@@ -112,5 +114,16 @@
   "image.diagram": "概念図",
   "learning.generatingCard": "次のカードを生成中...",
   "learning.reviewDue": "復習期限",
-  "learning.reviewDueBadge": "📖"
+  "learning.reviewDueBadge": "📖",
+  "studentForm.customizeNote": "You can customize your learning style in each lesson.",
+  "customize.panelTitle": "Customize lesson",
+  "customize.style": "Style",
+  "customize.styleDefault": "Default",
+  "customize.stylePirate": "Pirate",
+  "customize.styleAstronaut": "Astronaut",
+  "customize.styleGamer": "Gamer",
+  "customize.interests": "Interests",
+  "customize.addInterest": "Add topic (press Enter)",
+  "customize.nextCardsNote": "Your next cards will reflect these preferences.",
+  "learning.conceptsProgress": "{{covered}} / {{total}} セクション完了"
 }

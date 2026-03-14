@@ -265,7 +265,7 @@ def build_socratic_system_prompt(
     concept_text: str,
     style: str = "default",
     interests: list[str] | None = None,
-    images: list[dict] | None = None,
+    card_visuals: list[dict] | None = None,  # {title, description, image} for cards that have images
     language: str = "en",
     socratic_profile=None,          # LearningProfile | None — EXISTING
     history: dict | None = None,    # EXISTING
@@ -285,45 +285,34 @@ def build_socratic_system_prompt(
         )
 
     image_context = ""
-    if images:
-        diagrams = [
-            img for img in images
-            if img.get("image_type", "").upper() in ("DIAGRAM", "FORMULA")
-            and img.get("width", 0) >= 100
-            and img.get("height", 0) >= 60
-        ]
-        if diagrams:
-            dl = []
-            for i, img in enumerate(diagrams[:5], 1):
-                w, h = img.get("width", 0), img.get("height", 0)
-                aspect = w / h if h > 0 else 1
-                hint = "wide/horizontal" if aspect > 3 else ("tall/vertical" if aspect < 0.5 else "standard diagram")
-                vision_desc = img.get("description") or ""
-                if vision_desc:
-                    dl.append(f"  Diagram {i} (page {img.get('page', '?')}): {vision_desc[:300]}")
-                else:
-                    dl.append(f"  Diagram {i}: {hint}, page {img.get('page', '?')}")
-            image_context = (
-                "\n\nAVAILABLE DIAGRAMS (student can see these alongside the chat):\n"
-                + "\n".join(dl)
-                + "\nYou may reference these in your questions: "
-                "'Look at the number line diagram — what does it show about...?' "
-                "If you need a visual not available, describe it in words."
-            )
+    if card_visuals:
+        lines = [f"  [{i}] \"{cv['title']}\": {cv['description']}" for i, cv in enumerate(card_visuals)]
+        image_context = (
+            "\n\nCARD IMAGES — diagrams the student saw on their learning cards:\n"
+            + "\n".join(lines)
+            + "\n\nIf your question specifically asks about the visual content of one of these cards, "
+            "append [CARD:N] at the very end of your response (N = the bracket index above, e.g. [CARD:0]). "
+            "If your question is text-only, do NOT include [CARD:N]."
+        )
 
-    # Determine minimum questions count dynamically based on session performance
-    min_questions = 3
+    # Determine minimum questions count dynamically based on covered_topics count and session performance.
+    # Anchor to the number of topics so every topic gets a question.
+    n_topics = max(1, len(covered_topics) if covered_topics else 1)
+    base_min = max(8, n_topics)
+    base_max = min(15, n_topics + 4)
+
+    min_questions = base_min
     if session_card_stats is not None and session_card_stats["total_cards"] > 0:
         error_rate = session_card_stats["error_rate"]
         if error_rate >= 0.4:
-            min_questions = 5
+            min_questions = min(base_min + 2, base_max)
         elif error_rate <= 0.1 and session_card_stats["total_hints"] == 0:
-            min_questions = 3
+            min_questions = base_min
         else:
-            min_questions = 4
+            min_questions = min(base_min + 1, base_max)
     elif socratic_profile is not None and socratic_profile.comprehension == "STRUGGLING":
-        min_questions = 5
-    max_questions = min(min_questions + 2, 6)
+        min_questions = min(base_min + 2, base_max)
+    max_questions = base_max
 
     # Build scope block from the card titles the student actually studied
     scope_block = ""
@@ -342,6 +331,8 @@ def build_socratic_system_prompt(
             f"You MUST restrict ALL your questions to ONLY these topics. "
             f"Do NOT ask about anything that was not in the above list. "
             f"If the concept reference text mentions other topics not listed above, ignore them completely.\n"
+            f"SPREAD RULE: questions must be distributed across ALL topics — do not cluster on\n"
+            f"the first 1–2 topics. Aim for at least one question per topic in scope order.\n"
         )
 
     prompt = f"""You are ADA, an adaptive math tutor in ASSESSMENT MODE.
@@ -566,6 +557,35 @@ CONCEPT REFERENCE (for your internal use only — NEVER share this with the stud
 
 # ── Card-Based Learning Prompts ──────────────────────────────
 
+_MODE_DELIVERY: dict[str, str] = {
+    "STRUGGLING": """\
+## DELIVERY MODE: STRUGGLING
+Language: age 8–10 reading level. Define EVERY term before using it.
+Open with a real-world analogy FIRST — before any formula or definition.
+Analogy density: ~80%. Numbered steps: ALWAYS. MCQ: EASY (confidence-building).
+EXAMPLE cards: each step on its own line + plain-English 'why' after the step.
+APPLICATION cards: 6-step scaffold (given/find/draw/set-up/solve/check).
+QUESTION (TRY_IT) hint: MUST use a visual method — dot arrays (● ● ●), number line, or labeled diagram.
+Tone: warm, patient, encouraging. Never assume prior knowledge.""",
+
+    "NORMAL": """\
+## DELIVERY MODE: NORMAL
+Language: high school level. Define terms on first use.
+Analogy density: ~50%. Numbered steps: only for worked examples.
+MCQ: MEDIUM difficulty — tests real understanding, uses common-mistake distractors.
+QUESTION hint: concrete approach description (not just 'try it').
+Tone: clear, supportive.""",
+
+    "FAST": """\
+## DELIVERY MODE: FAST
+Language: technical terminology freely used. Include 'why it works' reasoning.
+No numbered steps — use connected prose. MCQ: HARD (edge cases, traps, reversed questions).
+Analogy density: ~20%. Lead with formula/rule directly.
+NOTE: ALL definitions and formulas MUST appear — reduce scaffolding, NOT substance.
+TRY_IT_BATCH: consecutive Try It exercises merged into one multi-part card (a)(b)(c).""",
+}
+
+
 def _build_card_profile_block(learning_profile, history: dict | None) -> str:
     """
     Build the STUDENT PROFILE SUMMARY block for build_cards_system_prompt().
@@ -593,6 +613,18 @@ def _build_card_profile_block(learning_profile, history: dict | None) -> str:
             "- Make every MCQ option plausible in plain language — avoid obviously silly distractors.\n"
             "- Tone: warm, patient, never rushed. Short sentences. No more than 4 sentences before a bullet point."
         )
+        parts.append(
+            "\nCARD DENSITY — MANDATORY for this student:\n"
+            "Each major topic section MUST produce AT LEAST 2-3 cards:\n"
+            "  1. TEACH card — explain the concept simply with a real-world analogy first\n"
+            "  2. EXAMPLE card — reproduce the full step-by-step worked example from the section\n"
+            "  3. QUESTION card — a fresh practice problem (different numbers, same concept)\n"
+            "Never merge two different concept sections into one card.\n"
+            "Generating MORE cards = better learning outcome for this student."
+        )
+        parts.append(
+            "MCQ difficulty: EASY. Use numbers already seen. Wrong options clearly wrong."
+        )
 
     elif learning_profile.speed == "FAST" and learning_profile.comprehension == "STRONG":
         parts.append(
@@ -602,6 +634,25 @@ def _build_card_profile_block(learning_profile, history: dict | None) -> str:
             "- Add 'why it works' reasoning: after each rule or formula, explain the mathematical intuition behind it.\n"
             "- Include at least one challenging application example per card (edge case, non-obvious use, or extension).\n"
             "- Questions may use academic vocabulary. Distractors should represent common mathematical misconceptions, not guesses."
+        )
+        parts.append(
+            "\nCARD DENSITY for this student:\n"
+            "1-2 focused cards per major topic section:\n"
+            "  - 1 TEACH card: concept + key property/formula combined (keep it tight)\n"
+            "  - 1 EXAMPLE card only if the section has a worked example\n"
+            "Pack substance into each card. Avoid padding or repetitive scaffolding."
+        )
+        parts.append(
+            "MCQ difficulty: HARD. Combine properties or use trap distractors (carry errors, sign errors)."
+        )
+
+    else:
+        parts.append(
+            "\nCARD DENSITY:\n"
+            "1-2 cards per major topic section:\n"
+            "  - 1 TEACH card for the core concept\n"
+            "  - 1 EXAMPLE card if the section contains worked examples\n"
+            "Every section from the user prompt must appear in at least one card."
         )
 
     if learning_profile.engagement == "BORED":
@@ -642,6 +693,13 @@ def build_cards_system_prompt(
     learning_profile=None,   # LearningProfile | None
     history: dict | None = None,
     images: list[dict] | None = None,
+    remediation_weak_concepts: list[str] | None = None,
+    generate_as: str = "NORMAL",
+    blended_state_score: float = 2.0,
+    confidence_score: float = 0.5,
+    trend_direction: str = "STABLE",
+    engagement: str = "ENGAGED",
+    section_domain: str = "TYPE_A",
 ) -> str:
     """Build the system prompt for unified card-based lesson generation.
 
@@ -669,7 +727,7 @@ def build_cards_system_prompt(
         useful = [
             img for img in images
             if img.get("image_type", "").upper() in ("DIAGRAM", "FORMULA")
-            and img.get("is_educational", True)
+            and img.get("is_educational") is not False
             and img.get("description")
             and not any(
                 kw in (img.get("description") or "").lower()
@@ -685,36 +743,81 @@ def build_cards_system_prompt(
             images_block = (
                 f"\n\nAVAILABLE IMAGES FOR THIS SECTION ({len(useful)} total):\n"
                 + "\n".join(lines)
-                + "\n\nIMAGE ASSIGNMENT RULES:\n"
-                "- In each card's `image_indices` field, list 0-based indices of images that belong on that card.\n"
-                "- Choose images based on their description matching the card's content topic.\n"
-                "- Embed [IMAGE:N] in the content text at the EXACT point where that image is referenced.\n"
-                "  Example: \"The number line below shows integers: [IMAGE:0] Each tick mark is one unit.\"\n"
-                "- Each image appears on exactly ONE card. Use `image_indices: []` if no image fits.\n"
-                "- NEVER put all images on card 1. Distribute based on topic relevance."
+                + "\n\nIMAGE ASSIGNMENT RULES — FOLLOW EXACTLY:\n"
+                "- Distribute images across cards based on topic match. Match image description to card content.\n"
+                "- Each image appears on EXACTLY ONE card — never share the same image between cards.\n"
+                "- Assign MAXIMUM ONE image per card (image_indices must have 0 or 1 entry, never 2+).\n"
+                "- Embed [IMAGE:N] in the content at the exact sentence where that image is referenced.\n"
+                "  Example: 'The number line below shows counting: [IMAGE:0] Each step adds one unit.'\n"
+                "- Number line image → assign to addition/subtraction/counting card.\n"
+                "- Multiplication table/array image → assign to multiplication/division card.\n"
+                "- Geometric shape image → assign to measurement/geometry card.\n"
+                "- Formula/equation image → assign to the card that introduces that formula.\n"
+                "- Distribute ALL images. Every available image should appear on some card.\n"
+                "FORBIDDEN:\n"
+                "- image_indices: [0, 1, 2] on one card (max 1 image per card)\n"
+                "- Same image index on multiple cards\n"
+                "- All images on the first 1-2 cards\n"
+                "- image_indices: [] on ALL cards when images are available\n"
             )
+
+    _DOMAIN_NOTES = {
+        "TYPE_A": (
+            "\nSECTION TYPE A (Arithmetic): Preserve vertical layouts. Show every carry step. "
+            "Properties (Zero, Identity, Commutative) = separate TEACH cards. Never merge two properties. "
+            "Multi-digit multiplication: show partial products on separate lines."
+        ),
+        "TYPE_B": (
+            "\nSECTION TYPE B (Equations): Every solving example MUST include check step (substitute back). "
+            "STRUGGLING: use balance/scale analogy. MCQ tests solving AND verifying."
+        ),
+        "TYPE_C": (
+            "\nSECTION TYPE C (Fractions): Images are critical — place before symbolic math in STRUGGLING mode. "
+            "LCD finding = separate TEACH card from the addition procedure."
+        ),
+        "TYPE_D": (
+            "\nSECTION TYPE D (Geometry): Every formula = own TEACH card. "
+            "Labeled diagram IN the card that uses it. STRUGGLING: show labeled shape before formula."
+        ),
+        "TYPE_E": (
+            "\nSECTION TYPE E (Definitions/Properties): Each term = own TEACH card. "
+            "Each property = own TEACH card with formal statement + worked example. "
+            "MCQ tests identification ('Which property is shown?')."
+        ),
+        "TYPE_F": (
+            "\nSECTION TYPE F (Percents/Proportions): Each conversion procedure = separate TEACH card. "
+            "STRUGGLING: use money examples for everything."
+        ),
+        "TYPE_G": (
+            "\nSECTION TYPE G (Exponents/Polynomials): Each exponent rule = own TEACH card. "
+            "STRUGGLING: expand exponents (2³ = 2 × 2 × 2)."
+        ),
+    }
+    domain_block = _DOMAIN_NOTES.get(section_domain, "")
 
     base_prompt = f"""You are ADA, an adaptive math tutor for children. You create interactive learning cards.
 
 Your job is to take textbook sub-sections and transform them into an engaging sequence of typed learning cards.
 
-CARD TYPES — choose the best type for each sub-section:
-- TEACH   : Main explanation — definition, concept, property, or new idea
-- EXAMPLE : Worked example with step-by-step solution
-- VISUAL  : Image-heavy card — use when a diagram IS the explanation
-- RECAP   : Summary or consolidation of 2+ prior topics
-- FUN     : Engagement hook — surprising fact, real-world mystery, or puzzle that motivates the concept
-- QUESTION: Standalone practice problem (no new content, just a challenge)
+CARD TYPES:
+- TEACH       : Concepts, definitions, rules, properties, formulas, introductions. No worked computations.
+- EXAMPLE     : Worked textbook examples. ALL steps shown. Title preserves original label ("Example 1.41").
+- APPLICATION : Word-problem examples (character names, "how many/much"). Structure:
+                problem story → what we seek → operation + WHY → math → sentence answer.
+                Title preserves original label ("Example 1.52").
+- QUESTION    : Try It practice problems. Title preserves label ("Try It 1.81"). Include a hint.
+- EXERCISE    : End-of-section practice sets. Instructions + grouped problems.
+- VISUAL      : Use ONLY when a diagram IS the entire explanation.
+- RECAP       : Summary of 2+ prior topics. LAST card only.
+- FUN         : Engagement hook. FIRST card only, only if concept has a genuine surprising hook.
 
 CARD SEQUENCE ORDER — NON-NEGOTIABLE:
 1. The sub-sections in the user prompt are in the EXACT curriculum order of the textbook.
    Generate cards in THAT order. Sub-section 1 cards come FIRST, sub-section 2 cards come
    NEXT, and so on. NEVER move a later sub-section's cards ahead of an earlier one.
-2. Within each sub-section topic group, enforce this type order:
-   TEACH → VISUAL → EXAMPLE → QUESTION
-   - TEACH card(s) always appear BEFORE any EXAMPLE card on the same topic.
-   - VISUAL cards accompany the TEACH card they illustrate — place directly after it.
-   - QUESTION cards come AFTER the TEACH and EXAMPLE cards for that topic.
+2. Within each section: TEACH → VISUAL → EXAMPLE/APPLICATION → QUESTION
+   - HOW TO sections → ONE TEACH card with numbered procedural steps.
+   - NEVER put EXAMPLE before TEACH on the same topic.
 3. FUN card rule: A FUN card may only appear as the VERY FIRST card of the entire lesson
    (engagement opener before all teaching). Never insert FUN mid-sequence. Only add a FUN
    card if the concept has a genuinely surprising real-world hook worth leading with.
@@ -722,6 +825,42 @@ CARD SEQUENCE ORDER — NON-NEGOTIABLE:
    lesson. Never insert RECAP in the middle of the card sequence.
 5. A student must NEVER encounter an advanced concept card before seeing the foundational
    concept it depends on. The sub-section order IS the dependency order — follow it exactly.
+
+## TEXTBOOK BLUEPRINT RULES — OVERRIDE WHEN [TYPE] TAGS PRESENT
+
+[TYPE: LEARNING_OBJECTIVES]
+  → ONE TEACH card. Title: "What You'll Learn". Content: 3-5 bullets "By the end, you'll..."
+  → MCQ: EASY — predict which skill to practice.
+
+[TYPE: CONCEPT]
+  → 1-2 TEACH cards. STRUGGLING: analogy first → numbered steps. FAST: definition → "why it works".
+
+[TYPE: HOW_TO]
+  → ONE TEACH card. Numbered procedure steps exactly as written. MCQ tests procedure application.
+
+[TYPE: EXAMPLE]
+  → Check content: if it contains character names / "how many" / everyday objects → use APPLICATION.
+  → Otherwise: EXACTLY ONE EXAMPLE card. Title: exact original label verbatim.
+  → Show full problem statement THEN every step. NEVER skip or summarize a step.
+  → STRUGGLING: each step on its own line + plain-English "why" per operation.
+  → FAST: compact math, no narration padding.
+  → MCQ: same method, DIFFERENT numbers. Never reuse the example's exact values.
+
+[TYPE: TRY_IT]
+  → EXACTLY ONE QUESTION card. Title: exact original label.
+  → Show the textbook problem verbatim.
+  → Hint MUST use a VISUAL method:
+      STRUGGLING/NORMAL: dot arrays (● ● ● ● ●), number line (0—1—2—3), or labeled diagram with step numbers.
+      FAST: brief formula reminder only (e.g., "Recall: A = l × w").
+  → MCQ: same concept, DIFFERENT numbers from the original problem.
+
+[TYPE: TRY_IT_BATCH]  (pre-merged by backend before LLM call — FAST mode only)
+  → ONE multi-part QUESTION card covering ALL merged Try It exercises.
+  → Title format: "Try It X.NN – X.MM (Parts a–c)" using first and last labels.
+  → Each part labeled (a), (b), (c)... with the original problem text.
+  → ONE MCQ covering the underlying concept (not just one sub-part).
+
+[TYPE: TIP] → already merged into preceding card. No separate card needed.
 
 EXPLANATION RULES (apply to every card):
 - Use everyday language a 10-year-old can understand
@@ -736,38 +875,76 @@ EXPLANATION RULES (apply to every card):
   Never summarize a theorem without stating it.
 - WORKED EXAMPLES ARE MANDATORY — if the source contains a step-by-step example, include
   ALL steps in full. Never summarize or skip a worked example step.
-- COMPLETE COVERAGE: if a sub-section covers multiple topics, your cards MUST address every one.
+- COMPLETE COVERAGE: every single sub-section from the user prompt MUST appear in at least one card. Never skip a section. Never merge two different topic sections into one card.
+  The numbered section list at the end of the user prompt is your contract — verify all sections are covered before responding.
 
 CARD SCHEMA — every card must have exactly these fields:
 
 {{
-  "card_type": "TEACH|EXAMPLE|VISUAL|RECAP|FUN|QUESTION",
-  "title": "<concise card title — 3-8 words>",
-  "content": "<markdown. Embed [IMAGE:N] at the exact line where image N is contextually relevant.>",
-  "image_indices": [<0-based indices of images used — empty [] if none>],
+  "card_type": "TEACH|EXAMPLE|APPLICATION|QUESTION|VISUAL|RECAP|FUN|EXERCISE",
+  "title": "Exact original label for EXAMPLE/TRY_IT; descriptive otherwise",
+  "content": "Markdown. Embed [IMAGE:N] exactly where the image is contextually relevant.",
+  "image_indices": [],
   "question": {{
-    "text": "<MCQ question stem — math notation with $...$>",
-    "options": ["<A>", "<B>", "<C>", "<D>"],
-    "correct_index": <0-based int, value in [0, 3]>,
-    "explanation": "<1-3 sentences explaining why the correct option is right>"
+    "text": "Question using DIFFERENT numbers from card content",
+    "options": ["a", "b", "c", "d"],
+    "correct_index": 0,
+    "explanation": "1-2 sentences naming the rule",
+    "difficulty": "EASY|MEDIUM|HARD"
+  }},
+  "question2": {{
+    "text": "DIFFERENT scenario, different numbers, testing the SAME concept rule",
+    "options": ["a", "b", "c", "d"],
+    "correct_index": 0,
+    "explanation": "Brief explanation of why correct answer is right",
+    "difficulty": "EASY|MEDIUM|HARD"
   }}
 }}
 
 CARD COUNT: Generate as many cards as the content requires.
 Cover every sub-topic fully. Do NOT consolidate to save tokens.
 
-MCQ RULE: Every card has exactly ONE multiple-choice question. NO True/False.
-The field is named "question" (not "quick_check", not "questions").
+DUAL MCQ RULE: Always generate BOTH `question` AND `question2` for every card.
+`question2` MUST test the same skill from a completely different angle — new scenario,
+new numbers, new wording. NEVER reuse the scenario, numbers, or answer options from `question`.
+Students see `question` first; if they answer wrong, `question2` appears instantly.
 
-MCQ QUESTION QUALITY RULE — CRITICAL:
-- NEVER write a question whose answer is explicitly stated verbatim in the card content above it.
-  BAD: Content says "the total value is 215" → Question asks "What is the total value?"
-  BAD: Content says "Whole numbers include 0" → Question asks "Do whole numbers include 0?"
-  GOOD: "If you replaced the 2 hundreds with 4 hundreds, what would the new total be?"
-  GOOD: "Which set of blocks represents a value greater than 300?"
-- Questions MUST test UNDERSTANDING, REASONING, or APPLICATION — not reading comprehension.
-- All 4 answer choices must be plausible (no obviously silly distractors).
-- For EXAMPLE and TEACH cards: question must apply the concept to a NEW scenario with different numbers/context.
+## MCQ RULES — MANDATORY ON EVERY CARD
+
+Every card (TEACH, EXAMPLE, APPLICATION, QUESTION) MUST end with an MCQ. No exceptions.
+
+MCQ FORMAT:
+  "question": {{
+    "text": "...",
+    "options": ["a", "b", "c", "d"],
+    "correct_index": 0-3,
+    "explanation": "1-2 sentences naming the rule or method",
+    "difficulty": "EASY|MEDIUM|HARD"
+  }}
+
+DIFFICULTY BY DELIVERY MODE (generate_as):
+  STRUGGLING → EASY:   numbers already seen, obviously-wrong distractors, confidence-building.
+  NORMAL     → MEDIUM: different numbers, real computation, common-mistake distractors.
+  FAST       → HARD:   combine two concepts, large numbers, trap distractors, reversed questions.
+
+MCQ RULES BY CARD TYPE:
+  TEACH:       Tests understanding of the rule/definition on THIS card. Applies concept to new scenario.
+               NEVER test content from future cards.
+  EXAMPLE:     Same method as the worked example, but DIFFERENT numbers.
+               Student solves by following the same steps just shown.
+  APPLICATION: Tests operation identification or problem setup for a similar scenario.
+               Distractors: wrong operation, reversed setup, units confusion.
+  QUESTION:    "One more quick one" — same concept, different numbers.
+
+UNIVERSAL DISTRACTOR RULES:
+  1. NEVER reuse exact numbers from card content in the MCQ question.
+  2. Always exactly 4 options (a, b, c, d). Exactly 1 correct.
+  3. Distractors represent real student errors:
+     • Adding instead of multiplying; forgetting to carry; confusing Zero vs Identity property;
+       off-by-one; reversed digits; wrong partial product.
+  4. RANDOMIZE correct answer position across cards — distribute evenly across a/b/c/d.
+     Do NOT default to (c) as the correct option on every card.
+  5. Explanation: 1-2 sentences. Name the specific rule or key step.
 
 IMAGE RULE: If you reference an image in content, write [IMAGE:N] at that exact position
 (N = 0-based index from the AVAILABLE IMAGES list). Also add N to image_indices.
@@ -798,15 +975,52 @@ OUTPUT FORMAT — respond with valid JSON only:
         "text": "What does X mean?",
         "options": ["Option A", "Option B", "Option C", "Option D"],
         "correct_index": 0,
-        "explanation": "Because..."
+        "explanation": "Because...",
+        "difficulty": "MEDIUM"
+      }},
+      "question2": {{
+        "text": "Different scenario testing the same concept",
+        "options": ["Option A", "Option B", "Option C", "Option D"],
+        "correct_index": 1,
+        "explanation": "Because...",
+        "difficulty": "MEDIUM"
       }}
     }}
   ]
-}}{images_block}{interests_text}{style_text}{_language_instruction(language)}"""
+}}{domain_block}{images_block}{interests_text}{style_text}{_language_instruction(language)}"""
 
     # Append adaptive student profile block (empty string if learning_profile is None)
     profile_block = _build_card_profile_block(learning_profile, history)
-    return base_prompt + profile_block
+    result = base_prompt + profile_block
+
+
+    # Append remediation instructions when student previously failed specific concepts
+    if remediation_weak_concepts:
+        weak_list = "\n".join(f"  - {c}" for c in remediation_weak_concepts[:10])
+        result += (
+            "\n\nREMEDIATION RE-ATTEMPT — student previously failed these concepts:\n"
+            f"{weak_list}\n"
+            "For any card that covers these topics:\n"
+            "  • Open with a concrete real-world analogy\n"
+            "  • Show at least one fully worked step-by-step example\n"
+            "  • Use simpler language and shorter sentences\n"
+            "All other sections still required — do NOT skip any section.\n"
+        )
+
+    # Append single DELIVERY MODE block — only the active mode, not all three
+    _mode_block = _MODE_DELIVERY.get(generate_as, _MODE_DELIVERY["NORMAL"])
+    result += (
+        f"\n\n{_mode_block}\n\n"
+        f"## PROFILE MODIFIERS\n"
+        f"confidence={confidence_score:.2f} | trend={trend_direction} | engagement={engagement}\n"
+        "- IF confidence < 0.4: Add 1 encouragement line. Use easier MCQ distractors.\n"
+        "- IF confidence > 0.8 AND generate_as = \"FAST\": Add optional depth extension.\n"
+        "- IF trend = \"WORSENING\": Add an extra worked example BEFORE the MCQ.\n"
+        "- IF trend = \"IMPROVING\": Acknowledge improvement subtly.\n"
+        "- IF engagement = \"OVERWHELMED\": Add extra scaffolding regardless of generate_as.\n"
+    )
+
+    return result
 
 
 def _build_user_prompt_profile_block(
@@ -846,6 +1060,14 @@ def build_cards_user_prompt(
     interests: list | None = None,
     style: str = "default",
     learning_profile=None,
+    concept_overview: str | None = None,
+    section_position: str | None = None,
+    concept_index: int = 0,
+    concepts_remaining: int = 0,
+    concepts_covered: list[str] | None = None,
+    blended_score: float = 2.0,
+    generate_as: str = "NORMAL",
+    images_used_this_section: list[str] | None = None,
 ) -> str:
     """Build the user prompt for card-based lesson generation."""
     import re
@@ -855,10 +1077,12 @@ def build_cards_user_prompt(
     total_sections = len(sub_sections)
     for i, sec in enumerate(sub_sections, 1):
         ordinal = f"SECTION {i} of {total_sections}"
-        foundational_note = " — FOUNDATIONAL (teach this first)" if i == 1 else (
-            f" — builds on Section {i - 1}" if i > 1 else ""
-        )
-        sections_text += f"\n--- {ordinal}{foundational_note}: {sec['title']} ---\n{sec['text']}\n"
+        section_type = sec.get("section_type")
+        if section_type:
+            sections_text += f"\n--- {ordinal} [TYPE: {section_type}] — {sec['title']} ---\n{sec['text']}\n"
+        else:
+            foundational_note = " — FOUNDATIONAL (teach this first)" if i == 1 else f" — builds on Section {i - 1}"
+            sections_text += f"\n--- {ordinal}{foundational_note}: {sec['title']} ---\n{sec['text']}\n"
 
     # Filter meaningful LaTeX
     latex_text = ""
@@ -889,7 +1113,7 @@ def build_cards_user_prompt(
         diagrams = [
             img for img in images
             if img.get("image_type", "").upper() in ("DIAGRAM", "FORMULA")
-            and img.get("is_educational", True)
+            and img.get("is_educational") is not False
             and img.get("description")
             and not any(
                 kw in (img.get("description") or "").lower()
@@ -908,13 +1132,30 @@ def build_cards_user_prompt(
                 + "\n".join(desc_lines)
                 + "\n\nReference images naturally in your content with [IMAGE:N] at the exact "
                 "position where the image adds value (N = index from list above). "
-                "Also add N to that card's image_indices. Distribute images based on topic relevance — "
-                "do NOT assign all images to the first card."
+                "Also add N to that card's image_indices. "
+                "Distribute images across cards by topic match — one image per card max.\n"
+                "REQUIRED: Every available image MUST appear on exactly one card.\n"
+                "Match: number line → counting/addition card. Array → multiplication card.\n"
+                "Formula image → card that introduces that formula."
             )
         else:
             image_text = "\n\nNo diagrams available."
 
-    prompt = f"""Create learning cards for the following math concept.
+    # Build per-section preamble when called from _generate_cards_per_section
+    per_section_preamble = ""
+    if concept_overview is not None and section_position is not None:
+        per_section_preamble = (
+            f"CONCEPT: {concept_title}\n"
+            f"OVERVIEW: {concept_overview}\n\n"
+            f"You are generating cards for {section_position}.\n"
+            "Generate cards that cover ALL content in the section below — every example,\n"
+            "every definition, every solution step must appear in at least one card.\n\n"
+        )
+
+    prompt = f"""## GENERATION MODE: {generate_as}
+Apply DELIVERY MODE: {generate_as} rules from the system prompt strictly.
+
+{per_section_preamble}Create learning cards for the following math concept.
 
 **Concept:** {concept_title}
 
@@ -926,6 +1167,21 @@ ORDERING REQUIREMENT: Generate cards in the order of the sections above.
 Section 1 → first card(s). Section 2 → next card(s). Never reorder sections.
 Within each section: TEACH card first, then EXAMPLE, then QUESTION.
 Respond with valid JSON only."""
+
+    # Build completeness checklist — LLM must explicitly cover every section
+    section_list = "\n".join(
+        f"  {i}. [{sec.get('section_type', 'CONCEPT')}] {sec['title']}"
+        if sec.get("section_type")
+        else f"  {i}. {sec['title']}"
+        for i, sec in enumerate(sub_sections, 1)
+    )
+    prompt += (
+        f"\n\nCOMPLETENESS REQUIREMENT — MANDATORY:\n"
+        f"You MUST generate at least one card for EACH of the following sections.\n"
+        f"Do not skip any section, regardless of how brief it appears in the source:\n"
+        f"{section_list}\n\n"
+        f"Verify your card list covers ALL sections above before responding."
+    )
 
     # Inject misconception alert when a persistent wrong-option pattern is detected
     if wrong_option_pattern is not None:
@@ -942,6 +1198,19 @@ Respond with valid JSON only."""
     profile_block = _build_user_prompt_profile_block(language, interests, style, learning_profile)
     if profile_block:
         prompt += profile_block
+
+    # Append COVERAGE CONTEXT block
+    prompt += (
+        f"\n\n## COVERAGE CONTEXT\n"
+        f"concept_index={concept_index} | concepts_remaining={concepts_remaining}\n"
+        f"concepts_covered={concepts_covered or []}\n"
+        f"images_already_used={images_used_this_section or []}\n\n"
+        "Rules:\n"
+        "- Do NOT reuse any image in images_already_used\n"
+        "- Cover ALL concepts in the section — no concept may be skipped\n"
+        f"- If generate_as=STRUGGLING and this card uses an image, "
+        "add a 1-sentence plain-English caption below the image\n"
+    )
 
     return prompt
 

@@ -87,7 +87,9 @@
   "assist.thinking": "思考中...",
   "completion.mastered": "概念已掌握！",
   "completion.masteredMsg": "你真正理解了{{title}}。太厉害了！",
+  "completion.excellent": "出色！",
   "completion.almostThere": "快要掌握了！",
+  "completion.keepPracticing": "继续练习！",
   "completion.almostMsg": "{{title}}学得不错。让我们再复习一次！",
   "completion.outOf": "满分 100",
   "completion.tryAgain": "再试一次",
@@ -112,5 +114,6 @@
   "image.diagram": "概念示意图",
   "learning.generatingCard": "正在生成您的下一张卡片...",
   "learning.reviewDue": "复习到期",
-  "learning.reviewDueBadge": "📖"
+  "learning.reviewDueBadge": "📖",
+  "learning.conceptsProgress": "已完成 {{covered}} / {{total}} 个章节"
 }

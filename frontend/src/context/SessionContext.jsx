@@ -8,9 +8,11 @@ import {
   beginCheck,
   sendResponse,
   completeCardAndGetNext,
+  completeSection,
   recordCardInteraction,
   loadRemediationCards as loadRemediationCardsAPI,
   beginRecheck as beginRecheckAPI,
+  getNextSectionCards,
 } from "../api/sessions";
 import { useStudent } from "./StudentContext";
 import { useTheme } from "./ThemeContext";
@@ -55,6 +57,13 @@ const initialState = {
   checkPassed: null,
   conceptLocked: false,
   bestScore: null,
+  // Rolling adaptive replace
+  adaptiveCallInFlight: false,
+  // Rolling section generation
+  hasMoreConcepts: true,
+  conceptsTotal: 0,
+  conceptsCoveredCount: 0,
+  rollingCallInFlight: false,
 };
 
 // Valid phases: IDLE, LOADING, CARDS, CHECKING, COMPLETED,
@@ -76,11 +85,17 @@ function sessionReducer(state, action) {
         totalQuestions: action.payload.total_questions,
         phase: "CARDS",
         loading: false,
+        hasMoreConcepts: action.payload.has_more_concepts ?? true,
+        conceptsTotal: action.payload.concepts_total ?? 0,
+        conceptsCoveredCount: action.payload.concepts_covered_count ?? 0,
       };
     case "NEXT_CARD":
       return {
         ...state,
-        currentCardIndex: state.currentCardIndex + 1,
+        currentCardIndex: Math.min(
+          state.currentCardIndex + 1,
+          Math.max(0, state.cards.length - 1)
+        ),
         idleTriggerCount: 0,
         motivationalNote: null,
         performanceVsBaseline: null,
@@ -135,16 +150,90 @@ function sessionReducer(state, action) {
         learningProfileSummary: action.payload.learning_profile_summary ?? null,
         adaptationApplied: action.payload.adaptation_applied ?? null,
       };
+    case "ADAPTIVE_CALL_STARTED":
+      return { ...state, adaptiveCallInFlight: true };
+
+    case "ADAPTIVE_CALL_DONE":
+      return { ...state, adaptiveCallInFlight: false };
+
+    case "ROLLING_CALL_STARTED":
+      return { ...state, rollingCallInFlight: true };
+
+    case "ROLLING_CALL_DONE":
+      return { ...state, rollingCallInFlight: false };
+
+    case "APPEND_CARDS":
+      return {
+        ...state,
+        cards: [...state.cards, ...action.payload.cards],
+        hasMoreConcepts: action.payload.has_more_concepts,
+        conceptsTotal: action.payload.concepts_total,
+        conceptsCoveredCount: action.payload.concepts_covered_count,
+        rollingCallInFlight: false,
+        adaptiveCallInFlight: false,
+      };
+
+    case "REPLACE_UPCOMING_CARD": {
+      // targetIndex is the card AFTER the current one — pre-prepared while the
+      // student reads the current card
+      const targetIndex = state.currentCardIndex + 1;
+      const newCards = [...state.cards];
+      if (targetIndex < newCards.length) {
+        // Replace the pre-generated placeholder at that slot
+        newCards[targetIndex] = { ...action.payload.card, index: targetIndex };
+      } else {
+        // Append if no slot exists yet
+        newCards.push({ ...action.payload.card, index: newCards.length });
+      }
+
+      // Re-sort the upcoming portion (currentCardIndex+1 onwards) by section_index
+      // so an adaptive replacement card lands in the correct pedagogical order.
+      // Cards already seen (0..currentCardIndex) are never reordered.
+      const seen = newCards.slice(0, state.currentCardIndex + 1);
+      const upcoming = newCards.slice(state.currentCardIndex + 1);
+      upcoming.sort((a, b) => {
+        const ai = a.section_index ?? Infinity;
+        const bi = b.section_index ?? Infinity;
+        return ai - bi;
+      });
+      // Re-stamp index fields so they match array position
+      const sortedCards = [
+        ...seen,
+        ...upcoming.map((c, i) => ({ ...c, index: seen.length + i })),
+      ];
+
+      return {
+        ...state,
+        cards: sortedCards,
+        adaptiveCardLoading: false,
+        adaptiveCallInFlight: false,
+        motivationalNote: action.payload.motivational_note ?? null,
+        learningProfileSummary: action.payload.learning_profile_summary ?? null,
+        adaptationApplied: action.payload.adaptation_applied ?? null,
+      };
+    }
+
+    case "INSERT_RECOVERY_CARD": {
+      const insertAt = state.currentCardIndex + 1;
+      const newCards = [
+        ...state.cards.slice(0, insertAt),
+        { ...action.payload, index: insertAt },
+        ...state.cards.slice(insertAt).map((c, i) => ({
+          ...c, index: insertAt + 1 + i,
+        })),
+      ];
+      return { ...state, cards: newCards };
+    }
+
     case "SET_DIFFICULTY_BIAS":
       return { ...state, difficultyBias: action.payload };
     case "ADAPTIVE_CARD_ERROR":
       return {
         ...state,
         adaptiveCardLoading: false,
-        currentCardIndex: Math.min(
-          state.currentCardIndex + 1,
-          state.cards.length - 1
-        ),
+        currentCardIndex: state.cards.length > 0
+          ? Math.min(state.currentCardIndex, state.cards.length - 1)
+          : 0,
         idleTriggerCount: 0,
         motivationalNote: null,
         performanceVsBaseline: null,
@@ -154,7 +243,7 @@ function sessionReducer(state, action) {
       return {
         ...state,
         phase: "CHECKING",
-        messages: [{ role: "assistant", content: action.payload }],
+        messages: [{ role: "assistant", content: action.payload.response, image: action.payload.image ?? null }],
         loading: false,
       };
     case "ANSWER_SENT":
@@ -171,7 +260,7 @@ function sessionReducer(state, action) {
         ...state,
         messages: [
           ...state.messages,
-          { role: "assistant", content: action.payload.response },
+          { role: "assistant", content: action.payload.response, image: action.payload.image ?? null },
         ],
         checkLoading: false,
       };
@@ -271,7 +360,6 @@ function sessionReducer(state, action) {
   }
 }
 
-const MAX_ADAPTIVE_CARDS = 20;
 
 export function SessionProvider({ children }) {
   const [state, dispatch] = useReducer(sessionReducer, initialState);
@@ -279,8 +367,15 @@ export function SessionProvider({ children }) {
   const { style } = useTheme();
 
   const friendlyError = (err) => {
+    console.error("[ADA] API error:", err.code, err.response?.status, err.message);
     if (err.code === "ECONNABORTED" || err.message?.includes("timeout")) {
       return i18n.t("error.timeout");
+    }
+    if (err.response?.status === 401) {
+      return "Authentication failed — check API key config.";
+    }
+    if (err.response?.status >= 400) {
+      return err.response?.data?.detail || `Server error (${err.response.status})`;
     }
     if (err.code === "ERR_NETWORK") {
       return i18n.t("error.network");
@@ -322,33 +417,63 @@ export function SessionProvider({ children }) {
         dispatch({ type: "NEXT_CARD" });
         return;
       }
-      // Ceiling reached: record the interaction but skip LLM generation
-      if (state.cards.length >= MAX_ADAPTIVE_CARDS) {
-        recordCardInteraction(state.session.id, signals).catch((err) => console.error("[SessionContext] card interaction failed:", err));
-        dispatch({ type: "NEXT_CARD" });
+
+      const nearEnd = state.currentCardIndex >= state.cards.length - 2;
+
+      // CASE A: both MCQs wrong → recovery card via completeCardAndGetNext
+      if (signals?.wrongAttempts >= 2 && signals?.reExplainCardTitle) {
+        dispatch({ type: "ADAPTIVE_CALL_STARTED" });
+        try {
+          const res = await completeCardAndGetNext(state.session.id, signals);
+          dispatch({ type: "REPLACE_UPCOMING_CARD", payload: res.data });
+          if (res.data?.recovery_card) {
+            dispatch({ type: "INSERT_RECOVERY_CARD", payload: res.data.recovery_card });
+          }
+          useAdaptiveStore.getState().updateMode(res.data.learning_profile_summary);
+          useAdaptiveStore.getState().awardXP(5);
+        } catch (err) {
+          console.error("[SessionContext] adaptive card fetch failed:", err);
+          dispatch({ type: "ADAPTIVE_CARD_ERROR" });
+        } finally {
+          dispatch({ type: "ADAPTIVE_CALL_DONE" });
+        }
         return;
       }
-      dispatch({ type: "ADAPTIVE_CARD_LOADING" });
-      try {
-        const res = await completeCardAndGetNext(state.session.id, signals);
-        trackEvent("adaptive_card_loaded", {
-          card_index:              res.data.card_index,
-          adaptation:              res.data.adaptation_applied,
-          speed:                   res.data.learning_profile_summary?.speed,
-          comprehension:           res.data.learning_profile_summary?.comprehension,
-          engagement:              res.data.learning_profile_summary?.engagement,
-          confidence:              res.data.learning_profile_summary?.confidence_score,
-          performance_vs_baseline: res.data.performance_vs_baseline,
+
+      // CASE B: near end of batch AND more sections remain → pre-fetch next sub-section
+      if (nearEnd && state.hasMoreConcepts && !state.rollingCallInFlight) {
+        dispatch({ type: "ROLLING_CALL_STARTED" });
+        getNextSectionCards(state.session.id, {
+          card_index: state.currentCardIndex,
+          time_on_card_sec: signals?.timeOnCardSec ?? 0,
+          wrong_attempts: signals?.wrongAttempts ?? 0,
+          hints_used: signals?.hintsUsed ?? 0,
+          idle_triggers: signals?.idleTriggers ?? 0,
+        }).then(res => {
+          dispatch({ type: "APPEND_CARDS", payload: res.data });
+        }).catch(err => {
+          console.error("[rolling] failed to fetch next section:", err);
+          dispatch({ type: "ROLLING_CALL_DONE" });
         });
-        dispatch({ type: "ADAPTIVE_CARD_LOADED", payload: res.data });
-        // Wire XP + mode update from adaptive card response
-        useAdaptiveStore.getState().updateMode(res.data.learning_profile_summary);
-        useAdaptiveStore.getState().awardXP(5);
-      } catch (err) {
-        dispatch({ type: "ADAPTIVE_CARD_ERROR" });
+        // Fall through — also advance the card index below (pre-fetch is async)
       }
+
+      // CASE D: mid-batch — record interaction and advance index
+      try {
+        await recordCardInteraction(state.session.id, signals);
+      } catch (err) {
+        console.error("[card] recordCardInteraction failed:", err);
+      }
+      dispatch({ type: "NEXT_CARD" });
     },
-    [state.session, state.cards.length]
+    [
+      state.session,
+      state.cards.length,
+      state.currentCardIndex,
+      state.adaptiveCallInFlight,
+      state.hasMoreConcepts,
+      state.rollingCallInFlight,
+    ]
   );
 
   const goToPrevCard = useCallback(() => {
@@ -409,7 +534,7 @@ export function SessionProvider({ children }) {
       await completeCards(state.session.id);
       // 2. Begin Socratic check (phase → CHECKING)
       const checkRes = await beginCheck(state.session.id);
-      dispatch({ type: "CHECKING_STARTED", payload: checkRes.data.response });
+      dispatch({ type: "CHECKING_STARTED", payload: checkRes.data });
     } catch (err) {
       dispatch({ type: "ERROR", payload: friendlyError(err) });
     }
@@ -417,11 +542,11 @@ export function SessionProvider({ children }) {
 
   // Send answer during Socratic chat (CHECKING or RECHECKING/RECHECKING_2)
   const sendAnswer = useCallback(
-    async (message) => {
+    async (message, engagementSignal = null) => {
       if (!state.session) return;
       dispatch({ type: "ANSWER_SENT", payload: message });
       try {
-        const res = await sendResponse(state.session.id, message);
+        const res = await sendResponse(state.session.id, message, engagementSignal);
         dispatch({ type: "CHECK_RESPONDED", payload: res.data });
         if (res.data.check_complete) {
           trackEvent("lesson_completed", {
@@ -505,6 +630,7 @@ export function SessionProvider({ children }) {
         startRecheck,
         reset,
         setDifficultyBias,
+        rollingCallInFlight: state.rollingCallInFlight,
       }}
     >
       {children}

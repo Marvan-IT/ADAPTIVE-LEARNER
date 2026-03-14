@@ -181,6 +181,14 @@ app.include_router(adaptive_cards_router)
 ### build_socratic_system_prompt extended signature
 Added `socratic_profile=None`, `history=None`, and `session_card_stats=None` params. Appends `_build_session_stats_block()` block at end of prompt. `min_questions` is now dynamic (3/4/5 based on session error_rate). Old STRUGGLING/STRONG/BORED inline blocks replaced by the new helper.
 
+## Hybrid Rolling Card Generation (implemented 2026-03-14)
+See `rolling-card-generation.md` for full details.
+- Initial request generates first 2 sub-sections only (`STARTER_PACK_INITIAL_SECTIONS=2`)
+- Remaining sections stored in `concepts_queue` in session cache; fetched via `POST /next-section-cards`
+- `LessonCard.question2` added — pre-generated second MCQ shown on wrong answer
+- `_ADAPTIVE_CARD_CEILING` removed from `adaptive_router.py`
+- cache_version bumped to 11; `_section_index` int stamp replaces fuzzy text sort
+
 ## Full Adaptive Upgrade (implemented 2026-03-02)
 
 ### XP Award Constants (config.py)
@@ -221,6 +229,48 @@ logger = logging.getLogger(__name__)
 
 ### adaptive/prompt_builder.py — FAST/STRONG wording fix
 Line ~213: replaced `"- Skip introductory analogies..."` with `"- ALL content, definitions, and formulas MUST appear..."`
+
+## Enhanced Adaptive Flashcard System (implemented 2026-03-10)
+
+### build_blended_analytics() now returns 3-tuple
+`(AnalyticsSummary, float, str)` — always unpack: `summary, blended_score, generate_as = build_blended_analytics(...)`.
+Old single-value return is gone. All callers updated: `generate_next_card()`, `generate_cards()`.
+
+### load_student_history() now returns extended Student profile fields
+Added keys: `section_count`, `avg_state_score`, `effective_analogies`, `preferred_analogy_style`,
+`effective_engagement`, `ineffective_engagement`, `boredom_pattern`, `state_distribution`, `overall_accuracy_rate`.
+
+### New module: backend/src/adaptive/boredom_detector.py
+Functions: `detect_boredom_signal(msg)`, `detect_autopilot_pattern(msgs)`, `select_engagement_strategy(eff, ineff)`.
+
+### New endpoint: POST /api/v2/sessions/{id}/section-complete
+Response: `SectionCompleteResponse(section_count, avg_state_score, state_distribution)`.
+Increments rolling avg_state_score. Buckets: score < 1.5 → struggling, >= 2.5 → fast, else normal.
+
+### Adaptive blend weight constants (config.py)
+`ADAPTIVE_COLD_START_*` (section_count=0), `ADAPTIVE_WARM_START_*` (=1), `ADAPTIVE_PARTIAL_*` (=2),
+`ADAPTIVE_STATE_BLEND_*` (>=3). Each has `_CURRENT_WEIGHT` and `_HISTORY_WEIGHT`.
+`ADAPTIVE_NUMERIC_STATE_STRUGGLING_MAX = 1.5`, `ADAPTIVE_NUMERIC_STATE_FAST_MIN = 2.5`.
+
+### New functions in adaptive_engine.py (module-level, not methods)
+- `compute_numeric_state_score(speed, comprehension) -> float` — maps to [1.0, 3.0]
+- `blended_score_to_generate_as(score) -> str` — maps to STRUGGLING/NORMAL/FAST
+
+### Prompt functions with new params (all have safe defaults for backward compat)
+- `build_cards_system_prompt(generate_as, blended_state_score)` — appends STUDENT STATE block
+- `build_cards_user_prompt(concept_index, concepts_remaining, concepts_covered, blended_score, generate_as, images_used_this_section)` — appends COVERAGE CONTEXT block
+- `build_adaptive_prompt(generate_as, blended_state_score, engagement_strategy)` — appends STUDENT STATE + engagement block
+- `build_next_card_prompt(generate_as, blended_state_score, engagement_strategy)` — same additions
+
+### Schema additions
+- `CardBehaviorSignals.engagement_signal: str | None` (adaptive/schemas.py)
+- `StudentResponseRequest.engagement_signal, .strategy_applied` (api/teaching_schemas.py)
+- `RecordInteractionRequest.engagement_signal, .strategy_applied` (api/teaching_router.py inline)
+- New: `SectionCompleteRequest`, `SectionCompleteResponse` (api/teaching_schemas.py)
+
+### No verify_api_key in this project
+The `verify_api_key` FastAPI dependency does NOT exist. Never add it to new endpoints.
+Follow existing endpoint pattern — no API key dependency at route level.
 
 ## Detailed notes
 See `patterns.md` for generation_profile lookup table and profile_builder classification rules.

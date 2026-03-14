@@ -87,7 +87,9 @@
   "assist.thinking": "සිතමින්...",
   "completion.mastered": "සංකල්පය ප්‍රගුණ කර ඇත!",
   "completion.masteredMsg": "ඔබ {{title}} හොඳින් තේරුම් ගෙන ඇත. විශිෂ්ට වැඩක්!",
+  "completion.excellent": "අසාධාරණයි!",
   "completion.almostThere": "තව ටිකක්!",
+  "completion.keepPracticing": "පුහුණුව දිගටම කරන්න!",
   "completion.almostMsg": "{{title}} සඳහා හොඳ උත්සාහයක්. තව වරක් බලමු!",
   "completion.outOf": "100 න්",
   "completion.tryAgain": "නැවත උත්සාහ කරන්න",
@@ -112,5 +114,6 @@
   "image.diagram": "සංකල්ප රූප සටහන",
   "learning.generatingCard": "ඔබේ ඊළඟ කාඩ්පත ජනනය කරමින්...",
   "learning.reviewDue": "සමාලෝචනය නියමිත",
-  "learning.reviewDueBadge": "📖"
+  "learning.reviewDueBadge": "📖",
+  "learning.conceptsProgress": "{{covered}} / {{total}} කොටස් සම්පූර්ණ කළා"
 }

@@ -151,7 +151,7 @@ Results are enriched with student mastery context before being passed to the LLM
 Teaching sessions run through two phases managed by `teaching_service.py`:
 1. **Presentation** — metaphor-based explanation using LLM + knowledge base context
 2. **Socratic Check** — guided questioning; the assistant never gives direct answers
-3. **Mastery threshold** — 60 points (out of 100) required to mark a concept as mastered (constant in `config.py`)
+3. **Mastery threshold** — 70 points (out of 100) required to mark a concept as mastered (constant in `config.py` as `MASTERY_THRESHOLD = 70`)
 
 ### Data Extraction Pipeline
 ```
@@ -165,24 +165,36 @@ Supported: 16 OpenStax math textbooks (Prealgebra through Calculus III). Pipelin
 
 ## Development Workflow
 
-This project uses a structured 5-agent workflow. Every significant feature follows these stages:
+### Claude Code Agentic Workflow (day-to-day)
 
-### Stage 0 — Infrastructure (`devops-engineer` agent)
-**Trigger**: Before a new feature can be tested or deployed; or whenever schema, deployment, or test infrastructure changes are needed.
+All work is done through Claude Code with plan mode. Follow this flow for every non-trivial change:
 
-The devops engineer handles all operational concerns:
-- Alembic migration scripts for every schema change (never `create_all`)
-- Dockerfile and `docker-compose.yml` for containerized local dev
-- GitHub Actions CI/CD workflows (lint, test, build, deploy)
-- `pytest.ini`, `conftest.py`, test database provisioning
-- `.env.example` templates with all required keys documented
-- Structured logging setup, health/readiness endpoints
-- Secrets validation on startup (fail fast if required env vars are missing)
+1. **Enter plan mode** (`EnterPlanMode`) — explore affected files, design the approach, write it to the plan file, then call `ExitPlanMode` for approval before touching any code.
+2. **Explore first** — use `Explore` subagents (via `Task` tool) to read the codebase before proposing changes. Launch up to 3 in parallel for multi-area tasks.
+3. **Use specialist agents** for implementation work:
+   - `backend-developer` — FastAPI endpoints, services, schemas, DB queries
+   - `frontend-developer` — React components, Context reducers, JSX
+   - `comprehensive-tester` — pytest unit/integration tests, React test coverage
+   - `devops-engineer` — Alembic migrations, Docker, CI/CD, test infra
+   - `solution-architect` — HLD/DLD docs for new features
+4. **Track progress** with `TodoWrite` — mark tasks `in_progress` before starting, `completed` immediately after. One `in_progress` task at a time.
+5. **Restart check** — after backend changes, uvicorn `--reload` picks them up automatically. After frontend changes, Vite HMR updates the browser automatically. A manual restart is only needed if:
+   - New dependencies added (`pip install` / `npm install`)
+   - `.env` values changed
+   - Non-hot-reloadable config changes
 
-### Stage 1 — Design (`solution-architect` agent)
-**Trigger**: Any new feature, system component, or significant change.
+### Formal Feature Workflow (significant new features)
 
-The solution architect produces three mandatory deliverables **written to disk** before any code is written:
+For any new feature that spans multiple files or requires API contract changes, follow these stages:
+
+#### Stage 0 — Infrastructure (`devops-engineer` agent)
+**Trigger**: Schema changes, new deployment needs, test infra.
+- Alembic migration scripts (never `create_all`)
+- Dockerfile / `docker-compose.yml` / CI/CD
+- `pytest.ini`, `conftest.py`, `.env.example`
+
+#### Stage 1 — Design (`solution-architect` agent)
+**Trigger**: Any new feature or significant change. Produces docs **before** any code:
 
 ```
 docs/{feature-name}/
@@ -191,39 +203,14 @@ docs/{feature-name}/
 └── execution-plan.md ← Phased WBS, DoD, rollout
 ```
 
-The HLD/DLD/Execution Plan are the source of truth for implementation. No backend or frontend work begins without them.
+#### Stage 2 — Backend (`backend-developer` agent)
+FastAPI endpoints, services, schemas, ChromaDB/NetworkX integrations per DLD.
 
-### Stage 2 — Backend Implementation (`backend-developer` agent)
-**Trigger**: After `docs/{feature-name}/` contains the complete design artifacts.
+#### Stage 3 — Testing (`comprehensive-tester` agent)
+Unit + integration + E2E tests. Every test name maps to a business criterion.
 
-The backend developer consumes the design artifacts and implements:
-- FastAPI endpoints and routers per DLD API contracts
-- SQLAlchemy models per DLD data model (schema changes flagged to devops-engineer for migration)
-- Business logic services (knowledge, teaching, extraction, graph)
-- ChromaDB and NetworkX integrations
-- Security, error handling, and observability as specified in DLD
-- Follows execution plan phases: Foundation → Core Logic → Integration → Hardening
-
-### Stage 3 — Testing (`comprehensive-tester` agent)
-**Trigger**: After each backend implementation phase (can run in parallel with Stage 4).
-
-The tester writes coverage for all criteria in the execution plan's Definition of Done:
-- **Unit tests** (pytest): isolated logic, mocks for DB/LLM/ChromaDB/NetworkX
-- **Integration tests**: FastAPI TestClient + PostgreSQL test DB, ChromaDB in-memory
-- **E2E tests**: full session lifecycle from student creation to mastery
-
-Every test name must map to a business criterion (e.g., `test_teaching_session_marks_mastery_at_70_percent_score`). Test infrastructure (conftest.py, DB setup) is owned by the devops-engineer.
-
-### Stage 4 — Frontend (`frontend-developer` agent)
-**Trigger**: Runs in parallel with Stages 2 and 3, consuming `docs/{feature-name}/HLD.md` and `DLD.md` API contracts.
-
-The frontend developer implements:
-- React components consuming the API contracts defined in DLD
-- State via React Context (StudentContext, SessionContext, ThemeContext)
-- Graph visualization (Sigma + Graphology)
-- Socratic chat UI, presentation view, spaced-repetition card view
-- i18n for all 13 supported languages; RTL support for Arabic
-- WCAG 2.1 AA accessibility, dark/light mode, mobile-first responsive design
+#### Stage 4 — Frontend (`frontend-developer` agent)
+React components, Context state, i18n (13 languages), WCAG 2.1 AA, mobile-first.
 
 ---
 
@@ -307,6 +294,44 @@ docs/
 | Cards generated in random order | `CARD SEQUENCE ORDER` mandatory rule in system prompt + ordinal section labels in user prompt + FUN/RECAP safety-net sort | `prompts.py`, `teaching_service.py` |
 | Mastery readiness bar showing stale historical data | Bar now computed from live in-session `cardStates` (correct/total MCQs seen); color-coded green/primary/amber | `CardLearningView.jsx` |
 
+### ✅ Card Generation & Rendering Fixes (2026-03-09)
+
+| Issue | Fix Applied | File |
+|---|---|---|
+| `is_educational: None` filtered out all images | Changed filter to `is not False` | `teaching_service.py`, `prompts.py` |
+| `_group_by_major_topic()` never called — 57 micro-sections sent to LLM | Now called after `_parse_sub_sections()` — groups into 8-10 topic blocks | `teaching_service.py` |
+| `max_tokens=8000` hardcoded — truncated slow-learner output | Adaptive budget: 8,000–16,000 tokens based on learner profile × section count | `teaching_service.py` |
+| Stale cached cards returned forever despite prompt rebuilds | `cache_version: 2` check forces regeneration when version is behind | `teaching_service.py` |
+| Image filenames in index don't match files on disk | `get_concept_images()` tries indexed name then PDF page-number fallback | `knowledge_service.py` |
+| Card completeness not enforced — LLM skipped sections | Numbered section checklist appended to user prompt + CARD DENSITY instructions | `prompts.py` |
+| Blank screen when card index out of bounds | `if (!card) return null` replaced with loading/error UI | `CardLearningView.jsx` |
+| `NEXT_CARD` had no bounds check — index drifted past cards.length | Added `Math.min` clamp to NEXT_CARD reducer | `SessionContext.jsx` |
+| `ADAPTIVE_CARD_ERROR` triggered -1 index when cards empty | Safe clamp: `cards.length > 0 ? Math.min(index, length-1) : 0` | `SessionContext.jsx` |
+| Adaptive API called on every Next click — fought pre-generated cards | Skip adaptive call when pre-generated cards remain (`index < cards.length - 1`) | `SessionContext.jsx` |
+| `goToNextCard` stale closure — adaptive API never triggered at last card | Added `state.currentCardIndex` to `useCallback` deps array | `SessionContext.jsx` |
+| Frontend port drift — Vite picks 5177+ breaking CORS | Added `server: { port: 5173, strictPort: false }` to vite.config.js | `vite.config.js` |
+| Port 5177 not in CORS allowed list | Added ports 5177, 5178 to `FRONTEND_URL` in `backend/.env` | `backend/.env` |
+| `allow_methods=["*"]` and `allow_headers=["*"]` overly permissive | Restricted to explicit methods and headers; filter empty FRONTEND_URL | `main.py` |
+| `completion.excellent` and `completion.keepPracticing` missing from all 13 locales | Added to all locale files | `locales/*.json` |
+
+### ✅ Card Generation & API Fixes (2026-03-09)
+
+| Issue | Fix Applied | File |
+|---|---|---|
+| LibertAI model `qwen3-coder-next` outputs LaTeX `\ldots` breaking JSON parse | `json-repair>=0.30.0` fallback in `_generate_cards_single()` | `teaching_service.py`, `requirements.txt` |
+| `finish_reason: length` — only 1 card from truncated LLM output | Section texts truncated to 600 chars; `adaptive_max_tokens` raised to 4000–6000 | `teaching_service.py` |
+| `card_type: None` — Pydantic silently dropped unknown field | Added `card_type` field to `LessonCard` schema | `teaching_schemas.py` |
+| DB cache poisoning — bad 1-card result cached forever | `cache_version` check; DB cache cleared manually | `teaching_service.py` |
+| LLM timeout too short for ~130 tok/s model | Updated formula: `max_tokens / 100.0 + 15.0` | `teaching_service.py` |
+| Ghost uvicorn processes on port 8888 | Switched to port 8889; updated `vite.config.js` proxy | `vite.config.js`, `backend/.env` |
+
+### ✅ Socratic Chat Image Fix (2026-03-09)
+
+| Issue | Fix Applied | Files |
+|---|---|---|
+| Socratic chat shows ALL card images whenever any keyword detected | `[CARD:N]` marker: AI tags which card's image it references; backend resolves exact image; frontend renders only that one per message | `prompts.py`, `teaching_service.py`, `teaching_schemas.py`, `teaching_router.py`, `SessionContext.jsx`, `SocraticChat.jsx` |
+| `DiagramPanel` showed every image always visible at top of chat | Removed entirely — replaced by per-message `msg.image` inline render | `SocraticChat.jsx` |
+
 ### ⚠️ Known Technical Debt (Requires devops-engineer)
 
 | Issue | File | Priority |
@@ -337,8 +362,8 @@ cd backend
 source ../.venv/Scripts/activate   # Windows: source ../.venv/Scripts/activate.bat
 pip install -r requirements.txt
 # IMPORTANT: use python -m uvicorn (not bare uvicorn) to ensure venv deps are loaded
-# Port 8888 is used (8000/8001 may be held by stale OS processes from previous sessions)
-python -m uvicorn src.api.main:app --reload --port 8888
+# Port 8889 is used (8000/8001/8888 may be held by stale OS processes from previous sessions)
+python -m uvicorn src.api.main:app --reload --port 8889
 ```
 
 ### Frontend
@@ -347,7 +372,8 @@ cd frontend
 npm install
 npm run dev
 # Dev server runs on http://localhost:5173 (or 5174 if 5173 is taken)
-# VITE_API_BASE_URL in frontend/.env must match the backend port (e.g. http://localhost:8888)
+# VITE_API_BASE_URL in frontend/.env must match the backend port (e.g. http://localhost:8889)
+# vite.config.js proxy already points to http://127.0.0.1:8889
 ```
 
 ### Database (initial setup)

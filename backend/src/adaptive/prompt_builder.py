@@ -44,6 +44,31 @@ _LANGUAGE_NAMES: dict[str, str] = {
 _CONCEPT_TEXT_LIMIT = 3000
 _LATEX_LIMIT = 10
 
+# ── Mode delivery blocks — mirrors _MODE_DELIVERY in api/prompts.py ───────────
+# Kept decoupled intentionally (no api/ import in adaptive/).
+# If modes are added/changed in api/prompts.py, update this dict too.
+_CARD_MODE_DELIVERY: dict[str, str] = {
+    "STRUGGLING": """\
+## DELIVERY MODE: STRUGGLING
+Language: age 8–10. Define every term. Open with real-world analogy FIRST.
+Analogy density: ~80%. Steps: ALWAYS numbered. MCQ: EASY (confidence-building).
+QUESTION hint: MUST use visual method — dot arrays (● ● ●), number line, or labeled diagram.
+Tone: warm, patient, encouraging.""",
+
+    "NORMAL": """\
+## DELIVERY MODE: NORMAL
+Language: high school level. Define terms on first use. Analogy density: ~50%.
+Steps: only for worked examples. MCQ: MEDIUM (real understanding, common-mistake distractors).
+QUESTION hint: concrete approach description (not just 'try it').""",
+
+    "FAST": """\
+## DELIVERY MODE: FAST
+Language: technical terminology freely used. 'Why it works' reasoning included.
+No numbered steps — connected prose. MCQ: HARD (edge cases, traps, reversed questions).
+Analogy density: ~20%. Lead with formula/rule directly.
+NOTE: ALL definitions and formulas MUST appear — reduce scaffolding, NOT substance.""",
+}
+
 
 # ── JSON schema block (embedded in system prompt) ─────────────────────────────
 # Written as a plain string so the LLM sees the exact expected output structure.
@@ -93,6 +118,10 @@ def build_adaptive_prompt(
     gen_profile: GenerationProfile,
     prereq_detail: dict | None,
     language: str = "en",
+    generate_as: str = "NORMAL",
+    blended_state_score: float = 2.0,
+    engagement_strategy: str | None = None,
+    history: dict | None = None,
 ) -> tuple[str, str]:
     """
     Build the (system_prompt, user_prompt) pair for the adaptive lesson LLM call.
@@ -111,6 +140,50 @@ def build_adaptive_prompt(
         Tuple of (system_prompt, user_prompt) strings ready to pass to the LLM.
     """
     system_prompt = _build_system_prompt(learning_profile, gen_profile, language)
+
+    # Append single DELIVERY MODE block — only the active mode, not all three (F3)
+    _confidence = getattr(learning_profile, "confidence_score", 0.5)
+    _trend = (history or {}).get("trend_direction", "STABLE")
+    _engagement_val = getattr(learning_profile, "engagement", "ENGAGED")
+    _mode_block = _CARD_MODE_DELIVERY.get(generate_as, _CARD_MODE_DELIVERY["NORMAL"])
+    system_prompt += (
+        f"\n\n{_mode_block}\n"
+        f"\n## PROFILE MODIFIERS\n"
+        f"confidence={_confidence:.2f} | trend={_trend} | engagement={_engagement_val}\n"
+        "- IF confidence < 0.4: Add 1 encouragement line. Use easier MCQ distractors.\n"
+        "- IF confidence > 0.8 AND generate_as = \"FAST\": Add optional depth extension.\n"
+        "- IF trend = \"WORSENING\": Add an extra worked example BEFORE the MCQ.\n"
+        "- IF trend = \"IMPROVING\": Acknowledge improvement subtly.\n"
+        "- IF engagement = \"OVERWHELMED\": Add extra scaffolding regardless of generate_as.\n"
+    )
+
+    # Append engagement strategy block if provided
+    _strategy_blocks = {
+        "challenge_bump": (
+            "## ENGAGEMENT: CHALLENGE BUMP\n"
+            "The student seems bored. Add a surprising twist, edge case, or counterintuitive "
+            "fact to re-engage them. Make this card notably more challenging than usual."
+        ),
+        "real_world_hook": (
+            "## ENGAGEMENT: REAL-WORLD HOOK\n"
+            "The student seems disengaged. Connect this concept to a vivid real-world application "
+            "or surprising use case. Lead with the application, then explain the math."
+        ),
+        "context_switch": (
+            "## ENGAGEMENT: CONTEXT SWITCH\n"
+            "The student seems on autopilot. Present this concept using a completely different "
+            "representation than usual (e.g., switch from symbolic to visual, or from abstract "
+            "to concrete story)."
+        ),
+        "micro_break": (
+            "## ENGAGEMENT: MICRO-BREAK\n"
+            "The student may need a mental reset. Start this card with a 1-sentence reflection "
+            "question before diving into the new concept."
+        ),
+    }
+    if engagement_strategy and engagement_strategy in _strategy_blocks:
+        system_prompt += "\n\n" + _strategy_blocks[engagement_strategy]
+
     user_prompt = _build_user_prompt(
         concept_detail, learning_profile, gen_profile, prereq_detail
     )
@@ -323,6 +396,9 @@ def build_next_card_prompt(
     language: str = "en",
     wrong_option_pattern: int | None = None,
     difficulty_bias: str | None = None,
+    generate_as: str = "NORMAL",
+    blended_state_score: float = 2.0,
+    engagement_strategy: str | None = None,
 ) -> tuple[str, str]:
     """
     Build (system_prompt, user_prompt) for a single adaptive next-card LLM call.
@@ -347,6 +423,50 @@ def build_next_card_prompt(
         "in the card content above it. BAD: content says 'total is 215' → asks 'What is the total?'. "
         "GOOD: 'If you added 3 more tens, what would the new total be?'"
     )
+
+    # Append single DELIVERY MODE block — only the active mode, not all three (F2)
+    _confidence = getattr(learning_profile, "confidence_score", 0.5)
+    _trend = (history or {}).get("trend_direction", "STABLE")
+    _engagement_val = getattr(learning_profile, "engagement", "ENGAGED")
+    _mode_block_next = _CARD_MODE_DELIVERY.get(generate_as, _CARD_MODE_DELIVERY["NORMAL"])
+    sys_overrides += (
+        f"\n\n{_mode_block_next}\n"
+        f"\n## PROFILE MODIFIERS\n"
+        f"confidence={_confidence:.2f} | trend={_trend} | engagement={_engagement_val}\n"
+        "- IF confidence < 0.4: Add 1 encouragement line. Use easier MCQ distractors.\n"
+        "- IF confidence > 0.8 AND generate_as = \"FAST\": Add optional depth extension.\n"
+        "- IF trend = \"WORSENING\": Add an extra worked example BEFORE the MCQ.\n"
+        "- IF trend = \"IMPROVING\": Acknowledge improvement subtly.\n"
+        "- IF engagement = \"OVERWHELMED\": Add extra scaffolding regardless of generate_as.\n"
+    )
+
+    # Append engagement strategy block if provided
+    _strategy_blocks = {
+        "challenge_bump": (
+            "## ENGAGEMENT: CHALLENGE BUMP\n"
+            "The student seems bored. Add a surprising twist, edge case, or counterintuitive "
+            "fact to re-engage them. Make this card notably more challenging than usual."
+        ),
+        "real_world_hook": (
+            "## ENGAGEMENT: REAL-WORLD HOOK\n"
+            "The student seems disengaged. Connect this concept to a vivid real-world application "
+            "or surprising use case. Lead with the application, then explain the math."
+        ),
+        "context_switch": (
+            "## ENGAGEMENT: CONTEXT SWITCH\n"
+            "The student seems on autopilot. Present this concept using a completely different "
+            "representation than usual (e.g., switch from symbolic to visual, or from abstract "
+            "to concrete story)."
+        ),
+        "micro_break": (
+            "## ENGAGEMENT: MICRO-BREAK\n"
+            "The student may need a mental reset. Start this card with a 1-sentence reflection "
+            "question before diving into the new concept."
+        ),
+    }
+    if engagement_strategy and engagement_strategy in _strategy_blocks:
+        sys_overrides += "\n\n" + _strategy_blocks[engagement_strategy]
+
     system_prompt = base_sys + sys_overrides
 
     # User prompt: concept info

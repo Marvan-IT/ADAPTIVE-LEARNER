@@ -45,16 +45,35 @@ ADAPTIVE_HINT_PENALTY_WEIGHT: float = 0.2    # Weight for hint usage in confiden
 MASTERY_THRESHOLD = 70  # Score out of 100 required to mark a concept as mastered
 
 # ── Socratic check settings ───────────────────────────────────────────────────
-MAX_SOCRATIC_EXCHANGES      = 20  # Maximum back-and-forth exchanges in a Socratic session
+MAX_SOCRATIC_EXCHANGES      = 30  # Maximum back-and-forth exchanges in a Socratic session
 SOCRATIC_MAX_ATTEMPTS       = 3   # Maximum remediation + recheck cycles before session ends
 SOCRATIC_PROGRESS_INTERVAL  = 3   # Show progress summary every N questions
 
 # ── Card session settings ─────────────────────────────────────────────────────
 CARDS_MID_SESSION_CHECK_INTERVAL = 12  # Mood/engagement check-in every N cards
+STARTER_PACK_INITIAL_SECTIONS: int = 2   # Sub-sections generated on first request (fast initial load)
+STARTER_PACK_MAX_SECTIONS: int = 50    # Safety cap — rolling generation won't exceed this total
 
 # ── Adaptive card generation ──────────────────────────────────────────────────
 ADAPTIVE_CARD_MODEL   = OPENAI_MODEL_MINI   # gpt-4o-mini: fast for single-card generation
 # ADAPTIVE_CARD_CEILING removed — card count is determined by content, not a ceiling
+
+# ── Card generation token budgets (profile-adaptive) ──────────────────────────
+# Budget scales with section count × per-section multiplier, clamped to floor/ceiling.
+# SLOW/STRUGGLING learners need 2-3 cards/section with richer explanations.
+CARDS_MAX_TOKENS_SLOW: int = 40_000          # ceiling for SLOW or STRUGGLING profile
+CARDS_MAX_TOKENS_SLOW_FLOOR: int = 8_000     # minimum even for short concepts
+CARDS_MAX_TOKENS_SLOW_PER_SECTION: int = 6_000   # raised for rolling per-section generation
+
+# NORMAL learners (default)
+CARDS_MAX_TOKENS_NORMAL: int = 32_000
+CARDS_MAX_TOKENS_NORMAL_FLOOR: int = 6_000
+CARDS_MAX_TOKENS_NORMAL_PER_SECTION: int = 4_500  # raised for rolling per-section generation
+
+# FAST/STRONG learners need fewer, denser cards
+CARDS_MAX_TOKENS_FAST: int = 24_000
+CARDS_MAX_TOKENS_FAST_FLOOR: int = 4_000
+CARDS_MAX_TOKENS_FAST_PER_SECTION: int = 3_000   # raised for rolling per-section generation
 
 # ── XP Award Values ────────────────────────────────────────────────────────────
 XP_MASTERY: int = 50                  # Base XP awarded on concept mastery
@@ -77,6 +96,18 @@ ADAPTIVE_ACUTE_CURRENT_WEIGHT  = 0.9  # Current-signal weight in acute deviation
 ADAPTIVE_ACUTE_HISTORY_WEIGHT  = 0.1  # History weight in acute deviation mode
 ADAPTIVE_NORMAL_CURRENT_WEIGHT = 0.6  # Current-signal weight in normal variance mode
 ADAPTIVE_NORMAL_HISTORY_WEIGHT = 0.4  # History weight in normal variance mode
+
+# ── Adaptive blend weights ────────────────────────────────────────────────────
+ADAPTIVE_COLD_START_CURRENT_WEIGHT  = 0.80   # section_count == 0
+ADAPTIVE_COLD_START_HISTORY_WEIGHT  = 0.20
+ADAPTIVE_WARM_START_CURRENT_WEIGHT  = 0.70   # section_count == 1
+ADAPTIVE_WARM_START_HISTORY_WEIGHT  = 0.30
+ADAPTIVE_PARTIAL_CURRENT_WEIGHT     = 0.65   # section_count == 2
+ADAPTIVE_PARTIAL_HISTORY_WEIGHT     = 0.35
+ADAPTIVE_STATE_BLEND_CURRENT_WEIGHT = 0.60   # section_count >= 3
+ADAPTIVE_STATE_BLEND_HISTORY_WEIGHT = 0.40
+ADAPTIVE_NUMERIC_STATE_STRUGGLING_MAX = 1.5
+ADAPTIVE_NUMERIC_STATE_FAST_MIN       = 2.5
 
 # ── Boilerplate patterns to strip (line-level) ─────────────────────────
 BOILERPLATE_PATTERNS = [

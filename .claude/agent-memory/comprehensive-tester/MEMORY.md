@@ -123,3 +123,19 @@ Key facts confirmed by reading teaching_service.py:
 - Suite 3 (11 tests): _nearest_concept() + Pillow image validation
 - Suite 4 (5 tests): vision annotator with mocked LLM
 - Suite 5 (4 tests): list_students N+1 fix structural inspection
+
+### Card Generation Test File
+`backend/tests/test_card_generation.py` — 74 tests across 12 groups (all passing).
+Key facts:
+- `TeachingService._group_by_major_topic(sections)` — static method; support headings matched by `_SUPPORT_HEADING` regex (EXAMPLE, Solution, TRY IT, HOW TO, Note, TIP, etc.); a leading support section with no preceding group is kept as-is (not dropped)
+- Adaptive max_tokens formula (inline in generate_cards): SLOW/STRUGGLING=`min(16000, max(8000, n*1800))`; FAST+STRONG=`min(8000, max(4000, n*900))`; else=`min(12000, max(6000, n*1200))`; test via a mirrored `_compute()` helper — no mocking needed
+- `_build_card_profile_block(profile, history)` from `api/prompts.py` — imports directly; returns "" when profile is None; SUPPORT mode triggered by SLOW OR STRUGGLING; ACCELERATE mode requires FAST AND STRONG (both)
+- `build_cards_user_prompt()` sub-section dicts MUST have key `"text"` (not `"content"`); old `"content"` key raises KeyError — this is the regression the test guards
+- COMPLETENESS REQUIREMENT phrase and numbered section list always present in user prompt; ORDERING REQUIREMENT phrase must not have been removed (regression guard)
+- `_make_profile()` helper constructs LearningProfile directly (avoids AnalyticsSummary pipeline); `_make_sub_sections(titles)` builds stub section dicts
+- `TeachingService._find_missing_sections(cards, sections)` — @staticmethod; title match is case-insensitive substring search across combined card title+content text
+- `TeachingService._generate_cards_per_section(...)` — async; uses inner closure calling `self._generate_cards_single`; mock with `patch.object(service, "_generate_cards_single", new=AsyncMock(...))`; side_effect values must be `{"cards": [...]}` dicts (not bare lists); failed section returns `[]` not exception
+- `build_cards_user_prompt()` new params: `concept_overview` and `section_position` — preamble with "OVERVIEW:" only injected when BOTH are non-None; missing either → no preamble
+- `build_cards_system_prompt(remediation_weak_concepts=[...])` — appends "REMEDIATION RE-ATTEMPT" block only when list is non-empty; concept names appear verbatim in block
+- `build_socratic_system_prompt()` question count: `base_min = max(8, n_topics)`, `base_max = min(15, n_topics + 4)` — so min >= 8, max <= 15 always; "SPREAD RULE" always present when covered_topics is non-empty; `MAX_SOCRATIC_EXCHANGES = 30` in config
+- `_extract_failed_topics_from_messages(messages, covered_topics)` — @staticmethod; CORRECTION_PHRASES include "not quite", "actually,", "that is incorrect", "good try", etc.; regex `[^.!?]*\?` extracts first question-ending sentence from prior assistant message (stops at `.` in decimals — "3.45?" yields "45?"); deduplication by `last_assistant_msg[:50]` key; ignores student/non-assistant messages

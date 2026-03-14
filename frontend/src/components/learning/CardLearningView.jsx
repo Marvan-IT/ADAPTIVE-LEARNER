@@ -47,20 +47,22 @@ function DifficultyBadge({ difficulty }) {
 
 /* ─── Card type → visual metadata ─── */
 const CARD_TYPE_META = {
-  TEACH:    { badge: null,              headerAccent: null },
-  EXAMPLE:  { badge: "Example",        headerAccent: null,           badgeColor: "#f59e0b", badgeBg: "rgba(245,158,11,0.12)" },
-  VISUAL:   { badge: "Visual",         headerAccent: null,           badgeColor: "#06b6d4", badgeBg: "rgba(6,182,212,0.12)" },
-  QUESTION: { badge: null,              headerAccent: null },
-  RECAP:    { badge: "Recap",          headerAccent: "#0d9488",      badgeColor: "#0d9488", badgeBg: "rgba(13,148,136,0.12)" },
-  FUN:      { badge: "Fun Fact",       headerAccent: "#7c3aed",      badgeColor: "#7c3aed", badgeBg: "rgba(124,58,237,0.12)" },
-  CHECKIN:  { badge: "Check-In",       headerAccent: null,           badgeColor: "#6366f1", badgeBg: "rgba(99,102,241,0.12)" },
+  TEACH:       { badge: null,            headerAccent: null },
+  EXAMPLE:     { badge: "Example",       headerAccent: null,      badgeColor: "#f59e0b", badgeBg: "rgba(245,158,11,0.12)" },
+  VISUAL:      { badge: "Visual",        headerAccent: null,      badgeColor: "#06b6d4", badgeBg: "rgba(6,182,212,0.12)" },
+  QUESTION:    { badge: null,            headerAccent: null },
+  APPLICATION: { badge: "Application",  headerAccent: "#16a34a", badgeColor: "#16a34a", badgeBg: "rgba(22,163,74,0.12)" },
+  EXERCISE:    { badge: "Practice",      headerAccent: "#7c3aed", badgeColor: "#7c3aed", badgeBg: "rgba(124,58,237,0.12)" },
+  RECAP:       { badge: "Recap",         headerAccent: "#0d9488", badgeColor: "#0d9488", badgeBg: "rgba(13,148,136,0.12)" },
+  FUN:         { badge: "Fun Fact",      headerAccent: "#7c3aed", badgeColor: "#7c3aed", badgeBg: "rgba(124,58,237,0.12)" },
+  CHECKIN:     { badge: "Check-In",      headerAccent: null,      badgeColor: "#6366f1", badgeBg: "rgba(99,102,241,0.12)" },
 };
 
 /* ─── Card type badge pill ─── */
 function CardTypeBadge({ cardType }) {
   const meta = CARD_TYPE_META[cardType];
   if (!meta || !meta.badge) return null;
-  const emojiMap = { Example: "📝", Visual: "🖼️", Recap: "📋", "Fun Fact": "🌟", "Check-In": "💬" };
+  const emojiMap = { Example: "📝", Visual: "🖼️", Recap: "📋", "Fun Fact": "🌟", "Check-In": "💬", Application: "🌍", Practice: "✏️" };
   return (
     <span style={{
       display: "inline-flex",
@@ -164,6 +166,9 @@ export default function CardLearningView({ remediationMode = false }) {
     adaptationApplied,
     difficultyBias,
     setDifficultyBias,
+    hasMoreConcepts,
+    conceptsTotal,
+    conceptsCoveredCount,
   } = useSession();
 
   const { student } = useStudent();
@@ -180,8 +185,10 @@ export default function CardLearningView({ remediationMode = false }) {
   const typeMeta = CARD_TYPE_META[cardType] || CARD_TYPE_META.TEACH;
 
   const MIN_CARDS_BEFORE_FINISH = 4;
+  const allSectionsDone = !hasMoreConcepts;
   const isLastCard = currentCardIndex === cards.length - 1
-    && currentCardIndex >= MIN_CARDS_BEFORE_FINISH - 1;
+    && currentCardIndex >= MIN_CARDS_BEFORE_FINISH - 1
+    && allSectionsDone;
 
   // Per-card question state: { mcqIdx, mcqCorrect, mcqFeedback, quickCheckDone, checkinDone }
   const [cardStates, setCardStates] = useState({});
@@ -368,7 +375,41 @@ export default function CardLearningView({ remediationMode = false }) {
           `The student got this question wrong: "${mcq.question}". Give a helpful hint about this topic without revealing the answer.`,
           "user"
         );
+
+        const isSecondAttempt = !!cs.replacementMcq; // replacementMcq present = already regenerated once
+
         feedbackTimerRef.current = setTimeout(async () => {
+          if (isSecondAttempt) {
+            // Wrong twice — pass signals so backend switches mode + generates recovery card
+            const elapsedSec = cardStartTimeRef.current !== null
+              ? (performance.now() - cardStartTimeRef.current) / 1000
+              : 120;
+            goToNextCard({
+              cardIndex:           currentCardIndex,
+              timeOnCardSec:       elapsedSec,
+              wrongAttempts:       2,
+              selectedWrongOption: selectedWrongOptionRef.current ?? null,
+              hintsUsed:           hintsUsedRef.current,
+              idleTriggers:        idleTriggerCount,
+              difficultyBias:      null,
+              // Anti-loop: don't request recovery for a recovery card
+              reExplainCardTitle:  !card?.is_recovery ? (card?.title ?? null) : null,
+            });
+            return;
+          }
+          // First wrong — use pre-generated question2 if available (no API call)
+          if (card.question2) {
+            setCardStates((prev) => ({
+              ...prev,
+              [currentCardIndex]: {
+                ...(prev[currentCardIndex] || getCardState(currentCardIndex)),
+                mcqFeedback: null,
+                replacementMcq: card.question2,
+              },
+            }));
+            return;
+          }
+          // Fallback for older cached cards without question2 — call regenerate API
           try {
             const { data } = await regenerateMCQ(session.id, {
               card_content: card.content,
@@ -475,6 +516,7 @@ export default function CardLearningView({ remediationMode = false }) {
 
   // Handle finish button — in remediation mode, go to recheck instead of finishCards
   const handleFinish = useCallback(() => {
+    if (!allSectionsDone) return; // defensive: button should already be hidden
     const signals = {
       cardIndex:         currentCardIndex,
       timeOnCardSec:     cardStartTimeRef.current !== null ? (performance.now() - cardStartTimeRef.current) / 1000 : 0,
@@ -514,7 +556,26 @@ export default function CardLearningView({ remediationMode = false }) {
     );
   }
 
-  if (!card) return null;
+  if (!card) {
+    if (cards.length === 0) {
+      return (
+        <div style={{
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          height: "50vh",
+          gap: "1rem",
+        }}>
+          <p style={{ color: "var(--color-text-muted)", fontSize: "1rem" }}>
+            {loading ? t("learning.generatingCards") : t("learning.noCardsError")}
+          </p>
+        </div>
+      );
+    }
+    // Index temporarily out of bounds — SessionContext will self-correct
+    return null;
+  }
 
   // Build header gradient — override accent color for certain card types
   const headerAccent = typeMeta.headerAccent;
@@ -795,6 +856,13 @@ export default function CardLearningView({ remediationMode = false }) {
           </div>
         )}
 
+        {/* Concept (sub-section) progress indicator */}
+        {conceptsTotal > 0 && (
+          <div style={{ fontSize: "0.75rem", color: "var(--color-text-muted, #888)", marginTop: "0.25rem", textAlign: "center" }}>
+            {t("learning.conceptsProgress", { covered: conceptsCoveredCount, total: conceptsTotal })}
+          </div>
+        )}
+
         {/* Too Easy / Too Hard difficulty bias buttons */}
         {currentCardIndex > 0 && (
           <div className="flex gap-2 mt-3">
@@ -900,23 +968,38 @@ function renderContentWithInlineImages(content, images) {
 
 /* ─── Segmented progress bar (extracted for reuse) ─── */
 function ProgressDots({ cards, cardStates, currentCardIndex }) {
+  const manyCards = cards.length > 20;
+  const dotSize = manyCards ? 6 : 8;
   return (
-    <div className="flex gap-1 w-full mb-4">
+    <div
+      style={{
+        display: "flex",
+        flexWrap: "wrap",
+        justifyContent: "center",
+        gap: "4px",
+        maxWidth: "100%",
+        marginBottom: "1rem",
+      }}
+    >
       {cards.map((_, i) => {
         const csDot = cardStates[i];
         const isDone = csDot?.mcqCorrect || csDot?.quickCheckDone;
+        const colorClass = isDone
+          ? "bg-[var(--color-success)]"
+          : i === currentCardIndex
+          ? "bg-[var(--color-primary)]"
+          : i < currentCardIndex
+          ? "bg-[var(--color-primary)]/60"
+          : "bg-[var(--color-border)]";
         return (
           <div
             key={i}
-            className={`h-1.5 flex-1 rounded-full transition-all duration-300 ${
-              isDone
-                ? "bg-[var(--color-success)]"
-                : i === currentCardIndex
-                ? "bg-[var(--color-primary)]"
-                : i < currentCardIndex
-                ? "bg-[var(--color-primary)]/60"
-                : "bg-[var(--color-border)]"
-            }`}
+            className={`rounded-full transition-all duration-300 ${colorClass}`}
+            style={{
+              width: dotSize,
+              height: dotSize,
+              flexShrink: 0,
+            }}
           />
         );
       })}

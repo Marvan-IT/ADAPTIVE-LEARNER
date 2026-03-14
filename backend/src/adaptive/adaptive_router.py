@@ -6,13 +6,14 @@ Injection pattern: module-level globals (adaptive_knowledge_svc,
 adaptive_llm_client) are set by main.py's lifespan context manager,
 identical to the pattern used in api/teaching_router.py.
 """
+import asyncio
 import logging
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from openai import AsyncOpenAI
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,14 +21,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from uuid import UUID
 
 from adaptive.schemas import AdaptiveLessonRequest, AdaptiveLesson, NextCardRequest, NextCardResponse
-from adaptive.adaptive_engine import generate_adaptive_lesson
+from adaptive.adaptive_engine import generate_adaptive_lesson, generate_recovery_card
+from api.rate_limiter import limiter
 from db.connection import get_db
 from db.models import Student, StudentMastery
 from config import ADAPTIVE_CARD_MODEL
-
-# Maximum number of adaptive (AI-generated next-card) completions per session.
-# This caps the adaptive /complete-card loop, NOT the regular card generation count.
-_ADAPTIVE_CARD_CEILING = 20
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +53,9 @@ adaptive_llm_client: AsyncOpenAI | None = None
         "cards, and call the LLM to produce a fully personalised lesson."
     ),
 )
+@limiter.limit("10/minute")
 async def generate_lesson(
+    request: Request,
     req: AdaptiveLessonRequest,
     db: AsyncSession = Depends(get_db),
 ) -> AdaptiveLesson:
@@ -135,11 +135,12 @@ async def generate_lesson(
     description=(
         "Persists the student's card interaction signals, loads their history, "
         "blends current signals with historical baselines, generates an adaptive "
-        "next card via the LLM, and returns it with motivational context. "
-        "Returns 409 when the 8-card ceiling is reached."
+        "next card via the LLM, and returns it with motivational context."
     ),
 )
+@limiter.limit("60/minute")
 async def complete_card(
+    request: Request,
     session_id: UUID,
     req: NextCardRequest,
     db: AsyncSession = Depends(get_db),
@@ -150,7 +151,7 @@ async def complete_card(
     Steps:
       1. Load and validate the session.
       2. Save the CardInteraction row immediately.
-      3. Check the 8-card ceiling — return 409 if reached.
+      3. Parse existing cards from the session cache (for index tracking).
       4. Load the student's full interaction history for blending.
       5. Load the student's mastery store (bulk SELECT, no N+1).
       6. Call generate_next_card() from the adaptive engine.
@@ -161,7 +162,6 @@ async def complete_card(
     Error responses:
       400 — Session not in PRESENTING or CARDS phase
       404 — Session not found
-      409 — Card ceiling (8 cards) reached
       502 — LLM failed after all retries
     """
     import json as json_mod
@@ -205,7 +205,7 @@ async def complete_card(
     await db.flush()
     await db.commit()   # Persist immediately — before any code that can fail or time out
 
-    # 4. Check ceiling — parse existing cards from the session cache
+    # 4. Parse existing cards from the session cache (for index tracking)
     existing_cards: list = []
     if session.presentation_text:
         try:
@@ -218,10 +218,6 @@ async def complete_card(
         except Exception:
             existing_cards = []
 
-    if len(existing_cards) >= _ADAPTIVE_CARD_CEILING:
-        await db.commit()
-        raise HTTPException(status_code=409, detail={"ceiling": True})
-
     # 5. Load student history
     history = await load_student_history(str(session.student_id), session.concept_id, db)
 
@@ -232,24 +228,86 @@ async def complete_card(
     )
     mastery_store = {cid: True for cid in mastery_result.scalars().all()}
 
-    # 7. Generate next card
+    # 7. Generate next card (and optional recovery card in parallel)
+    need_recovery = (
+        req.wrong_attempts >= 2
+        and bool(req.re_explain_card_title)
+        and not (req.re_explain_card_title or "").startswith("Let's Try Again")
+    )
+
+    # Use session-level overrides first, then fall back to student profile
+    effective_interests = (
+        getattr(session, "lesson_interests", None) or
+        getattr(student, "interests", []) or []
+    )
+    effective_style = (
+        getattr(session, "style", None) or
+        getattr(student, "preferred_style", "default") or "default"
+    )
+
+    async def _maybe_recovery():
+        if need_recovery:
+            return await generate_recovery_card(
+                topic_title=req.re_explain_card_title,
+                concept_id=session.concept_id,
+                knowledge_svc=adaptive_knowledge_svc,
+                llm_client=adaptive_llm_client,
+                language=language,
+                interests=effective_interests,
+                style=effective_style,
+            )
+        return None
+
     try:
-        card_dict, profile, gen_profile, motivational_note, adaptation_label = await generate_next_card(
-            student_id=str(session.student_id),
-            concept_id=session.concept_id,
-            signals=req,
-            card_index=len(existing_cards),
-            history=history,
-            knowledge_svc=adaptive_knowledge_svc,
-            mastery_store=mastery_store,
-            llm_client=adaptive_llm_client,
-            model=ADAPTIVE_CARD_MODEL,
-            language=language,
+        gather_results = await asyncio.gather(
+            generate_next_card(
+                student_id=str(session.student_id),
+                concept_id=session.concept_id,
+                signals=req,
+                card_index=len(existing_cards),
+                history=history,
+                knowledge_svc=adaptive_knowledge_svc,
+                mastery_store=mastery_store,
+                llm_client=adaptive_llm_client,
+                model=ADAPTIVE_CARD_MODEL,
+                language=language,
+            ),
+            _maybe_recovery(),
+            return_exceptions=True,
         )
     except Exception as exc:
-        logger.error("generate_next_card failed: %s", exc)
+        logger.error("generate_next_card gather failed: %s", exc)
         await db.commit()
         raise HTTPException(status_code=502, detail="Adaptive card generation failed")
+
+    next_card_result = gather_results[0]
+    recovery_result  = gather_results[1]
+
+    if isinstance(next_card_result, Exception):
+        logger.error("generate_next_card failed: %s", next_card_result)
+        await db.commit()
+        raise HTTPException(status_code=502, detail="Adaptive card generation failed")
+
+    card_dict, profile, gen_profile, motivational_note, adaptation_label = next_card_result
+
+    recovery_card = None
+    if need_recovery:
+        if isinstance(recovery_result, Exception):
+            logger.warning("generate_recovery_card failed (non-fatal): %s", recovery_result)
+        elif isinstance(recovery_result, dict):
+            recovery_card = recovery_result
+            logger.info("[recovery] session=%s topic=%r generated", session_id, req.re_explain_card_title)
+
+    # 7b. Apply section_id inference on the single new card (sort is a no-op for one card,
+    # but section_id inference is useful if the LLM omitted it).
+    try:
+        from api.teaching_service import validate_and_repair_cards
+        section_order = [c.get("section_id", "") for c in existing_cards if c.get("section_id")]
+        repaired_single, _ = validate_and_repair_cards([card_dict], section_order or ["unknown"])
+        if repaired_single:
+            card_dict = repaired_single[0]
+    except Exception as _vrc_exc:
+        logger.warning("validate_and_repair_cards on adaptive card failed (non-fatal): %s", _vrc_exc)
 
     # 8. Compute performance_vs_baseline
     avg_time = history.get("avg_time_per_card")
@@ -269,7 +327,21 @@ async def complete_card(
 
     # 10. Append new card to the session's presentation cache and set phase
     existing_cards.append(card_dict)
-    session.presentation_text = json_mod.dumps(existing_cards)
+    # RC3-B: Preserve the JSON envelope (cache_version, concept_title, etc.) when
+    # appending adaptive cards. Without this, a page refresh would re-trigger
+    # full generation because the cache_version key disappears.
+    if session.presentation_text:
+        try:
+            envelope = json_mod.loads(session.presentation_text)
+            if isinstance(envelope, dict) and "cards" in envelope:
+                envelope["cards"] = existing_cards
+                session.presentation_text = json_mod.dumps(envelope)
+            else:
+                session.presentation_text = json_mod.dumps(existing_cards)
+        except Exception:
+            session.presentation_text = json_mod.dumps(existing_cards)
+    else:
+        session.presentation_text = json_mod.dumps(existing_cards)
     session.phase = "CARDS"
 
     await db.commit()
@@ -287,4 +359,5 @@ async def complete_card(
         },
         motivational_note=motivational_note,
         performance_vs_baseline=perf,
+        recovery_card=recovery_card,
     )

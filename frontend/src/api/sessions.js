@@ -18,8 +18,18 @@ export const getPresentation = (sessionId) =>
 export const beginCheck = (sessionId) =>
   api.post(`/api/v2/sessions/${sessionId}/check`, {}, { timeout: LLM_TIMEOUT });
 
-export const sendResponse = (sessionId, message) =>
-  api.post(`/api/v2/sessions/${sessionId}/respond`, { message }, { timeout: LLM_TIMEOUT });
+export const sendResponse = (sessionId, message, engagementSignal = null) =>
+  api.post(
+    `/api/v2/sessions/${sessionId}/respond`,
+    { message, engagement_signal: engagementSignal },
+    { timeout: LLM_TIMEOUT }
+  );
+
+export const completeSection = (sessionId, conceptId, stateScore = 2.0) =>
+  api.post(`/api/v2/sessions/${sessionId}/section-complete`, {
+    concept_id: conceptId,
+    state_score: stateScore,
+  });
 
 export const switchStyle = (sessionId, style) =>
   api.put(`/api/v2/sessions/${sessionId}/style`, { style }, { timeout: LLM_TIMEOUT });
@@ -57,16 +67,20 @@ export const completeCardAndGetNext = (sessionId, signals) =>
   api.post(
     `/api/v2/sessions/${sessionId}/complete-card`,
     {
-      card_index:            signals.cardIndex,
-      time_on_card_sec:      signals.timeOnCardSec,
-      wrong_attempts:        signals.wrongAttempts,
-      selected_wrong_option: signals.selectedWrongOption ?? null,
-      hints_used:            signals.hintsUsed,
-      idle_triggers:         signals.idleTriggers,
-      difficulty_bias:       signals.difficultyBias ?? null,
+      card_index:              signals.cardIndex,
+      time_on_card_sec:        signals.timeOnCardSec,
+      wrong_attempts:          signals.wrongAttempts,
+      selected_wrong_option:   signals.selectedWrongOption ?? null,
+      hints_used:              signals.hintsUsed,
+      idle_triggers:           signals.idleTriggers,
+      difficulty_bias:         signals.difficultyBias ?? null,
+      re_explain_card_title:   signals.reExplainCardTitle ?? null,
     },
     { timeout: COMPLETE_CARD_TIMEOUT }
   );
+
+export const updateSessionInterests = (sessionId, interests) =>
+  api.put(`/api/v2/sessions/${sessionId}/interests`, { interests });
 
 export const loadRemediationCards = (sessionId) =>
   api.post(`/api/v2/sessions/${sessionId}/remediation-cards`, {}, { timeout: CARDS_TIMEOUT });
@@ -76,3 +90,6 @@ export const beginRecheck = (sessionId) =>
 
 export const regenerateMCQ = (sessionId, body) =>
   api.post(`/api/v2/sessions/${sessionId}/regenerate-mcq`, body, { timeout: LLM_TIMEOUT });
+
+export const getNextSectionCards = (sessionId, signals) =>
+  api.post(`/api/v2/sessions/${sessionId}/next-section-cards`, signals || {}, { timeout: 45000 });

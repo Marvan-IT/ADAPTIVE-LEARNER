@@ -87,8 +87,10 @@
   "assist.thinking": "Denke nach...",
   "completion.mastered": "Konzept gemeistert!",
   "completion.masteredMsg": "Du verstehst {{title}} wirklich. Tolle Leistung!",
+  "completion.excellent": "Hervorragend!",
   "completion.almostThere": "Fast geschafft!",
   "completion.almostMsg": "Guter Einsatz bei {{title}}. Lass uns noch einmal wiederholen!",
+  "completion.keepPracticing": "Weiter üben!",
   "completion.outOf": "von 100",
   "completion.tryAgain": "Nochmal versuchen",
   "completion.next": "Weiter: {{title}}",
@@ -112,5 +114,16 @@
   "image.diagram": "Konzeptdiagramm",
   "learning.generatingCard": "Nächste Karte wird generiert...",
   "learning.reviewDue": "Wiederholung fällig",
-  "learning.reviewDueBadge": "📖"
+  "learning.reviewDueBadge": "📖",
+  "studentForm.customizeNote": "You can customize your learning style in each lesson.",
+  "customize.panelTitle": "Customize lesson",
+  "customize.style": "Style",
+  "customize.styleDefault": "Default",
+  "customize.stylePirate": "Pirate",
+  "customize.styleAstronaut": "Astronaut",
+  "customize.styleGamer": "Gamer",
+  "customize.interests": "Interests",
+  "customize.addInterest": "Add topic (press Enter)",
+  "customize.nextCardsNote": "Your next cards will reflect these preferences.",
+  "learning.conceptsProgress": "{{covered}} / {{total}} Abschnitte abgeschlossen"
 }

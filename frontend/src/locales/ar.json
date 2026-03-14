@@ -87,8 +87,10 @@
   "assist.thinking": "جاري التفكير...",
   "completion.mastered": "تم إتقان المفهوم!",
   "completion.masteredMsg": "أنت تفهم {{title}} حقا. عمل رائع!",
+  "completion.excellent": "ممتاز!",
   "completion.almostThere": "أوشكت على الوصول!",
   "completion.almostMsg": "جهد جيد في {{title}}. هيا نراجع مرة أخرى!",
+  "completion.keepPracticing": "استمر في التدريب!",
   "completion.outOf": "من 100",
   "completion.tryAgain": "حاول مرة أخرى",
   "completion.next": "التالي: {{title}}",
@@ -112,5 +114,16 @@
   "image.diagram": "مخطط مفهوم",
   "learning.generatingCard": "جارٍ توليد بطاقتك التالية...",
   "learning.reviewDue": "مراجعة مستحقة",
-  "learning.reviewDueBadge": "📖"
+  "learning.reviewDueBadge": "📖",
+  "studentForm.customizeNote": "You can customize your learning style in each lesson.",
+  "customize.panelTitle": "Customize lesson",
+  "customize.style": "Style",
+  "customize.styleDefault": "Default",
+  "customize.stylePirate": "Pirate",
+  "customize.styleAstronaut": "Astronaut",
+  "customize.styleGamer": "Gamer",
+  "customize.interests": "Interests",
+  "customize.addInterest": "Add topic (press Enter)",
+  "customize.nextCardsNote": "Your next cards will reflect these preferences.",
+  "learning.conceptsProgress": "{{covered}} / {{total}} أقسام مكتملة"
 }

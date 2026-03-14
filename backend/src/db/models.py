@@ -10,7 +10,7 @@ from sqlalchemy import (
     String, Text, Boolean, SmallInteger, Integer, Float, DateTime,
     ForeignKey, UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import UUID, ARRAY
+from sqlalchemy.dialects.postgresql import UUID, ARRAY, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -38,6 +38,24 @@ class Student(Base):
     )
     xp: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     streak: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+
+    # ── Adaptive learning extended history ────────────────────────────────
+    section_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    overall_accuracy_rate: Mapped[float] = mapped_column(Float, default=0.5, server_default="0.5", nullable=False)
+    preferred_analogy_style: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    boredom_pattern: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    frustration_tolerance: Mapped[str | None] = mapped_column(String(20), default="medium", server_default="'medium'", nullable=True)
+    recovery_speed: Mapped[str | None] = mapped_column(String(20), default="normal", server_default="'normal'", nullable=True)
+    avg_state_score: Mapped[float] = mapped_column(Float, default=2.0, server_default="2.0", nullable=False)
+    effective_analogies: Mapped[list] = mapped_column(JSONB, default=list, server_default="'[]'::jsonb", nullable=False)
+    effective_engagement: Mapped[list] = mapped_column(JSONB, default=list, server_default="'[]'::jsonb", nullable=False)
+    ineffective_engagement: Mapped[list] = mapped_column(JSONB, default=list, server_default="'[]'::jsonb", nullable=False)
+    state_distribution: Mapped[dict] = mapped_column(
+        JSONB,
+        default=lambda: {"struggling": 0, "normal": 0, "fast": 0},
+        server_default='\'{"struggling": 0, "normal": 0, "fast": 0}\'::jsonb',
+        nullable=False,
+    )
 
     sessions: Mapped[list["TeachingSession"]] = relationship(
         back_populates="student", cascade="all, delete-orphan"
@@ -192,6 +210,11 @@ class CardInteraction(Base):
     completed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
+
+    # ── Engagement tracking ───────────────────────────────────────────────
+    engagement_signal: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    strategy_applied: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    strategy_effective: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
     session: Mapped["TeachingSession"] = relationship(back_populates="card_interactions")
     student: Mapped["Student"] = relationship(back_populates="card_interactions")

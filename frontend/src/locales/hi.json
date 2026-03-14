@@ -87,8 +87,10 @@
   "assist.thinking": "सोच रहा हूँ...",
   "completion.mastered": "अवधारणा में महारत!",
   "completion.masteredMsg": "तुमने {{title}} को बहुत अच्छे से समझ लिया है। शानदार!",
+  "completion.excellent": "शानदार!",
   "completion.almostThere": "लगभग हो गया!",
   "completion.almostMsg": "{{title}} पर अच्छी कोशिश। चलो एक बार और दोहराते हैं!",
+  "completion.keepPracticing": "अभ्यास जारी रखें!",
   "completion.outOf": "100 में से",
   "completion.tryAgain": "फिर से कोशिश करो",
   "completion.next": "अगला: {{title}}",
@@ -112,5 +114,16 @@
   "image.diagram": "अवधारणा आरेख",
   "learning.generatingCard": "आपका अगला कार्ड बना रहे हैं...",
   "learning.reviewDue": "समीक्षा देय",
-  "learning.reviewDueBadge": "📖"
+  "learning.reviewDueBadge": "📖",
+  "studentForm.customizeNote": "You can customize your learning style in each lesson.",
+  "customize.panelTitle": "Customize lesson",
+  "customize.style": "Style",
+  "customize.styleDefault": "Default",
+  "customize.stylePirate": "Pirate",
+  "customize.styleAstronaut": "Astronaut",
+  "customize.styleGamer": "Gamer",
+  "customize.interests": "Interests",
+  "customize.addInterest": "Add topic (press Enter)",
+  "customize.nextCardsNote": "Your next cards will reflect these preferences.",
+  "learning.conceptsProgress": "{{covered}} / {{total}} अनुभाग पूर्ण"
 }

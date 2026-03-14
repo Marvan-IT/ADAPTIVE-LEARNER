@@ -143,11 +143,14 @@ class CardBehaviorSignals(BaseModel):
     hints_used: int = 0
     idle_triggers: int = 0
     difficulty_bias: Literal["TOO_EASY", "TOO_HARD"] | None = None
+    engagement_signal: str | None = None
 
 
 class NextCardRequest(CardBehaviorSignals):
     """Request body for POST /api/v2/sessions/{session_id}/complete-card."""
-    pass
+    re_explain_card_title: str | None = None
+    # When set with wrong_attempts >= 2: backend also generates recovery re-explain card.
+    # Must NOT start with "Let's Try Again" (prevents recovery-of-recovery loops).
 
 
 class NextCardResponse(BaseModel):
@@ -160,3 +163,4 @@ class NextCardResponse(BaseModel):
     learning_profile_summary: dict
     motivational_note: str | None = None
     performance_vs_baseline: str | None = None  # "FASTER", "SLOWER", "ON_TRACK", None
+    recovery_card: dict | None = None  # NEW: set when wrong×2 + re_explain_card_title provided

@@ -40,6 +40,9 @@ from api.teaching_schemas import (
     StudentAnalyticsResponse,
     ConceptReadinessResponse,
     RegenerateMCQRequest, RegenerateMCQResponse,
+    SectionCompleteRequest, SectionCompleteResponse,
+    UpdateSessionInterestsRequest,
+    NextSectionCardsRequest, NextSectionCardsResponse,
 )
 from api.rate_limiter import limiter
 
@@ -62,6 +65,8 @@ class RecordInteractionRequest(BaseModel):
     hints_used: int = Field(default=0, ge=0)
     idle_triggers: int = Field(default=0, ge=0)
     adaptation_applied: str | None = None
+    engagement_signal: str | None = None
+    strategy_applied: str | None = None
 
 async def _award_xp(
     student_id: UUID,
@@ -474,7 +479,7 @@ async def begin_check(request: Request, session_id: UUID, db: AsyncSession = Dep
         )
 
     student = await db.get(Student, session.student_id)
-    first_question = await teaching_svc.begin_socratic_check(db, session, student)
+    first_question, first_image = await teaching_svc.begin_socratic_check(db, session, student)
 
     return SocraticResponse(
         session_id=session.id,
@@ -482,6 +487,7 @@ async def begin_check(request: Request, session_id: UUID, db: AsyncSession = Dep
         phase=session.phase,
         check_complete=False,
         exchange_count=1,
+        image=first_image,
     )
 
 
@@ -555,6 +561,7 @@ async def respond_to_check(
         attempt=result.get("attempt", 0),
         locked=result.get("locked", False),
         best_score=result.get("best_score"),
+        image=result.get("image"),
     )
 
 
@@ -577,6 +584,24 @@ async def switch_style(
     result = await teaching_svc.switch_style(db, session, req.style, student)
 
     return {"session_id": str(session.id), "new_style": req.style, "result": result}
+
+
+@router.put("/sessions/{session_id}/interests")
+@limiter.limit("30/minute")
+async def update_session_interests(
+    request: Request,
+    session_id: UUID,
+    req: UpdateSessionInterestsRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Update per-session interest override. Used by in-section customize panel."""
+    session = await db.get(TeachingSession, session_id)
+    if not session:
+        raise HTTPException(404, "Session not found")
+    session.lesson_interests = [i[:50] for i in req.interests[:10]]
+    await db.commit()
+    logger.info("session=%s interests updated count=%d", session_id, len(session.lesson_interests))
+    return {"session_id": str(session_id), "lesson_interests": session.lesson_interests}
 
 
 @router.get("/sessions/{session_id}", response_model=SessionResponse)
@@ -623,6 +648,8 @@ async def get_cards(request: Request, session_id: UUID, db: AsyncSession = Depen
         )
 
     student = await db.get(Student, session.student_id)
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
     result = await teaching_svc.generate_cards(db, session, student)
 
     # Build validated response — Pydantic coerces card dicts to LessonCard
@@ -636,6 +663,9 @@ async def get_cards(request: Request, session_id: UUID, db: AsyncSession = Depen
         phase=session.phase,
         cards=cards,
         total_questions=result.get("total_questions", 0),
+        has_more_concepts=bool(result.get("concepts_queue", [])),
+        concepts_total=result.get("concepts_total", 0),
+        concepts_covered_count=len(result.get("concepts_covered", [])),
     )
 
 
@@ -681,6 +711,40 @@ async def complete_cards(
 
     result = await teaching_svc.complete_cards(db, session)
     return result
+
+
+@router.post(
+    "/sessions/{session_id}/next-section-cards",
+    response_model=NextSectionCardsResponse,
+    summary="Generate cards for the next sub-section (rolling adaptive)",
+)
+@limiter.limit("30/minute")
+async def next_section_cards(
+    request: Request,
+    session_id: UUID,
+    req: NextSectionCardsRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Generate cards for the next sub-section using live session signals (rolling adaptive).
+
+    Pops one section from the session's concepts_queue, generates cards with mode determined
+    by blended live signals + student history, appends to session cache, and returns the new cards
+    along with rolling progress metadata.
+
+    Returns 400 when no more sections are queued (caller should use complete-cards instead).
+    """
+    session = await db.get(TeachingSession, session_id)
+    if not session:
+        raise HTTPException(404, "Session not found")
+    if session.phase not in ("PRESENTING", "CARDS"):
+        raise HTTPException(400, f"Session not in card phase (phase={session.phase})")
+
+    student = await db.get(Student, session.student_id)
+    result = await teaching_svc.generate_next_section_cards(
+        db, session, student, signals=req
+    )
+    await db.commit()
+    return NextSectionCardsResponse(**result, session_id=session_id)
 
 
 @router.post(
@@ -759,6 +823,13 @@ async def record_card_interaction(
     session = await db.get(TeachingSession, session_id)
     if not session:
         raise HTTPException(404, "Session not found")
+    # Determine strategy effectiveness before saving the interaction row
+    strategy_effective: bool | None = None
+    if req.strategy_applied:
+        # No boredom/disengagement signal after a strategy was applied → effective;
+        # a boredom signal still present → ineffective.
+        strategy_effective = req.engagement_signal is None
+
     interaction = CardInteraction(
         session_id=session.id,
         student_id=session.student_id,
@@ -769,9 +840,20 @@ async def record_card_interaction(
         hints_used=req.hints_used,
         idle_triggers=req.idle_triggers,
         adaptation_applied=req.adaptation_applied,
+        engagement_signal=req.engagement_signal,
+        strategy_applied=req.strategy_applied,
+        strategy_effective=strategy_effective,
     )
     db.add(interaction)
     await db.commit()
+
+    # Update student's engagement effectiveness history if a strategy was applied
+    if req.strategy_applied and strategy_effective is not None:
+        from api.teaching_service import _update_strategy_effectiveness
+        await _update_strategy_effectiveness(
+            db, session.student_id, req.strategy_applied, strategy_effective
+        )
+
     return {"saved": True}
 
 
@@ -920,6 +1002,62 @@ async def regenerate_mcq_endpoint(
         raise HTTPException(status_code=404, detail="Session not found")
     new_mcq = await teaching_svc.regenerate_mcq(body)
     return RegenerateMCQResponse(question=new_mcq)
+
+
+@router.post("/sessions/{session_id}/section-complete", response_model=SectionCompleteResponse)
+@limiter.limit("60/minute")
+async def complete_section(
+    request: Request,
+    session_id: UUID,
+    body: SectionCompleteRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Called when student completes all cards in a section.
+    Increments section_count, recalculates avg_state_score, updates state_distribution.
+    """
+    # 1. Load session to get student_id
+    session = await db.get(TeachingSession, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    # 2. Load student
+    student = await db.get(Student, session.student_id)
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    # 3. Increment section_count
+    student.section_count = (student.section_count or 0) + 1
+
+    # 4. Update avg_state_score as rolling average
+    n = student.section_count
+    old_avg = student.avg_state_score or 2.0
+    student.avg_state_score = ((old_avg * (n - 1)) + body.state_score) / n
+
+    # 5. Update state_distribution
+    dist = dict(student.state_distribution or {"struggling": 0, "normal": 0, "fast": 0})
+    if body.state_score < 1.5:
+        dist["struggling"] = dist.get("struggling", 0) + 1
+    elif body.state_score >= 2.5:
+        dist["fast"] = dist.get("fast", 0) + 1
+    else:
+        dist["normal"] = dist.get("normal", 0) + 1
+    student.state_distribution = dist
+
+    await db.commit()
+    await db.refresh(student)
+
+    logger.info(
+        "[section-complete] session_id=%s student_id=%s section_count=%d "
+        "avg_state_score=%.2f state_score=%.2f",
+        session_id, session.student_id, student.section_count,
+        student.avg_state_score, body.state_score,
+    )
+
+    return SectionCompleteResponse(
+        section_count=student.section_count,
+        avg_state_score=student.avg_state_score,
+        state_distribution=student.state_distribution,
+    )
 
 
 @router.get("/sessions/{session_id}/card-interactions")

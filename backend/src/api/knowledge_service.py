@@ -359,25 +359,50 @@ class KnowledgeService:
         """
         Get image metadata with URLs and vision annotations for a concept.
 
-        Returns a list of dicts matching the ConceptImage schema. The
-        description and relevance fields are populated from image_index.json
-        when the pipeline has been run with annotation enabled; otherwise
-        they are None.
+        Resolves the actual filename on disk — tries the indexed name first,
+        then falls back to {page}.jpeg / {page}.png (PDF page number naming).
+        Images with no resolvable file are silently excluded.
         """
         raw_images = self._image_map.get(concept_id, [])
-        return [
-            {
-                "filename": img["filename"],
-                "url": f"/images/{concept_id}/{img['filename']}",
+        # Determine image directory; may be absent in test contexts
+        book_output_dir = getattr(self, "_book_output_dir", None)
+        concept_img_dir = (book_output_dir / "images" / concept_id) if book_output_dir else None
+        disk_check = concept_img_dir is not None and concept_img_dir.exists()
+
+        results = []
+        for img in raw_images:
+            if disk_check:
+                # Resolve actual filename: try indexed name first, then PDF page number
+                candidates = [
+                    img["filename"],                   # e.g. PREALG..._001.jpeg
+                    f"{img.get('page', '')}.jpeg",     # e.g. 291.jpeg
+                    f"{img.get('page', '')}.png",      # e.g. 291.png
+                ]
+                resolved = next(
+                    (c for c in candidates if c and (concept_img_dir / c).exists()),
+                    None,
+                )
+                if resolved is None:
+                    logger.debug(
+                        "image_not_found concept=%s filename=%s page=%s",
+                        concept_id, img["filename"], img.get("page"),
+                    )
+                    continue
+            else:
+                # No disk access (test context or missing dir) — use indexed filename as-is
+                resolved = img["filename"]
+
+            results.append({
+                "filename": resolved,
+                "url": f"/images/{concept_id}/{resolved}",
                 "width": img["width"],
                 "height": img["height"],
                 "image_type": img["image_type"],
                 "page": img["page"],
-                "description": img.get("description"),  # None if not annotated
-                "relevance": img.get("relevance"),       # None if not annotated
-            }
-            for img in raw_images
-        ]
+                "description": img.get("description"),
+                "relevance": img.get("relevance"),
+            })
+        return results
 
     # ── Internal helpers ──────────────────────────────────────────
 

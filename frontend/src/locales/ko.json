@@ -87,7 +87,9 @@
   "assist.thinking": "생각 중...",
   "completion.mastered": "개념 마스터!",
   "completion.masteredMsg": "{{title}}을(를) 정말 잘 이해했어요. 대단해요!",
+  "completion.excellent": "훌륭해요!",
   "completion.almostThere": "거의 다 왔어요!",
+  "completion.keepPracticing": "계속 연습하세요!",
   "completion.almostMsg": "{{title}} 잘했어요. 한 번 더 복습해 봐요!",
   "completion.outOf": "100점 만점",
   "completion.tryAgain": "다시 도전",
@@ -112,5 +114,16 @@
   "image.diagram": "개념 도표",
   "learning.generatingCard": "다음 카드 생성 중...",
   "learning.reviewDue": "복습 예정",
-  "learning.reviewDueBadge": "📖"
+  "learning.reviewDueBadge": "📖",
+  "studentForm.customizeNote": "You can customize your learning style in each lesson.",
+  "customize.panelTitle": "Customize lesson",
+  "customize.style": "Style",
+  "customize.styleDefault": "Default",
+  "customize.stylePirate": "Pirate",
+  "customize.styleAstronaut": "Astronaut",
+  "customize.styleGamer": "Gamer",
+  "customize.interests": "Interests",
+  "customize.addInterest": "Add topic (press Enter)",
+  "customize.nextCardsNote": "Your next cards will reflect these preferences.",
+  "learning.conceptsProgress": "{{covered}} / {{total}} 섹션 완료"
 }

@@ -22,6 +22,12 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+try:
+    from json_repair import repair_json   # for robust JSON parsing of LLM output
+except ImportError:
+    def repair_json(s: str) -> str:  # type: ignore[misc]
+        return s
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from openai import AsyncOpenAI
@@ -50,6 +56,14 @@ from config import (
     ADAPTIVE_NORMAL_HISTORY_WEIGHT,
     ADAPTIVE_CARD_MODEL,
     WRONG_OPTION_PATTERN_THRESHOLD,
+    ADAPTIVE_COLD_START_CURRENT_WEIGHT,
+    ADAPTIVE_COLD_START_HISTORY_WEIGHT,
+    ADAPTIVE_WARM_START_CURRENT_WEIGHT,
+    ADAPTIVE_WARM_START_HISTORY_WEIGHT,
+    ADAPTIVE_PARTIAL_CURRENT_WEIGHT,
+    ADAPTIVE_PARTIAL_HISTORY_WEIGHT,
+    ADAPTIVE_STATE_BLEND_CURRENT_WEIGHT,
+    ADAPTIVE_STATE_BLEND_HISTORY_WEIGHT,
 )
 
 logger = logging.getLogger(__name__)
@@ -308,11 +322,12 @@ async def generate_adaptive_lesson(
 async def load_student_history(student_id: str, concept_id: str, db) -> dict:
     """
     Load and aggregate a student's full interaction history from the DB.
-    Returns a dict with personal baselines, performance trend, and weak-concept flag.
+    Returns a dict with personal baselines, performance trend, weak-concept flag,
+    and extended adaptive history fields from the Student profile.
     """
     from datetime import timedelta
     from sqlalchemy import select, func
-    from db.models import CardInteraction, TeachingSession, StudentMastery
+    from db.models import CardInteraction, TeachingSession, StudentMastery, Student
     import uuid as _uuid
 
     sid = _uuid.UUID(student_id) if isinstance(student_id, str) else student_id
@@ -390,6 +405,35 @@ async def load_student_history(student_id: str, concept_id: str, db) -> dict:
     )
     failed_attempts = weak_result.scalar() or 0
 
+    # 6. Load extended adaptive history fields from the Student profile
+    student_result = await db.execute(
+        select(Student).where(Student.id == sid)
+    )
+    student_row = student_result.scalar_one_or_none()
+
+    section_count = 0
+    avg_state_score = 2.0
+    effective_analogies: list = []
+    preferred_analogy_style: str | None = None
+    effective_engagement: list = []
+    ineffective_engagement: list = []
+    boredom_pattern: str | None = None
+    state_distribution: dict = {"struggling": 0, "normal": 0, "fast": 0}
+    overall_accuracy_rate = 0.5
+
+    if student_row is not None:
+        section_count = int(student_row.section_count or 0)
+        avg_state_score = float(student_row.avg_state_score or 2.0)
+        effective_analogies = list(student_row.effective_analogies or [])
+        preferred_analogy_style = student_row.preferred_analogy_style
+        effective_engagement = list(student_row.effective_engagement or [])
+        ineffective_engagement = list(student_row.ineffective_engagement or [])
+        boredom_pattern = student_row.boredom_pattern
+        raw_dist = student_row.state_distribution
+        if isinstance(raw_dist, dict):
+            state_distribution = raw_dist
+        overall_accuracy_rate = float(student_row.overall_accuracy_rate or 0.5)
+
     return {
         "avg_time_per_card": float(agg.avg_time) if agg.avg_time is not None else None,
         "avg_wrong_attempts": float(agg.avg_wrong) if agg.avg_wrong is not None else None,
@@ -401,6 +445,16 @@ async def load_student_history(student_id: str, concept_id: str, db) -> dict:
         "failed_concept_attempts": int(failed_attempts),
         "trend_direction": trend_direction,
         "trend_wrong_list": trend_wrong_list,
+        # Extended adaptive history fields from Student profile
+        "section_count": section_count,
+        "avg_state_score": avg_state_score,
+        "effective_analogies": effective_analogies,
+        "preferred_analogy_style": preferred_analogy_style,
+        "effective_engagement": effective_engagement,
+        "ineffective_engagement": ineffective_engagement,
+        "boredom_pattern": boredom_pattern,
+        "state_distribution": state_distribution,
+        "overall_accuracy_rate": overall_accuracy_rate,
     }
 
 
@@ -453,18 +507,50 @@ async def load_wrong_option_pattern(
         return None
 
 
+def compute_numeric_state_score(speed: str, comprehension: str) -> float:
+    """Map (speed, comprehension) classification to a numeric score [1.0, 3.0].
+
+    Speed base values: SLOW=1.0, NORMAL=2.0, FAST=3.0
+    Comprehension modifiers: STRUGGLING=-0.3, OK=0.0, STRONG=+0.3
+    Result is clamped to [1.0, 3.0].
+    """
+    base = {"SLOW": 1.0, "NORMAL": 2.0, "FAST": 3.0}.get(speed.upper(), 2.0)
+    modifier = {"STRUGGLING": -0.3, "OK": 0.0, "STRONG": 0.3}.get(comprehension.upper(), 0.0)
+    return max(1.0, min(3.0, base + modifier))
+
+
+def blended_score_to_generate_as(blended_score: float) -> str:
+    """Convert a blended numeric state score to a generate_as label.
+
+    < 1.5   -> 'STRUGGLING'
+    1.5-2.4 -> 'NORMAL'
+    >= 2.5  -> 'FAST'
+    """
+    if blended_score < 1.5:
+        return "STRUGGLING"
+    elif blended_score >= 2.5:
+        return "FAST"
+    return "NORMAL"
+
+
 def build_blended_analytics(
     current: "CardBehaviorSignals",
     history: dict,
     concept_id: str,
     student_id: str,
-) -> AnalyticsSummary:
+) -> tuple["AnalyticsSummary", float, str]:
     """
     Blend current card signals with historical baseline using deviation detection.
 
     New student (< 5 cards): 100% current signals.
     Normal variance: 60% current / 40% history.
     Acute deviation (fever, distraction, or sudden recovery): 90% current / 10% history.
+
+    Also blends the numeric state score using section_count-based cold-start weights.
+
+    Returns a 3-tuple: (AnalyticsSummary, blended_score, generate_as)
+      - blended_score: float in [1.0, 3.0]
+      - generate_as: one of 'STRUGGLING', 'NORMAL', 'FAST'
     """
     MIN_HISTORY_CARDS = ADAPTIVE_MIN_HISTORY_CARDS
     has_history = history["total_cards_completed"] >= MIN_HISTORY_CARDS
@@ -492,7 +578,7 @@ def build_blended_analytics(
     blended_hints = current.hints_used * cw + baseline_hints * hw
     expected_time = baseline_time  # personal baseline
 
-    return AnalyticsSummary(
+    analytics = AnalyticsSummary(
         student_id=student_id,
         concept_id=concept_id,
         time_spent_sec=current.time_on_card_sec,
@@ -506,6 +592,42 @@ def build_blended_analytics(
         quiz_score=max(0.0, 1.0 - blended_wrong * 0.25),
         last_7d_sessions=history["sessions_last_7d"],
     )
+
+    # ── Numeric state blending using section_count-based cold-start weights ──
+    # Classify current session's speed/comprehension into a numeric score, then
+    # blend with the student's historical avg_state_score.
+    from adaptive.profile_builder import classify_speed, classify_comprehension
+    current_speed = classify_speed(
+        current.time_on_card_sec, expected_time, max(1, round(blended_wrong) + 1)
+    )
+    current_comprehension = classify_comprehension(
+        round(blended_wrong),
+        max(1, round(blended_wrong) + 1),
+        max(0.0, 1.0 - blended_wrong * 0.25),
+        round(blended_hints),
+    )
+    current_numeric_score = compute_numeric_state_score(current_speed, current_comprehension)
+    history_avg_state = history.get("avg_state_score", 2.0)
+
+    section_count = history.get("section_count", 0)
+    if section_count == 0:
+        w_current = ADAPTIVE_COLD_START_CURRENT_WEIGHT
+        w_history = ADAPTIVE_COLD_START_HISTORY_WEIGHT
+    elif section_count == 1:
+        w_current = ADAPTIVE_WARM_START_CURRENT_WEIGHT
+        w_history = ADAPTIVE_WARM_START_HISTORY_WEIGHT
+    elif section_count == 2:
+        w_current = ADAPTIVE_PARTIAL_CURRENT_WEIGHT
+        w_history = ADAPTIVE_PARTIAL_HISTORY_WEIGHT
+    else:
+        w_current = ADAPTIVE_STATE_BLEND_CURRENT_WEIGHT
+        w_history = ADAPTIVE_STATE_BLEND_HISTORY_WEIGHT
+
+    blended_score = (current_numeric_score * w_current) + (history_avg_state * w_history)
+    blended_score = max(1.0, min(3.0, blended_score))
+    generate_as = blended_score_to_generate_as(blended_score)
+
+    return analytics, blended_score, generate_as
 
 
 async def generate_next_card(
@@ -532,7 +654,7 @@ async def generate_next_card(
     """
     from adaptive.prompt_builder import build_next_card_prompt
 
-    analytics = build_blended_analytics(signals, history, concept_id, student_id)
+    analytics, blended_score, generate_as = build_blended_analytics(signals, history, concept_id, student_id)
     has_prereq = find_remediation_prereq(concept_id, knowledge_svc, mastery_store) is not None
     profile = build_learning_profile(analytics, has_unmet_prereq=has_prereq)
     gen_profile = build_generation_profile(profile)
@@ -571,6 +693,18 @@ async def generate_next_card(
     if concept_detail is None:
         raise ValueError(f"Concept not found: {concept_id}")
 
+    # Determine engagement strategy, guarding against OVERWHELMED students getting challenge_bump
+    from adaptive.boredom_detector import select_engagement_strategy, detect_boredom_signal
+    _engagement_signal = getattr(signals, "engagement_signal", None)
+    _strategy: str | None = None
+    if _engagement_signal:
+        _strategy = select_engagement_strategy(
+            effective_engagement=history.get("effective_engagement", []),
+            ineffective_engagement=history.get("ineffective_engagement", []),
+            engagement_signal=_engagement_signal,
+            engagement=profile.engagement,
+        )
+
     sys_p, usr_p = build_next_card_prompt(
         concept_detail=concept_detail,
         learning_profile=profile,
@@ -580,6 +714,9 @@ async def generate_next_card(
         language=language,
         wrong_option_pattern=wrong_option_pattern,
         difficulty_bias=bias,
+        generate_as=generate_as,
+        blended_state_score=blended_score,
+        engagement_strategy=_strategy,
     )
 
     messages = [
@@ -626,3 +763,116 @@ async def generate_next_card(
     )
 
     return card, profile, gen_profile, motivational_note, adaptation_label
+
+
+# ── Recovery card generation ───────────────────────────────────────────────────
+
+# Inline style modifiers — mirrors STYLE_MODIFIERS in api/prompts.py
+# NOTE: kept decoupled intentionally (no api/ import in adaptive/).
+# If styles added/changed in api/prompts.py, update this dict too.
+_RECOVERY_STYLE_MODIFIERS: dict[str, str] = {
+    "pirate":    "Use pirate language naturally: 'Ahoy!', 'matey', treasure=answer, ship=student.",
+    "astronaut": "Frame as space mission: 'Mission Control', 'zero gravity', 'launch sequence'.",
+    "gamer":     "Use gaming language: 'level up', 'XP gained', 'boss battle', 'respawn'.",
+    "default":   "",
+}
+
+_RECOVERY_LANG_MAP: dict[str, str] = {
+    "ta": "Tamil", "ar": "Arabic", "hi": "Hindi", "fr": "French",
+    "es": "Spanish", "zh": "Chinese", "ja": "Japanese", "de": "German",
+    "ko": "Korean", "pt": "Portuguese", "ml": "Malayalam", "si": "Sinhala",
+}
+
+
+async def generate_recovery_card(
+    topic_title: str,
+    concept_id: str,
+    knowledge_svc,
+    llm_client,
+    language: str = "en",
+    interests: list[str] | None = None,
+    style: str = "default",
+) -> dict | None:
+    """
+    Generate a recovery TEACH card re-explaining `topic_title` in STRUGGLING mode.
+    Called when student gets wrong×2. Returns card dict or None on any failure.
+    Non-fatal — caller continues without it if None.
+    Anti-loop: skips titles already starting with "Let's Try Again".
+    """
+    if topic_title and topic_title.startswith("Let's Try Again"):
+        logger.debug("generate_recovery_card: skipping recovery-of-recovery for %r", topic_title)
+        return None
+
+    try:
+        concept_detail = knowledge_svc.get_concept_detail(concept_id)
+        if not concept_detail:
+            return None
+
+        interests_text = ""
+        if interests:
+            interests_text = (
+                f"\nStudent interests: {', '.join(interests[:3])}. "
+                "Weave these naturally into your analogy and examples."
+            )
+
+        style_modifier = _RECOVERY_STYLE_MODIFIERS.get(style or "default", "")
+        style_text = f"\n\n{style_modifier}" if style_modifier else ""
+
+        lang_name = _RECOVERY_LANG_MAP.get(language, "English")
+        lang_text = (
+            f"\n\nIMPORTANT: Respond entirely in {lang_name}. All content must be in {lang_name}."
+            if lang_name != "English" else ""
+        )
+
+        system_prompt = (
+            "You are an expert adaptive math tutor. Generate ONE recovery TEACH card.\n"
+            "The student just struggled with this topic twice. Re-explain in the SIMPLEST way.\n"
+            "MANDATORY RULES:\n"
+            "- card_type must be 'TEACH'\n"
+            "- Title MUST start exactly with: Let's Try Again — \n"
+            "- Language: age 8-10 reading level. Define every term.\n"
+            "- Open with a real-world analogy BEFORE any formula or definition.\n"
+            "- Use numbered step-by-step explanation.\n"
+            "- For multiplication/arithmetic: include dot-array visual (● ● ● ● ●).\n"
+            "- End with ONE easy MCQ — confidence-building, clearly correct answer.\n"
+            "- Return ONLY valid JSON. No markdown fences.\n"
+            "OUTPUT JSON SCHEMA (match exactly):\n"
+            '{"card_type":"TEACH","title":"Let\'s Try Again — <topic>","content":"<markdown>",'
+            '"image_indices":[],"question":{"text":"<question>","options":["A","B","C","D"],'
+            '"correct_index":0,"explanation":"<why>","difficulty":"EASY"}}'
+            + interests_text + style_text + lang_text
+        )
+
+        user_prompt = (
+            f"Re-explain this topic in {lang_name}, STRUGGLING mode:\n"
+            f"Topic: {topic_title}\n\n"
+            f"Source material (use as factual basis):\n"
+            f"{concept_detail.get('text', '')[:2000]}\n\n"
+            "Return ONLY the JSON object."
+        )
+
+        response = await llm_client.chat.completions.create(
+            model=ADAPTIVE_CARD_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user",   "content": user_prompt},
+            ],
+            max_tokens=1200,
+            temperature=0.3,
+            timeout=20.0,
+        )
+        raw = response.choices[0].message.content or ""
+        try:
+            card = json.loads(raw)
+        except json.JSONDecodeError:
+            card = json.loads(repair_json(raw))
+
+        card.setdefault("index", -1)
+        card["is_recovery"] = True
+        card.setdefault("images", [])
+        card.setdefault("image_indices", [])
+        return card
+
+    except Exception as exc:
+        logger.warning("generate_recovery_card failed (non-fatal): %s", exc)
+        return None

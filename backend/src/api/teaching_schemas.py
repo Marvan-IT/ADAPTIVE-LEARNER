@@ -42,6 +42,8 @@ class StudentResponseRequest(BaseModel):
     message: str = Field(
         ..., min_length=1, max_length=2000, description="Student's response text"
     )
+    engagement_signal: str | None = None
+    strategy_applied: str | None = None
 
 
 class SwitchStyleRequest(BaseModel):
@@ -104,6 +106,7 @@ class SocraticResponse(BaseModel):
     attempt: int = 0                    # socratic_attempt_count at time of response
     locked: bool = False                # True would mean permanently locked (not used currently)
     best_score: int | None = None       # Best score across all attempts
+    image: dict | None = None           # Exact card image if AI referenced one; None otherwise
 
 
 class RemediationCardsResponse(BaseModel):
@@ -139,6 +142,7 @@ class CardMCQ(BaseModel):
     options: list[str] = Field(..., min_length=4, max_length=4)
     correct_index: int = Field(..., ge=0, le=3)
     explanation: str = ""
+    difficulty: str = Field(default="MEDIUM", description="EASY | MEDIUM | HARD")
 
 
 class LessonCard(BaseModel):
@@ -148,11 +152,19 @@ class LessonCard(BaseModel):
     Frontend detects CHECKIN by: !card.question && Array.isArray(card.options).
     """
     index: int
+    card_type: str | None = Field(
+        default=None,
+        description="TEACH | EXAMPLE | VISUAL | QUESTION | APPLICATION | EXERCISE | RECAP | FUN | CHECKIN"
+    )
     title: str
     content: str = Field(..., description="Markdown content, may contain [IMAGE:N] inline markers")
     image_indices: list[int] = Field(default_factory=list, description="0-based indices into available images")
     images: list[dict] = Field(default_factory=list, description="Resolved image objects with url, caption, etc.")
     question: CardMCQ | None = Field(default=None, description="MCQ question; None for CHECKIN cards")
+    question2: CardMCQ | None = Field(
+        default=None,
+        description="Second MCQ shown when first answered wrong — no API call needed",
+    )
     options: list[str] | None = Field(default=None, description="Present only on CHECKIN cards")
     difficulty: int = Field(default=3, ge=1, le=5)
 
@@ -165,6 +177,34 @@ class CardsResponse(BaseModel):
     phase: str
     cards: list[LessonCard]
     total_questions: int = 0  # Retained for backward compat; no longer a meaningful count
+    has_more_concepts: bool = False           # True when concepts_queue is non-empty
+    concepts_total: int = 0                   # Total sub-sections in this concept
+    concepts_covered_count: int = 0           # How many covered so far (including this batch)
+
+
+class NextSectionCardsRequest(BaseModel):
+    """Live signals from the current session — used for real-time mode blending."""
+    card_index: int = 0
+    time_on_card_sec: float = 0.0
+    wrong_attempts: int = 0
+    hints_used: int = 0
+    idle_triggers: int = 0
+
+
+class NextSectionCardsResponse(BaseModel):
+    session_id: UUID
+    cards: list[LessonCard]
+    has_more_concepts: bool
+    concepts_total: int
+    concepts_covered_count: int
+    current_mode: str    # "SLOW" | "NORMAL" | "FAST"
+
+
+class UpdateSessionInterestsRequest(BaseModel):
+    interests: list[str] = Field(
+        default_factory=list,
+        description="Per-session interest override (empty = use student profile interests)"
+    )
 
 
 class RegenerateMCQRequest(BaseModel):
@@ -287,3 +327,16 @@ class ConceptReadinessResponse(BaseModel):
     concept_id: str
     all_prerequisites_met: bool
     unmet_prerequisites: list[UnmetPrerequisite]
+
+
+# ── Section Completion Schemas ─────────────────────────────────────────────────
+
+class SectionCompleteRequest(BaseModel):
+    concept_id: str
+    state_score: float = 2.0  # numeric state score for this section (1.0-3.0)
+
+
+class SectionCompleteResponse(BaseModel):
+    section_count: int
+    avg_state_score: float
+    state_distribution: dict

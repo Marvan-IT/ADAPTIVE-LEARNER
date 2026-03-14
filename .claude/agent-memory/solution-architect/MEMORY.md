@@ -1,6 +1,6 @@
 # Solution Architect Agent Memory — ADA Platform
 
-Last updated: 2026-03-01 (platform-hardening added)
+Last updated: 2026-03-11 (master-card-generation added)
 
 ---
 
@@ -135,6 +135,26 @@ Feature directories are kebab-case. Never combine two features in one directory.
 - `docs/ai-native-learning-os/` — HLD, DLD, execution-plan (2026-03-01)
 - `docs/platform-hardening/` — HLD, execution-plan (2026-03-01); DLD pre-specified by team
 - `docs/unified-card-schema/` — HLD, DLD, execution-plan (2026-03-06)
+- `docs/card-generation-rebuild/` — HLD, DLD, execution-plan (2026-03-09)
+- `docs/card-blank-screen-fix/` — HLD, DLD, execution-plan (2026-03-09)
+- `docs/real-time-adaptive-cards/` — HLD, DLD, execution-plan (2026-03-10) → details in `real-time-adaptive-cards.md`
+- `docs/adaptive-flashcard-system/` — HLD, DLD, execution-plan (2026-03-10) → details below
+- `docs/master-card-generation/` — HLD, DLD, execution-plan (2026-03-11) → see `master-card-generation.md`
+- `docs/hybrid-adaptive-cards/` — HLD, DLD, execution-plan (2026-03-14) → see `hybrid-adaptive-cards.md`
+
+### Adaptive Flashcard System — Key Design Decisions (2026-03-10)
+- **DB schema (already in models.py):** 11 new `students` cols + 3 new `card_interactions` cols. Alembic migration `005_add_adaptive_history_columns` needed. Models are already updated in `db/models.py`.
+- **Numeric state score scale [0.0–4.0]:** `compute_numeric_state_score(speed, comprehension) -> float`. Baseline: NORMAL×OK = 2.0. Lookup dict `_NUMERIC_STATE_MAP`. FAST×STRUGGLING = 2.0 (same as NORMAL×OK — overconfident student, needs normal scaffolding).
+- **blended_score_to_generate_as() thresholds:** < 1.25 = SLOW_STRUGGLING, < 1.75 = SLOW_OK, < 2.25 = NORMAL_OK, < 2.75 = NORMAL_STRONG, else FAST_STRONG. These are PROMPT labels only — not GenerationProfile lookup keys.
+- **Cold-start boundary: section_count >= 3** (not card count). Weights: cold-start = 80/20, graduated = 60/40.
+- **New config constants:** `ADAPTIVE_COLD_START_SECTION_THRESHOLD=3`, `ADAPTIVE_COLD_START_CURRENT_WEIGHT=0.8`, `ADAPTIVE_COLD_START_HISTORY_WEIGHT=0.2`, `ADAPTIVE_STATE_EMA_ALPHA=0.3`, `BOREDOM_SIGNAL_COOLDOWN_CARDS=5`, `BOREDOM_AUTOPILOT_WINDOW=4`, `BOREDOM_AUTOPILOT_SIMILARITY_THRESHOLD=0.85`.
+- **build_blended_analytics() now returns tuple[AnalyticsSummary, float, str]** — BREAKING CHANGE to callers. All call sites in `adaptive_router.py` must unpack 3 values.
+- **Feature flag:** `ADAPTIVE_NUMERIC_BLENDING_ENABLED: bool = True` in config.py — allows instant rollback via env var without redeploy.
+- **Boredom detector:** `adaptive/boredom_detector.py` (NEW). Pure functions, stdlib only (re + difflib.SequenceMatcher). 4 strategies: GAMIFY, CHALLENGE, STORY, BREAK_SUGGESTION. Strategy selection avoids `ineffective_engagement` list.
+- **New endpoint:** `POST /api/v2/sessions/{id}/section-complete` → `SectionCompleteRequest` / `SectionCompleteResponse`. Idempotency guard via `sectionCompleteSentRef` on frontend + `SELECT ... FOR UPDATE` on backend.
+- **EMA formula:** `new_avg = ADAPTIVE_STATE_EMA_ALPHA * section_score + (1 - alpha) * old_avg` where alpha = 0.3.
+- **Prompt additions:** `STUDENT STATE` block in system prompt; `COVERAGE CONTEXT` block in user prompt. Both optional dict params in `build_next_card_prompt()` and `build_adaptive_prompt()`.
+- **Effort:** ~28.5 dev-days; ~17 calendar days with 4 parallel agents. Critical path: P0-04 → A-01 → A-02 → B-03 → B-04 → B-05/B-06 → B-07 → D-04/D-05 → E-05 → E-06.
 
 ### Platform Hardening — Key Design Decisions (2026-03-01)
 - **Auth:** `APIKeyMiddleware` (custom `BaseHTTPMiddleware`) — single shared `API_SECRET_KEY`. Skip paths: `/health`, `/docs`, `/openapi.json`, `/redoc`. Use `secrets.compare_digest()`. Fail fast at startup if key absent.
@@ -160,6 +180,17 @@ Feature directories are kebab-case. Never combine two features in one directory.
 - **XP per answer:** MCQ correct=10 XP, short-answer correct=5 XP, wrong=0 XP + burnoutScore+20 + streak reset.
 - **Sigma node CSS limitation:** If Sigma uses WebGL (canvas-only), DOM node class application is not feasible — use Sigma color attribute or legend fallback. Verify before starting P7-2.
 - **WBS total:** 31 tasks, ~19.75 engineer-days. With 2 engineers: ~10 calendar days.
+
+### Card Generation Rebuild — Key Design Decisions (2026-03-09)
+- **No DB/frontend changes:** Pure fix to `teaching_service.py`, `prompts.py`, `config.py`.
+- **Fix A (dead code):** `_group_by_major_topic()` was never called. Now wired in `generate_cards()` after `_parse_sub_sections()`. Also fixes fallback key `"content"` → `"text"` (KeyError for new students).
+- **Fix B+C (token truncation):** `_generate_cards_single()` now accepts `max_tokens` param (default 12000, was hardcoded 8000). Caller computes adaptive budget: SLOW/STRUGGLING → `min(16000, max(8000, n*1800))`; NORMAL → `min(12000, max(6000, n*1200))`; FAST/STRONG → `min(8000, max(4000, n*900))`.
+- **Fix D (density):** `_build_card_profile_block()` SUPPORT branch gets "2–3 cards/section"; ACCELERATE gets "1–2 cards/section". NORMAL gets no density instruction.
+- **Fix E (completeness):** `build_cards_user_prompt()` appends numbered checklist of all section titles as COMPLETENESS REQUIREMENT — last instruction before return.
+- **Fix F (coverage):** COMPLETE COVERAGE line in system prompt now says "NON-NEGOTIABLE" and cross-references the checklist.
+- **New config constants:** `CARDS_MAX_TOKENS_SLOW/NORMAL/FAST` + `_FLOOR` + `_PER_SECTION` variants (9 total).
+- **New log lines:** `cards section_grouping: raw=%d grouped=%d` and `cards token_budget: max_tokens=%d`.
+- **Effort:** 4.65 engineer-days; 2.5 calendar days with 2 engineers.
 
 ### Unified Card Schema — Key Design Decisions (2026-03-06)
 - **No DB changes:** Pure prompt + service logic change. No migration required.

@@ -87,7 +87,9 @@
   "assist.thinking": "ചിന്തിക്കുന്നു...",
   "completion.mastered": "ആശയം നേടിയിരിക്കുന്നു!",
   "completion.masteredMsg": "{{title}} നിങ്ങൾ ശരിക്കും മനസ്സിലാക്കി. അദ്ഭുതകരമായ ജോലി!",
+  "completion.excellent": "അസ്സലായിരിക്കുന്നു!",
   "completion.almostThere": "ഏതാണ്ട് എത്തി!",
+  "completion.keepPracticing": "പരിശീലനം തുടരൂ!",
   "completion.almostMsg": "{{title}}-ൽ നല്ല ശ്രമം. ഒരിക്കൽ കൂടി അവലോകനം ചെയ്യാം!",
   "completion.outOf": "100-ൽ",
   "completion.tryAgain": "വീണ്ടും ശ്രമിക്കുക",
@@ -112,5 +114,16 @@
   "image.diagram": "ആശയ ഡയഗ്രം",
   "learning.generatingCard": "അടുത്ത കാർഡ് സൃഷ്ടിക്കുന്നു...",
   "learning.reviewDue": "അവലോകനം കാലഞ്ചി",
-  "learning.reviewDueBadge": "📖"
+  "learning.reviewDueBadge": "📖",
+  "studentForm.customizeNote": "You can customize your learning style in each lesson.",
+  "customize.panelTitle": "Customize lesson",
+  "customize.style": "Style",
+  "customize.styleDefault": "Default",
+  "customize.stylePirate": "Pirate",
+  "customize.styleAstronaut": "Astronaut",
+  "customize.styleGamer": "Gamer",
+  "customize.interests": "Interests",
+  "customize.addInterest": "Add topic (press Enter)",
+  "customize.nextCardsNote": "Your next cards will reflect these preferences.",
+  "learning.conceptsProgress": "{{covered}} / {{total}} വിഭാഗങ്ങൾ പൂർത്തിയായി"
 }

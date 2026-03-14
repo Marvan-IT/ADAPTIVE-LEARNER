@@ -87,7 +87,9 @@
   "assist.thinking": "யோசிக்கிறேன்...",
   "completion.mastered": "கருத்தில் தேர்ச்சி!",
   "completion.masteredMsg": "{{title}} என்பதை நீ நன்றாகப் புரிந்துகொண்டாய். அருமையான வேலை!",
+  "completion.excellent": "அருமை!",
   "completion.almostThere": "கிட்டத்தட்ட வந்துவிட்டாய்!",
+  "completion.keepPracticing": "தொடர்ந்து பயிற்சி செய்யுங்கள்!",
   "completion.almostMsg": "{{title}} பற்றிய நல்ல முயற்சி. மீண்டும் ஒருமுறை பார்ப்போம்!",
   "completion.outOf": "100-ல்",
   "completion.tryAgain": "மீண்டும் முயற்சி செய்",
@@ -112,5 +114,6 @@
   "image.diagram": "கருத்து வரைபடம்",
   "learning.generatingCard": "உங்கள் அடுத்த அட்டையை உருவாக்குகிறது...",
   "learning.reviewDue": "மதிப்பாய்வு நிலுவை",
-  "learning.reviewDueBadge": "📖"
+  "learning.reviewDueBadge": "📖",
+  "learning.conceptsProgress": "{{covered}} / {{total}} பிரிவுகள் முடிந்தன"
 }

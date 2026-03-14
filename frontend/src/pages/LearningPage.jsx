@@ -11,6 +11,7 @@ import CompletionView from "../components/learning/CompletionView";
 import { trackEvent } from "../utils/analytics";
 import { AlertCircle, LogOut, MapPin } from "lucide-react";
 import { checkConceptReadiness } from "../api/concepts";
+import { switchStyle, updateSessionInterests } from "../api/sessions";
 
 export default function LearningPage() {
   const { t } = useTranslation();
@@ -29,6 +30,7 @@ export default function LearningPage() {
   const [lessonInterests, setLessonInterests] = useState([]);
   const [interestInput, setInterestInput] = useState("");
   const [showCustomize, setShowCustomize] = useState(false);
+  const [lessonStyle, setLessonStyle] = useState("default");
   const [prereqWarning, setPrereqWarning] = useState(null); // null | { unmet: [...], style, interests }
   const [prereqChecked, setPrereqChecked] = useState(false);
 
@@ -113,79 +115,71 @@ export default function LearningPage() {
         {/* Customize this lesson — compact collapsible panel */}
         <div className="text-center mb-4">
           <button
-            onClick={() => setShowCustomize(!showCustomize)}
-            style={{
-              background: "none",
-              border: "none",
-              cursor: "pointer",
-              fontSize: "0.75rem",
-              color: "var(--color-text-muted)",
-              fontFamily: "inherit",
-              transition: "color 0.15s",
-            }}
-            onMouseEnter={(e) => (e.currentTarget.style.color = "var(--color-text)")}
-            onMouseLeave={(e) => (e.currentTarget.style.color = "var(--color-text-muted)")}
+            onClick={() => setShowCustomize(c => !c)}
+            style={{ fontSize: 12, background: 'none', border: 'none', cursor: 'pointer', opacity: 0.7 }}
+            title={t('customize.panelTitle') || 'Customize lesson'}
           >
-            {showCustomize ? "Hide customization \u25b4" : "Customize this lesson \u25be"}
+            ⚙
           </button>
           {showCustomize && (
-            <div style={{ marginTop: "0.5rem", display: "flex", flexDirection: "column", alignItems: "center", gap: "0.5rem" }}>
-              <input
-                style={{
-                  width: "100%",
-                  maxWidth: "320px",
-                  padding: "0.375rem 0.75rem",
-                  fontSize: "0.875rem",
-                  backgroundColor: "var(--color-surface)",
-                  border: "1px solid var(--color-border)",
-                  borderRadius: "var(--radius-md)",
-                  color: "var(--color-text)",
-                  fontFamily: "inherit",
-                  outline: "none",
-                  transition: "border-color 0.15s",
-                }}
-                placeholder="Add interests (e.g. football, cooking)..."
-                value={interestInput}
-                onChange={(e) => setInterestInput(e.target.value)}
-                onFocus={(e) => (e.target.style.borderColor = "var(--color-primary)")}
-                onBlur={(e) => (e.target.style.borderColor = "var(--color-border)")}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && interestInput.trim()) {
-                    setLessonInterests((prev) => [...prev, interestInput.trim()]);
-                    setInterestInput("");
-                  }
-                }}
-              />
-              {lessonInterests.length > 0 && (
-                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.25rem", justifyContent: "center" }}>
-                  {lessonInterests.map((interest) => (
-                    <span
-                      key={interest}
-                      onClick={() => setLessonInterests((prev) => prev.filter((i) => i !== interest))}
-                      style={{
-                        padding: "0.125rem 0.5rem",
-                        fontSize: "0.75rem",
-                        backgroundColor: "var(--color-primary-light)",
-                        color: "var(--color-primary)",
-                        borderRadius: "9999px",
-                        cursor: "pointer",
-                        fontWeight: 600,
-                        transition: "background 0.15s, color 0.15s",
+            <div style={{ background: '#f8f8f8', borderRadius: 8, padding: 12, marginBottom: 12, fontSize: 13, marginTop: 8 }}>
+              {/* Style selector */}
+              <div style={{ marginBottom: 8 }}>
+                <label style={{ fontWeight: 600, marginRight: 8 }}>{t('customize.style') || 'Style:'}</label>
+                <select
+                  value={lessonStyle}
+                  onChange={async (e) => {
+                    const newStyle = e.target.value;
+                    setLessonStyle(newStyle);
+                    if (session) {
+                      try { await switchStyle(session.id, newStyle); } catch (_) {}
+                    }
+                  }}
+                >
+                  <option value="default">{t('customize.styleDefault') || 'Default'}</option>
+                  <option value="pirate">{t('customize.stylePirate') || 'Pirate'}</option>
+                  <option value="astronaut">{t('customize.styleAstronaut') || 'Astronaut'}</option>
+                  <option value="gamer">{t('customize.styleGamer') || 'Gamer'}</option>
+                </select>
+              </div>
+              {/* Interests input */}
+              <div>
+                <label style={{ fontWeight: 600, marginRight: 8 }}>{t('customize.interests') || 'Interests:'}</label>
+                <input
+                  value={interestInput}
+                  onChange={e => setInterestInput(e.target.value)}
+                  onKeyDown={async (e) => {
+                    if (e.key === 'Enter' && interestInput.trim()) {
+                      const updated = [...lessonInterests, interestInput.trim()].slice(0, 10);
+                      setLessonInterests(updated);
+                      setInterestInput('');
+                      if (session) {
+                        try { await updateSessionInterests(session.id, updated); } catch (_) {}
+                      }
+                    }
+                  }}
+                  placeholder={t('customize.addInterest') || 'Add topic (press Enter)'}
+                  style={{ marginRight: 8, fontSize: 12 }}
+                />
+                {lessonInterests.map((interest, i) => (
+                  <span key={i} style={{ background: '#e0e0e0', borderRadius: 4, padding: '2px 6px', marginRight: 4, fontSize: 12 }}>
+                    {interest}
+                    <button
+                      onClick={async () => {
+                        const updated = lessonInterests.filter((_, j) => j !== i);
+                        setLessonInterests(updated);
+                        if (session) {
+                          try { await updateSessionInterests(session.id, updated); } catch (_) {}
+                        }
                       }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.backgroundColor = "rgba(239,68,68,0.15)";
-                        e.currentTarget.style.color = "#ef4444";
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.backgroundColor = "var(--color-primary-light)";
-                        e.currentTarget.style.color = "var(--color-primary)";
-                      }}
-                    >
-                      {interest}{" "}{"\u00d7"}
-                    </span>
-                  ))}
-                </div>
-              )}
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', marginLeft: 4 }}
+                    >x</button>
+                  </span>
+                ))}
+              </div>
+              <p style={{ fontSize: 11, color: '#888', marginTop: 6, marginBottom: 0 }}>
+                {t('customize.nextCardsNote') || 'Your next cards will reflect these preferences.'}
+              </p>
             </div>
           )}
         </div>

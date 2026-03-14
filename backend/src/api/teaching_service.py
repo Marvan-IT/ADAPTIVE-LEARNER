@@ -19,7 +19,10 @@ from openai import AsyncOpenAI
 from config import (
     OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, OPENAI_MODEL_MINI,
     MASTERY_THRESHOLD, MAX_SOCRATIC_EXCHANGES, SOCRATIC_MAX_ATTEMPTS,
-    CARDS_MID_SESSION_CHECK_INTERVAL,
+    CARDS_MID_SESSION_CHECK_INTERVAL, STARTER_PACK_MAX_SECTIONS, STARTER_PACK_INITIAL_SECTIONS,
+    CARDS_MAX_TOKENS_SLOW, CARDS_MAX_TOKENS_SLOW_FLOOR, CARDS_MAX_TOKENS_SLOW_PER_SECTION,
+    CARDS_MAX_TOKENS_NORMAL, CARDS_MAX_TOKENS_NORMAL_FLOOR, CARDS_MAX_TOKENS_NORMAL_PER_SECTION,
+    CARDS_MAX_TOKENS_FAST, CARDS_MAX_TOKENS_FAST_FLOOR, CARDS_MAX_TOKENS_FAST_PER_SECTION,
 )
 from api.knowledge_service import KnowledgeService
 from api.prompts import (
@@ -37,6 +40,151 @@ from api.teaching_schemas import CardMCQ, RegenerateMCQRequest
 
 logger = logging.getLogger(__name__)
 
+
+# Section type classifier — priority order, first match wins
+_SECTION_CLASSIFIER: list[tuple[str, str]] = [
+    (r"^learning objectives?\b",                                              "LEARNING_OBJECTIVES"),
+    (r"^example\s+\d+\.\d+",                                                 "EXAMPLE"),
+    (r"^try it\s+\d+\.\d+",                                                  "TRY_IT"),
+    (r"^solution\b",                                                          "SOLUTION"),
+    (r"^how to\b",                                                            "HOW_TO"),
+    (r"^manipulative\b|^media\b|^access\b",                                  "SUPPLEMENTARY"),
+    (r"^tip\b|^note\b|^be careful\b|^link to literacy\b|^everyday math\b",  "TIP"),
+    (r"^be prepared\b",                                                       "PREREQ_CHECK"),
+    (r"^writing exercises\b|^practice makes perfect\b|^mixed practice\b"
+     r"|^review exercises\b|^practice test\b|^glossary\b|^key concepts\b",   "END_MATTER"),
+]
+
+# Math domain classifier for section-type-specific prompt notes
+# Text is normalized (underscores/dots → spaces) before matching, so \b word boundaries work correctly.
+# Use leading \b on short tokens to prevent substring false-positives (e.g. "ratio" inside "operations").
+_SECTION_DOMAIN_MAP: list[tuple[str, str]] = [
+    (r"\badd\b|\bsubtract\b|\bmultiply\b|\bdivide\b|whole number|\binteger\b",        "TYPE_A"),
+    (r"solve equation|solving equation|properties of equality",                        "TYPE_B"),
+    (r"\bfraction|\bmixed number|\bnumerator\b|\bdenominator\b|\bimproper\b",         "TYPE_C"),
+    (r"\bgeometry\b|\bangle\b|\btriangle\b|\brectangle\b|\bcircle\b|\bvolume\b|surface area", "TYPE_D"),
+    (r"language of algebra|\bexpression\b|\bvariable\b|\bconstant\b|\bevaluate\b|\btranslate\b", "TYPE_E"),
+    (r"\bpercent\b|\bratio\b|\brate\b|\bproportion\b|\bcommission\b|\bdiscount\b|\binterest\b", "TYPE_F"),
+    (r"\bexponent\b|\bpolynomial\b|\bmonomial\b|\bfactor\b|scientific notation",      "TYPE_G"),
+]
+
+
+def validate_and_repair_cards(
+    cards: list,
+    section_order: list[str],
+    required_sections: list[str] | None = None,
+) -> tuple[list, list[str]]:
+    """Validate and repair generated cards for coverage, ordering, and deduplication.
+
+    Args:
+        cards: List of card dicts (with keys: section_id, card_type, question, answer, etc.)
+        section_order: Ordered list of section_ids defining correct sequence
+        required_sections: If provided, sections that MUST have at least one card
+
+    Returns:
+        (repaired_cards, missing_sections) where:
+        - repaired_cards: cards sorted by section_order, duplicates removed, section_ids inferred
+        - missing_sections: list of required_sections with no card (triggers re-generation)
+    """
+    if not cards:
+        return [], list(required_sections or [])
+
+    # Step 1: Build section index for ordering
+    section_index = {sid: i for i, sid in enumerate(section_order)}
+
+    # Step 2: Infer missing section_id from content (fuzzy match against section_order)
+    for card in cards:
+        if not card.get("section_id"):
+            # Try to match card content against section titles
+            content = f"{card.get('question', '')} {card.get('answer', '')} {card.get('front', '')} {card.get('back', '')}".lower()
+            best_match = None
+            best_score = 0
+            for sid in section_order:
+                # Simple word overlap scoring
+                sid_words = set(sid.lower().replace("_", " ").replace("-", " ").split())
+                content_words = set(content.split())
+                if sid_words:
+                    score = len(sid_words & content_words) / len(sid_words)
+                    if score > best_score and score > 0.3:
+                        best_score = score
+                        best_match = sid
+            card["section_id"] = best_match or (section_order[0] if section_order else "unknown")
+
+    # Step 3: Sort by section_order index
+    def sort_key(card: dict) -> int:
+        sid = card.get("section_id", "")
+        return section_index.get(sid, len(section_order))
+
+    sorted_cards = sorted(cards, key=sort_key)
+
+    # Step 4: Remove duplicate section+card_type pairs (keep first occurrence)
+    seen: set[tuple[str, str]] = set()
+    deduped: list[dict] = []
+    for card in sorted_cards:
+        key = (card.get("section_id", ""), card.get("card_type", ""))
+        if key not in seen:
+            seen.add(key)
+            deduped.append(card)
+
+    # Step 5: Check coverage
+    sections_covered = {card.get("section_id", "") for card in deduped}
+    missing: list[str] = []
+    if required_sections:
+        missing = [s for s in required_sections if s not in sections_covered]
+
+    return deduped, missing
+
+
+async def _update_strategy_effectiveness(
+    db: AsyncSession,
+    student_id: uuid.UUID,
+    strategy: str,
+    was_effective: bool,
+) -> None:
+    """Update student's effective/ineffective engagement lists based on strategy outcome.
+
+    - was_effective=True  → add to effective_engagement, remove from ineffective_engagement
+    - was_effective=False → add to ineffective_engagement (does not touch effective_engagement)
+
+    Commits the change. Logs and swallows all errors so a feedback failure never
+    blocks the card-interaction response.
+    """
+    try:
+        result = await db.execute(select(Student).where(Student.id == student_id))
+        student = result.scalar_one_or_none()
+        if not student:
+            logger.warning(
+                "[strategy-feedback] student not found: student_id=%s strategy=%s",
+                student_id, strategy,
+            )
+            return
+
+        if was_effective:
+            current = list(student.effective_engagement or [])
+            if strategy not in current:
+                current.append(strategy)
+            student.effective_engagement = current
+            # Remove from ineffective list if it was there
+            ineffective = list(student.ineffective_engagement or [])
+            student.ineffective_engagement = [s for s in ineffective if s != strategy]
+        else:
+            current = list(student.ineffective_engagement or [])
+            if strategy not in current:
+                current.append(strategy)
+            student.ineffective_engagement = current
+
+        await db.commit()
+        logger.info(
+            "[strategy-feedback] updated: student_id=%s strategy=%s was_effective=%s",
+            student_id, strategy, was_effective,
+        )
+    except Exception:
+        logger.exception(
+            "[strategy-feedback] failed to update: student_id=%s strategy=%s was_effective=%s",
+            student_id, strategy, was_effective,
+        )
+
+
 class TeachingService:
     """Manages the full lifecycle of a teaching session."""
 
@@ -46,7 +194,7 @@ class TeachingService:
         self.model = OPENAI_MODEL
         self.model_mini = OPENAI_MODEL_MINI
 
-    async def _chat(self, messages: list, max_tokens: int = 2000, temperature: float = 0.7, model: str | None = None) -> str:
+    async def _chat(self, messages: list, max_tokens: int = 2000, temperature: float = 0.7, model: str | None = None, timeout: float = 30.0) -> str:
         """Call GPT and return the response content. Pass model='mini' to use gpt-4o-mini."""
         use_model = self.model_mini if model == "mini" else self.model
         last_exc = None
@@ -57,14 +205,17 @@ class TeachingService:
                     messages=messages,
                     temperature=temperature,
                     max_tokens=max_tokens,
-                    timeout=30.0,
+                    timeout=timeout,
                 )
                 if not response.choices:
                     raise ValueError("LLM returned no choices")
                 content = response.choices[0].message.content or ""
+                if not content.strip():
+                    finish = response.choices[0].finish_reason
+                    logger.warning("[%s] Attempt %d: empty content, finish_reason=%s",
+                                   use_model, attempt + 1, finish)
                 if content.strip():
                     return content.strip()
-                logger.warning("[%s] Attempt %d: empty response", use_model, attempt + 1)
                 if attempt < 2:
                     await asyncio.sleep(2 ** attempt)
             except Exception as e:
@@ -240,7 +391,9 @@ class TeachingService:
 
         # Extract the specific card titles the student actually studied.
         # Socratic questions must be restricted to these topics only.
+        # Also build card_visuals: {title, description, image} for cards that have images.
         covered_topics: list[str] = []
+        card_visuals: list[dict] = []
         if session.presentation_text:
             try:
                 cached = json.loads(session.presentation_text)
@@ -251,6 +404,14 @@ class TeachingService:
                 else:
                     card_list = []
                 covered_topics = [c.get("title", "") for c in card_list if c.get("title")]
+                for card in card_list:
+                    imgs = card.get("images") or []
+                    if imgs and card.get("title"):
+                        card_visuals.append({
+                            "title": card["title"],
+                            "description": (imgs[0].get("description") or imgs[0].get("filename") or "")[:200],
+                            "image": imgs[0],
+                        })
             except Exception:
                 logger.warning("[socratic-scope] Failed to parse presentation_text for session_id=%s", session.id, exc_info=True)
                 covered_topics = []
@@ -267,7 +428,7 @@ class TeachingService:
             concept_text=concept_text,
             style=session.style,
             interests=effective_interests,
-            images=images,
+            card_visuals=card_visuals,
             language=language,
             socratic_profile=socratic_profile,
             history=history,
@@ -283,7 +444,8 @@ class TeachingService:
             {"role": "user", "content": "I've read the explanation. Please check my understanding."},
         ]
 
-        first_question = await self._chat(messages=messages, max_tokens=500, model="mini")
+        raw_first_question = await self._chat(messages=messages, max_tokens=500, model="mini")
+        first_question, first_image = self._parse_card_image_ref(raw_first_question, card_visuals)
 
         # Store messages
         await self._save_message(db, session.id, "system", system_prompt, "CHECKING", msg_count)
@@ -295,7 +457,7 @@ class TeachingService:
         await self._save_message(db, session.id, "assistant", first_question, "CHECKING", msg_count + 2)
 
         await db.flush()
-        return first_question
+        return first_question, first_image
 
     # ── Handle Student Response (Socratic Loop) ───────────────────
 
@@ -365,8 +527,26 @@ class TeachingService:
             else:
                 openai_messages.insert(0, force_directive)
 
+        # Build card_visuals for image resolution
+        card_visuals: list[dict] = []
+        if session.presentation_text:
+            try:
+                cached = json.loads(session.presentation_text)
+                cv_card_list = cached.get("cards", []) if isinstance(cached, dict) else (cached if isinstance(cached, list) else [])
+                for card in cv_card_list:
+                    imgs = card.get("images") or []
+                    if imgs and card.get("title"):
+                        card_visuals.append({
+                            "title": card["title"],
+                            "description": (imgs[0].get("description") or imgs[0].get("filename") or "")[:200],
+                            "image": imgs[0],
+                        })
+            except Exception:
+                logger.warning("[socratic-respond] Failed to parse presentation_text for session_id=%s", session.id, exc_info=True)
+
         # Call OpenAI for the next Socratic response (150 tokens enforces 1-2 sentence hints)
-        ai_response = await self._chat(messages=openai_messages, max_tokens=150)
+        raw_ai_response = await self._chat(messages=openai_messages, max_tokens=150)
+        ai_response, response_image = self._parse_card_image_ref(raw_ai_response, card_visuals)
         await self._save_message(db, session.id, "assistant", ai_response, current_phase, msg_count + 1)
 
         # Check if the AI signaled completion
@@ -387,6 +567,7 @@ class TeachingService:
             "attempt": session.socratic_attempt_count,
             "locked": False,
             "best_score": session.best_check_score,
+            "image": response_image,
         }
 
         if check_complete:
@@ -440,7 +621,19 @@ class TeachingService:
             elif session.socratic_attempt_count < SOCRATIC_MAX_ATTEMPTS:
                 # ── REMEDIATION PATH ──────────────────────────────────────
                 session.socratic_attempt_count += 1
-                failed_topics = await self._extract_failed_topics(session.id, db)
+                # Extract covered card titles to help _extract_failed_topics identify weak spots
+                _covered: list[str] = []
+                if session.presentation_text:
+                    try:
+                        _cached = json.loads(session.presentation_text)
+                        _card_list = _cached.get("cards", []) if isinstance(_cached, dict) else []
+                        _covered = [c.get("title", "") for c in _card_list if c.get("title")]
+                    except Exception:
+                        pass
+                failed_topics = await self._extract_failed_topics(session.id, db, covered_topics=_covered)
+                # Fall back to generic message when no corrections were detected
+                if not failed_topics:
+                    failed_topics = _covered[:5] if _covered else ["the key concepts of this section"]
                 session.remediation_context = json.dumps(failed_topics)
 
                 # Set phase based on attempt count
@@ -500,10 +693,7 @@ class TeachingService:
     # ── Card-Based Learning ──────────────────────────────────────
 
     # Cards with these titles are artifacts of old mechanical grouping — reject their cache.
-    _STALE_TITLE_RE = re.compile(
-        r"^(solution\b|how to\b|example\b|learning objectives\b|\d+\.\d+|\(r\))",
-        re.IGNORECASE,
-    )
+    _STALE_TITLE_RE = re.compile(r"^(solution$|how to$|\(r\))", re.IGNORECASE)
 
     @staticmethod
     def _has_stale_card_titles(cards: list[dict]) -> bool:
@@ -525,15 +715,26 @@ class TeachingService:
         Returns dict with cards array and metadata.
         """
         # Return cached if available — reject stale sessions with old grouping artifacts
+        _CARDS_CACHE_VERSION = 11  # Rolling architecture: concepts_queue + per-section floor
         if session.presentation_text:
             try:
                 cached = json.loads(session.presentation_text)
                 if "cards" in cached:
+                    # Bust cache when version is behind (old cards from before latest rebuild)
+                    if cached.get("cache_version", 0) < _CARDS_CACHE_VERSION:
+                        raise ValueError("stale cache version")
                     has_new_schema = any(card.get("card_type") for card in cached.get("cards", []))
                     is_stale = TeachingService._has_stale_card_titles(cached.get("cards", []))
                     if has_new_schema and not is_stale:
+                        # Lightweight re-sort on cache load — no re-gen trigger, just ordering
+                        cached_cards = cached.get("cards", [])
+                        if cached_cards:
+                            section_order = [c.get("section_id", "") for c in cached_cards if c.get("section_id")]
+                            repaired, _ = validate_and_repair_cards(cached_cards, section_order)
+                            if repaired:
+                                cached["cards"] = repaired
                         return cached
-            except (json.JSONDecodeError, TypeError):
+            except (json.JSONDecodeError, TypeError, ValueError):
                 pass
 
         # 1. Retrieve concept
@@ -550,7 +751,43 @@ class TeachingService:
         # fall back to single section if parsing yields nothing.
         sub_sections = self._parse_sub_sections(concept_text)
         if not sub_sections:
-            sub_sections = [{"title": concept_title, "content": concept_text}]
+            sub_sections = [{"title": concept_title, "text": concept_text}]
+        else:
+            # Consolidate micro-sections using the textbook blueprint approach:
+            # classify each section by pedagogical type, then build an ordered blueprint
+            # that merges SOLUTION into preceding EXAMPLE and TIP into preceding item.
+            # Falls back to _group_by_major_topic if the blueprint yields < 2 items.
+            classified = self._classify_sections(sub_sections)
+            blueprint = self._build_textbook_blueprint(classified)
+            if len(blueprint) >= 2:
+                sub_sections = blueprint
+                logger.info("[blueprint] concept=%s raw=%d blueprint=%d",
+                            session.concept_id, len(classified), len(blueprint))
+            else:
+                logger.warning("[blueprint] fallback for concept=%s (%d items)",
+                               session.concept_id, len(blueprint))
+                sub_sections = self._group_by_major_topic(sub_sections)
+
+        # Classify the math domain for section-type-specific prompt notes
+        section_domain = self._classify_section_type(session.concept_id, concept_title)
+
+        # Rolling architecture: generate only the first STARTER_PACK_INITIAL_SECTIONS sub-sections
+        # on the initial request. The remaining sections are stored in concepts_queue and generated
+        # one-by-one via POST /next-section-cards with live student signals.
+        all_sub_sections = sub_sections[:]  # full list preserved for queue
+        # Apply STARTER_PACK_MAX_SECTIONS as a safety cap on the total queue size
+        if len(all_sub_sections) > STARTER_PACK_MAX_SECTIONS:
+            logger.info(
+                "[starter-pack] concept=%s capping total %d sections → %d (safety cap)",
+                session.concept_id, len(all_sub_sections), STARTER_PACK_MAX_SECTIONS,
+            )
+            all_sub_sections = all_sub_sections[:STARTER_PACK_MAX_SECTIONS]
+        sub_sections = all_sub_sections[:STARTER_PACK_INITIAL_SECTIONS]   # generate first N only
+        concepts_queue = all_sub_sections[STARTER_PACK_INITIAL_SECTIONS:]  # remainder for rolling
+        logger.info(
+            "[starter-pack] concept=%s initial=%d queue=%d total=%d",
+            session.concept_id, len(sub_sections), len(concepts_queue), len(all_sub_sections),
+        )
 
         # 3. Only include images that are educational AND have a real vision description
         # AND are not self-assessment checklists/rubrics (which pass is_educational=True
@@ -562,7 +799,7 @@ class TeachingService:
         useful_images = [
             img for img in images
             if img.get("image_type", "").upper() in ("DIAGRAM", "FORMULA")
-            and img.get("is_educational", True)
+            and img.get("is_educational") is not False
             and img.get("description")
             and not any(
                 kw in (img.get("description") or "").lower()
@@ -575,9 +812,9 @@ class TeachingService:
         )
 
         # 3b. Load student history and wrong-option pattern concurrently for adaptive enrichment
-        from adaptive.adaptive_engine import load_student_history, load_wrong_option_pattern
+        from adaptive.adaptive_engine import load_student_history, load_wrong_option_pattern, build_blended_analytics
         from adaptive.profile_builder import build_learning_profile
-        from adaptive.schemas import AnalyticsSummary
+        from adaptive.schemas import AnalyticsSummary, CardBehaviorSignals
 
         try:
             history, wrong_option_pattern = await asyncio.gather(
@@ -602,27 +839,68 @@ class TeachingService:
             }
             wrong_option_pattern = None
 
-        # Build LearningProfile from history (defaults give NORMAL/OK for new students with no history)
-        mini = AnalyticsSummary(
-            student_id=str(session.student_id),
-            concept_id=session.concept_id,
-            time_spent_sec=history["avg_time_per_card"] or 120.0,
-            expected_time_sec=120.0,
-            attempts=max(1, round((history["avg_wrong_attempts"] or 0) + 1)),
+        # Build LearningProfile via 60/40 blended analytics.
+        # For Path A (initial card generation, no live interaction yet) we construct a synthetic
+        # CardBehaviorSignals from historical averages and let build_blended_analytics apply
+        # the 60/40 (or 90/10 acute deviation) blend against the historical baseline.
+        current_signals = CardBehaviorSignals(
+            card_index=0,
+            time_on_card_sec=history["avg_time_per_card"] or 120.0,
             wrong_attempts=round(history["avg_wrong_attempts"] or 0),
             hints_used=round(history["avg_hints_per_card"] or 0),
-            revisits=0,
-            recent_dropoffs=0,
-            skip_rate=0.0,
-            quiz_score=max(0.1, 1.0 - min((history["avg_wrong_attempts"] or 0) * 0.15, 0.9)),
-            last_7d_sessions=history["sessions_last_7d"],
+            idle_triggers=0,
         )
-        card_profile = build_learning_profile(mini, has_unmet_prereq=False)
+        _blended_score: float = 2.0
+        _generate_as: str = "NORMAL"
+        try:
+            blended, _blended_score, _generate_as = build_blended_analytics(
+                current_signals, history,
+                concept_id=session.concept_id,
+                student_id=str(session.student_id),
+            )
+            # Conservative mode cap: new students (< 5 interactions) must not get FAST mode
+            total_interactions = history.get("total_interactions", 0) if history else 0
+            if total_interactions < 5 and _generate_as == "FAST":
+                _generate_as = "NORMAL"
+                _blended_score = min(_blended_score, 2.4)
+                logger.info(
+                    "[mode-cap] concept=%s FAST→NORMAL for new student (interactions=%d)",
+                    session.concept_id, total_interactions,
+                )
+            card_profile = build_learning_profile(blended, has_unmet_prereq=False)
+        except Exception as exc:
+            logger.warning(
+                "[cards-adaptive] blended_analytics_failed: student_id=%s — falling back to direct history: %s",
+                session.student_id, exc,
+            )
+            mini = AnalyticsSummary(
+                student_id=str(session.student_id),
+                concept_id=session.concept_id,
+                time_spent_sec=history["avg_time_per_card"] or 120.0,
+                expected_time_sec=120.0,
+                attempts=max(1, round((history["avg_wrong_attempts"] or 0) + 1)),
+                wrong_attempts=round(history["avg_wrong_attempts"] or 0),
+                hints_used=round(history["avg_hints_per_card"] or 0),
+                revisits=0,
+                recent_dropoffs=0,
+                skip_rate=0.0,
+                quiz_score=max(0.1, 1.0 - min((history["avg_wrong_attempts"] or 0) * 0.15, 0.9)),
+                last_7d_sessions=history["sessions_last_7d"],
+            )
+            card_profile = build_learning_profile(mini, has_unmet_prereq=False)
         logger.info(
             "Card adaptive profile for student=%s concept=%s: speed=%s comp=%s eng=%s",
             session.student_id, session.concept_id,
             card_profile.speed, card_profile.comprehension, card_profile.engagement,
         )
+
+        # Compute per-section token floor from profile — used by _generate_cards_per_section
+        if card_profile.speed == "SLOW" or card_profile.comprehension == "STRUGGLING":
+            per_section_floor = CARDS_MAX_TOKENS_SLOW_PER_SECTION    # 6000
+        elif card_profile.speed == "FAST" and card_profile.comprehension == "STRONG":
+            per_section_floor = CARDS_MAX_TOKENS_FAST_PER_SECTION    # 3000
+        else:
+            per_section_floor = CARDS_MAX_TOKENS_NORMAL_PER_SECTION  # 4500
 
         logger.info(
             "[cards-adaptive] student_id=%s concept_id=%s history_cards=%d "
@@ -638,6 +916,17 @@ class TeachingService:
         # 4. Build prompts
         effective_interests = session.lesson_interests if session.lesson_interests else student.interests
         language = getattr(student, "preferred_language", "en") or "en"
+
+        # Extract remediation weak concepts from session context (set during earlier REMEDIATING phases)
+        remediation_weak: list[str] = []
+        if session is not None and getattr(session, "socratic_attempt_count", 0) > 0:
+            raw_ctx = getattr(session, "remediation_context", None)
+            if raw_ctx:
+                try:
+                    remediation_weak = json.loads(raw_ctx) if isinstance(raw_ctx, str) else (raw_ctx or [])
+                except Exception:
+                    pass
+
         system_prompt = build_cards_system_prompt(
             style=session.style,
             interests=effective_interests,
@@ -645,8 +934,16 @@ class TeachingService:
             learning_profile=card_profile,
             history=history,
             images=useful_images,
+            remediation_weak_concepts=remediation_weak if remediation_weak else None,
+            generate_as=_generate_as,
+            blended_state_score=_blended_score,
+            confidence_score=getattr(card_profile, "confidence_score", 0.5),
+            trend_direction=history.get("trend_direction", "STABLE") if history else "STABLE",
+            engagement=getattr(card_profile, "engagement", "ENGAGED"),
+            section_domain=section_domain,
         )
 
+        # Build a single user_prompt for cache saving purposes (saved to messages later)
         user_prompt = build_cards_user_prompt(
             concept_title=concept_title,
             sub_sections=sub_sections,
@@ -657,13 +954,111 @@ class TeachingService:
             interests=effective_interests,
             style=session.style,
             learning_profile=card_profile,
+            generate_as=_generate_as,
+            blended_score=_blended_score,
         )
 
-        # 5. Generate cards in a single LLM call
-        cards_data = await self._generate_cards_single(
-            system_prompt, user_prompt,
+        # 5. Generate cards — per-section parallel calls so no section is dropped due to truncation.
+        # Each section gets its own LLM call; results are merged in section order.
+        n_sections = len(sub_sections)
+        if card_profile.speed == "SLOW" or card_profile.comprehension == "STRUGGLING":
+            adaptive_max_tokens = max(CARDS_MAX_TOKENS_SLOW_FLOOR, n_sections * CARDS_MAX_TOKENS_SLOW_PER_SECTION)
+        elif card_profile.speed == "FAST" and card_profile.comprehension == "STRONG":
+            adaptive_max_tokens = max(CARDS_MAX_TOKENS_FAST_FLOOR, n_sections * CARDS_MAX_TOKENS_FAST_PER_SECTION)
+        else:
+            adaptive_max_tokens = max(CARDS_MAX_TOKENS_NORMAL_FLOOR, n_sections * CARDS_MAX_TOKENS_NORMAL_PER_SECTION)
+        logger.info(
+            "cards token_budget: concept=%s n_sections=%d profile=%s/%s max_tokens=%d",
+            session.concept_id, n_sections,
+            card_profile.speed, card_profile.comprehension, adaptive_max_tokens,
         )
 
+        # Extract concept overview for per-section context
+        concept_overview = concept_text[:400].rstrip() + ("..." if len(concept_text) > 400 else "")
+
+        # FAST mode: merge consecutive TRY_IT sections into TRY_IT_BATCH before sending to LLM
+        if _generate_as == "FAST":
+            sub_sections = self._batch_consecutive_try_its(sub_sections)
+            batch_count = sum(1 for s in sub_sections if s.get("section_type") == "TRY_IT_BATCH")
+            if batch_count:
+                logger.info("[fast-batch] concept=%s try_it_batches=%d total_sections=%d",
+                            session.concept_id, batch_count, len(sub_sections))
+
+        # Initialize concept/image tracking for coverage context
+        concepts_covered: list[str] = []
+        images_used_this_section: list[str] = []
+        concept_index = 0
+
+        # Per-section parallel generation (complete coverage, no content loss)
+        all_raw_cards = await self._generate_cards_per_section(
+            system_prompt=system_prompt,
+            concept_title=concept_title,
+            concept_overview=concept_overview,
+            sections=sub_sections,
+            latex=latex,
+            images=useful_images,
+            max_tokens_per_section=adaptive_max_tokens,
+            per_section_floor=per_section_floor,
+            concept_index=concept_index,
+            concepts_covered=concepts_covered,
+            images_used_this_section=images_used_this_section,
+            generate_as=_generate_as,
+            blended_score=_blended_score,
+        )
+
+        # Update tracking after main generation
+        concept_index += len(sub_sections)
+        concepts_covered.extend(s["title"] for s in sub_sections)
+        for card in all_raw_cards:
+            if card.get("images"):
+                for img in card["images"]:
+                    fname = img.get("filename") or img.get("file")
+                    if fname and fname not in images_used_this_section:
+                        images_used_this_section.append(fname)
+
+        # Gap-fill pass: detect and regenerate any section that produced no card
+        missing = self._find_missing_sections(all_raw_cards, sub_sections)
+        if missing:
+            logger.warning(
+                "[card-gen] gap-fill: %d sections missing: %s",
+                len(missing), [s["title"] for s in missing],
+            )
+            gap_cards = await self._generate_cards_per_section(
+                system_prompt=system_prompt,
+                concept_title=concept_title,
+                concept_overview=concept_overview,
+                sections=missing,
+                latex=latex,
+                images=useful_images,
+                max_tokens_per_section=per_section_floor,
+                per_section_floor=per_section_floor,
+                concept_index=concept_index,
+                concepts_covered=concepts_covered,
+                images_used_this_section=images_used_this_section,
+                generate_as=_generate_as,
+                blended_score=_blended_score,
+            )
+            all_raw_cards.extend(gap_cards)
+
+            # RC4: Re-sort all_raw_cards to restore curriculum section order after gap-fill append.
+            # Uses stable integer _section_index stamps set in generate_for_section().
+            all_raw_cards.sort(key=lambda c: c.get("_section_index", len(sub_sections)))
+
+        # Post-generation validation: infer missing section_ids, deduplicate, and re-sort.
+        # Build section_order from sub_section titles (used as stable section identifiers here).
+        _section_order_titles = [s["title"] for s in sub_sections]
+        all_raw_cards, _still_missing = validate_and_repair_cards(
+            all_raw_cards,
+            section_order=_section_order_titles,
+            required_sections=None,  # gap-fill pass above already handled re-gen; just repair
+        )
+        if _still_missing:
+            logger.warning(
+                "[card-validate] session=%s sections still uncovered after gap-fill: %s",
+                str(session.id), _still_missing,
+            )
+
+        cards_data = {"cards": all_raw_cards}
         raw_cards = cards_data.get("cards", [])
 
         # 7. Post-process: validate unified schema, normalise question, strip HTML wrappers
@@ -773,7 +1168,7 @@ class TeachingService:
                 if not isinstance(image_indices, list):
                     image_indices = []
 
-                # Build global→local index map and populate card.images
+                # Build global→local index map and populate card.images — limit to max 1 image per card
                 global_to_local: dict[int, int] = {}
                 for global_idx in image_indices:
                     if (
@@ -789,6 +1184,7 @@ class TeachingService:
                         global_to_local[global_idx] = len(card["images"])
                         card["images"].append(img_copy)
                         assigned_global.add(global_idx)
+                        break  # Limit to max 1 image per card
 
                 # Remap [IMAGE:N] markers in content: global index → local card.images index
                 # so frontend lookup card.images[N] returns the correct image object.
@@ -798,6 +1194,40 @@ class TeachingService:
 
                 card["content"] = _re_img.sub(
                     r"\[IMAGE:(\d+)\]", _remap, card.get("content", "")
+                )
+
+            # RC5: Keyword-based fallback image assignment for VISUAL cards that the LLM
+            # did not assign any images to (LLM skips [IMAGE:N] markers ~30% of the time).
+            unassigned = [
+                (i, img) for i, img in enumerate(useful_images)
+                if i not in assigned_global
+            ]
+            for card in raw_cards:
+                if card.get("images"):
+                    continue  # Already has an image — skip
+                if not unassigned:
+                    break     # No more images to distribute
+                # Use unassigned pool if available, otherwise allow sharing an already-assigned image
+                pool = unassigned if unassigned else list(enumerate(useful_images))
+                if not pool:
+                    continue
+                card_text = (card.get("title", "") + " " + card.get("content", "")).lower()
+                best_score, best_pool_idx = -1, 0
+                for pool_idx, (global_idx, img) in enumerate(pool):
+                    desc = (img.get("description") or "").lower()
+                    score = sum(1 for w in card_text.split() if len(w) > 3 and w in desc)
+                    if score > best_score:
+                        best_score, best_pool_idx = score, pool_idx
+                global_idx, img = pool[best_pool_idx]
+                img_copy = dict(img)
+                img_copy["caption"] = img.get("description") or f"Diagram: {card.get('title', '')}"
+                card["images"] = [img_copy]
+                if unassigned:
+                    unassigned.pop(best_pool_idx)
+                    assigned_global.add(global_idx)
+                logger.info(
+                    "[image-fallback] VISUAL card '%s' assigned image %d via keyword fallback (score=%d)",
+                    card.get("title", ""), global_idx, best_score,
                 )
         else:
             for card in raw_cards:
@@ -818,6 +1248,13 @@ class TeachingService:
             "phase": session.phase,
             "cards": raw_cards,
             "total_questions": 0,  # Retained for API compat; no longer a meaningful count
+            "cache_version": 11,   # Must match _CARDS_CACHE_VERSION above
+            "concepts_queue": concepts_queue,                          # remaining sub-sections
+            "concepts_covered": [s["title"] for s in sub_sections],   # covered so far
+            "concepts_total": len(all_sub_sections),                   # total count
+            "needs_review": [],                                        # double-fail recovery tracking
+            "system_prompt": system_prompt,                            # needed by generate_next_section_cards()
+            "_images": useful_images,                                  # resolved images for rolling generation
         }
 
         # 8. Cache and save messages
@@ -830,8 +1267,146 @@ class TeachingService:
         await db.flush()
         return result
 
-    async def _generate_cards_single(self, system_prompt: str, user_prompt: str) -> dict:
+    async def generate_next_section_cards(
+        self,
+        db: AsyncSession,
+        session: "TeachingSession",
+        student,
+        signals,  # NextSectionCardsRequest
+    ) -> dict:
+        """Pop next sub-section from concepts_queue, generate cards with live-signal mode, append to session.
+
+        Returns a dict suitable for constructing NextSectionCardsResponse.
+        """
+        import json as json_mod
+        cached = json_mod.loads(session.presentation_text or "{}")
+        concepts_queue = list(cached.get("concepts_queue", []))
+        concepts_covered = list(cached.get("concepts_covered", []))
+        all_sub_sections_count = cached.get("concepts_total", 1)
+
+        if not concepts_queue:
+            return {
+                "cards": [],
+                "has_more_concepts": False,
+                "concepts_total": all_sub_sections_count,
+                "concepts_covered_count": len(concepts_covered),
+                "current_mode": "NORMAL",
+            }
+
+        next_section = concepts_queue.pop(0)
+
+        # Build blended analytics from accumulated session signals
+        session_signals = list(cached.get("session_signals", []))
+        session_signals.append({
+            "card_index": signals.card_index,
+            "time_on_card_sec": signals.time_on_card_sec,
+            "wrong_attempts": signals.wrong_attempts,
+            "hints_used": signals.hints_used,
+        })
+
+        # Determine adaptive mode via the same blended analytics path used in generate_cards()
+        from adaptive.adaptive_engine import load_student_history, build_blended_analytics
+        from adaptive.profile_builder import build_learning_profile
+        from adaptive.schemas import AnalyticsSummary, CardBehaviorSignals
+
+        _current_mode = "NORMAL"
+        _per_section_floor = CARDS_MAX_TOKENS_NORMAL_PER_SECTION
+        try:
+            history = await load_student_history(str(session.student_id), session.concept_id, db)
+            # Use the latest session signal as the current CardBehaviorSignals
+            latest = session_signals[-1]
+            current_signals = CardBehaviorSignals(
+                card_index=latest["card_index"],
+                time_on_card_sec=latest["time_on_card_sec"],
+                wrong_attempts=latest["wrong_attempts"],
+                hints_used=latest["hints_used"],
+                idle_triggers=0,
+            )
+            blended, _blended_score, _generate_as = build_blended_analytics(
+                current_signals, history,
+                concept_id=session.concept_id,
+                student_id=str(session.student_id),
+            )
+            profile = build_learning_profile(blended, has_unmet_prereq=False)
+            _current_mode = profile.speed
+            if _current_mode == "SLOW" or profile.comprehension == "STRUGGLING":
+                _per_section_floor = CARDS_MAX_TOKENS_SLOW_PER_SECTION
+            elif _current_mode == "FAST" and profile.comprehension == "STRONG":
+                _per_section_floor = CARDS_MAX_TOKENS_FAST_PER_SECTION
+            else:
+                _per_section_floor = CARDS_MAX_TOKENS_NORMAL_PER_SECTION
+        except Exception as exc:
+            logger.warning(
+                "[next-section] blended_analytics_failed: student_id=%s — defaulting to NORMAL: %s",
+                session.student_id, exc,
+            )
+
+        system_prompt = cached.get("system_prompt", "")
+        concept_title = cached.get("concept_title", "")
+        latex: list = []  # LaTeX already embedded in section text from initial generation
+
+        # Generate cards for this ONE sub-section
+        new_raw_cards = await self._generate_cards_per_section(
+            system_prompt=system_prompt,
+            concept_title=concept_title,
+            concept_overview="",
+            sections=[next_section],
+            latex=latex,
+            images=[],  # images already resolved in cached cards; new section uses text only
+            max_tokens_per_section=_per_section_floor,
+            per_section_floor=_per_section_floor,
+            generate_as=_current_mode,
+            blended_score=2.0,
+        )
+
+        # Stamp absolute indices starting after the existing cached cards
+        base_idx = len(cached.get("cards", []))
+        for i, card in enumerate(new_raw_cards):
+            card["_section_index"] = base_idx + i
+            card["index"] = base_idx + i
+            # Ensure required defaults
+            card.setdefault("images", [])
+            card.setdefault("image_indices", [])
+            if card.get("difficulty") is None:
+                card["difficulty"] = 3
+            else:
+                try:
+                    card["difficulty"] = int(card["difficulty"])
+                except (TypeError, ValueError):
+                    card["difficulty"] = 3
+
+        # Append to session cache
+        cached_cards = list(cached.get("cards", []))
+        cached_cards.extend(new_raw_cards)
+        cached["cards"] = cached_cards
+        cached["concepts_queue"] = concepts_queue
+        concepts_covered.append(next_section.get("title", ""))
+        cached["concepts_covered"] = concepts_covered
+        cached["session_signals"] = session_signals
+        session.presentation_text = json_mod.dumps(cached)
+        await db.flush()
+
+        logger.info(
+            "[next-section] session=%s section=%r new_cards=%d mode=%s remaining=%d",
+            str(session.id), next_section.get("title", "?"),
+            len(new_raw_cards), _current_mode, len(concepts_queue),
+        )
+
+        return {
+            "cards": new_raw_cards,
+            "has_more_concepts": len(concepts_queue) > 0,
+            "concepts_total": all_sub_sections_count,
+            "concepts_covered_count": len(concepts_covered),
+            "current_mode": _current_mode,
+        }
+
+    async def _generate_cards_single(
+        self, system_prompt: str, user_prompt: str, max_tokens: int = 12000
+    ) -> dict:
         """Generate all cards in a single LLM call (primary model)."""
+        # Increased floor (120s) and adjusted coefficient (/80 instead of /100)
+        # to account for larger system prompt (~3000 tokens) processing overhead.
+        card_timeout = max(120.0, max_tokens / 80.0 + 30.0)
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -840,7 +1415,7 @@ class TeachingService:
         last_error = None
         for attempt in range(3):
             try:
-                raw_json = await self._chat(messages=messages, max_tokens=8000)
+                raw_json = await self._chat(messages=messages, max_tokens=max_tokens, timeout=card_timeout, model="mini")
             except ValueError:
                 last_error = ValueError("LLM returned empty response")
                 logger.warning("[cards-single] Empty response (attempt %d)", attempt + 1)
@@ -851,6 +1426,16 @@ class TeachingService:
                 break
             except json.JSONDecodeError as e:
                 last_error = e
+                # Try json_repair first — handles unescaped quotes, bad escapes, truncation
+                try:
+                    from json_repair import repair_json
+                    repaired = repair_json(raw_json, return_objects=True)
+                    if isinstance(repaired, dict) and "cards" in repaired and repaired["cards"]:
+                        cards_data = repaired
+                        logger.info("[cards-single] JSON repaired via json_repair (attempt %d)", attempt + 1)
+                        break
+                except Exception as repair_exc:
+                    logger.debug("[cards-single] json_repair failed: %s", repair_exc)
                 salvaged = self._salvage_truncated_json(raw_json)
                 if salvaged is not None:
                     cards_data = salvaged
@@ -859,6 +1444,89 @@ class TeachingService:
         if cards_data is None:
             raise ValueError(f"AI returned invalid JSON for cards: {last_error}")
         return cards_data
+
+    async def _generate_cards_per_section(
+        self,
+        system_prompt: str,
+        concept_title: str = "",
+        concept_overview: str = "",
+        sections: list[dict] = None,
+        latex: list[str] = None,
+        images: list[dict] = None,
+        max_tokens_per_section: int = 4000,
+        per_section_floor: int = 4_500,
+        concept_index: int = 0,
+        concepts_covered: list[str] | None = None,
+        images_used_this_section: list[str] | None = None,
+        generate_as: str = "NORMAL",
+        blended_score: float = 2.0,
+    ) -> list[dict]:
+        """
+        Generate cards for each section in a separate LLM call, all in parallel.
+        Each call receives the section's full untruncated text plus concept context.
+        Results are merged in section order.
+        """
+
+        async def generate_for_section(idx: int, sec: dict) -> tuple[int, list[dict]]:
+            section_user_prompt = build_cards_user_prompt(
+                concept_title=concept_title,
+                sub_sections=[sec],
+                latex=latex,
+                images=images,
+                concept_overview=concept_overview,
+                section_position=f"section {idx + 1} of {len(sections)}",
+                concept_index=concept_index + idx,
+                concepts_remaining=len(sections) - idx - 1,
+                concepts_covered=concepts_covered,
+                blended_score=blended_score,
+                generate_as=generate_as,
+                images_used_this_section=images_used_this_section,
+            )
+            try:
+                text_len = len(sec.get("text", ""))
+                # Budget = max(profile floor, half the input text length).
+                # This ensures rich section text drives a proportionally larger budget
+                # while the profile floor guarantees adequate room for SLOW/NORMAL/FAST learners.
+                text_driven_budget = max(per_section_floor, text_len // 2)
+                data = await self._generate_cards_single(
+                    system_prompt, section_user_prompt, max_tokens=text_driven_budget
+                )
+                generated_cards = data.get("cards", [])
+                # Stamp stable integer section index so sort is O(n) and text-free
+                for card in generated_cards:
+                    card["_section_index"] = idx
+                # Collect image filenames used in returned cards for tracking
+                for card in generated_cards:
+                    if isinstance(card.get("images"), list):
+                        for img in card["images"]:
+                            fname = img.get("filename") or img.get("file")
+                            if fname and images_used_this_section is not None and fname not in images_used_this_section:
+                                images_used_this_section.append(fname)
+                return idx, generated_cards
+            except Exception as exc:
+                logger.warning(
+                    "[card-gen] section %d (%s) failed: %s",
+                    idx, sec.get("title", "?"), exc,
+                )
+                return idx, []
+
+        results = await asyncio.gather(
+            *(generate_for_section(i, sec) for i, sec in enumerate(sections))
+        )
+
+        all_cards: list[dict] = []
+        for _, cards in sorted(results, key=lambda x: x[0]):
+            all_cards.extend(cards)
+        return all_cards
+
+    @staticmethod
+    def _find_missing_sections(cards: list[dict], sections: list[dict]) -> list[dict]:
+        """Return sections whose title does not appear in any card's title or content."""
+        card_text = " ".join(
+            (c.get("title") or "") + " " + (c.get("content") or "")
+            for c in cards
+        ).lower()
+        return [s for s in sections if s["title"].lower() not in card_text]
 
     @staticmethod
     def _extract_json_block(raw: str) -> str:
@@ -870,6 +1538,17 @@ class TeachingService:
             if m:
                 return m.group(1).strip()
         return raw
+
+    @staticmethod
+    def _parse_card_image_ref(text: str, card_visuals: list[dict]) -> tuple[str, dict | None]:
+        """Strip [CARD:N] marker from AI response; return (cleaned_text, image_dict | None)."""
+        m = re.search(r'\[CARD:(\d+)\]', text)
+        if not m:
+            return text, None
+        idx = int(m.group(1))
+        clean = re.sub(r'\s*\[CARD:\d+\]', '', text).strip()
+        image = card_visuals[idx]["image"] if 0 <= idx < len(card_visuals) else None
+        return clean, image
 
     async def handle_assist(
         self,
@@ -1312,6 +1991,96 @@ class TeachingService:
         return groups if groups else sections
 
     @staticmethod
+    def _classify_sections(sections: list[dict]) -> list[dict]:
+        """Classify each sub-section by its pedagogical type using regex patterns."""
+        result = []
+        for sec in sections:
+            title_lower = sec["title"].lower().strip()
+            sec_type = "CONCEPT"
+            for pattern, stype in _SECTION_CLASSIFIER:
+                if re.search(pattern, title_lower):
+                    sec_type = stype
+                    break
+            result.append({**sec, "section_type": sec_type})
+        return result
+
+    @staticmethod
+    def _build_textbook_blueprint(classified: list[dict]) -> list[dict]:
+        """
+        Ordered blueprint matching textbook pedagogical flow.
+        SOLUTION → merged into preceding EXAMPLE.
+        TIP → merged into preceding item.
+        SUPPLEMENTARY / PREREQ_CHECK / END_MATTER → skipped.
+        All others → independent blueprint items.
+        """
+        blueprint: list[dict] = []
+        for sec in classified:
+            stype = sec["section_type"]
+            if stype in ("SUPPLEMENTARY", "PREREQ_CHECK", "END_MATTER"):
+                continue
+            elif stype == "SOLUTION" and blueprint:
+                if blueprint[-1]["section_type"] == "EXAMPLE":
+                    blueprint[-1]["text"] += "\n\n**Solution:**\n" + sec["text"]
+                    continue
+            elif stype == "TIP" and blueprint:
+                blueprint[-1]["text"] += "\n\n> **Note:** " + sec["text"]
+                continue
+            blueprint.append({**sec})
+        return blueprint
+
+    @staticmethod
+    def _batch_consecutive_try_its(
+        sections: list[dict],
+        max_batch: int = 4,
+    ) -> list[dict]:
+        """
+        FAST mode only: merge runs of consecutive TRY_IT sections into a single TRY_IT_BATCH.
+        Solo TRY_IT sections (run length = 1) are passed through unchanged.
+        """
+        result: list[dict] = []
+        i = 0
+        while i < len(sections):
+            if sections[i].get("section_type") != "TRY_IT":
+                result.append(sections[i])
+                i += 1
+                continue
+            # Collect consecutive TRY_IT run
+            batch: list[dict] = [sections[i]]
+            while (
+                i + len(batch) < len(sections)
+                and sections[i + len(batch)].get("section_type") == "TRY_IT"
+                and len(batch) < max_batch
+            ):
+                batch.append(sections[i + len(batch)])
+            if len(batch) == 1:
+                result.append(batch[0])
+            else:
+                first_title = batch[0]["title"]
+                last_title  = batch[-1]["title"]
+                merged_text = "\n\n".join(
+                    f"({chr(97 + j)}) {s['title']}\n{s['text']}"
+                    for j, s in enumerate(batch)
+                )
+                result.append({
+                    "title": f"{first_title} – {last_title}",
+                    "text":  merged_text,
+                    "section_type": "TRY_IT_BATCH",
+                })
+            i += len(batch)
+        return result
+
+    @staticmethod
+    def _classify_section_type(concept_id: str, concept_title: str) -> str:
+        """Return math domain type (TYPE_A–G) for domain-specific prompt rules."""
+        # Normalize underscores and dots to spaces so \b word boundaries work on concept IDs
+        raw = concept_id + " " + concept_title
+        text = re.sub(r"[_.]", " ", raw).lower()
+        for pattern, domain in _SECTION_DOMAIN_MAP:
+            if re.search(pattern, text):
+                return domain
+        return "TYPE_A"
+
+    @staticmethod
     def _extract_inline_image_filenames(text: str) -> list[str]:
         """
         Extract bare filenames from inline image refs in sub-section text.
@@ -1436,31 +2205,58 @@ class TeachingService:
         return list(result.scalars().all())
 
     async def _extract_failed_topics(
-        self, session_id: uuid.UUID, db: AsyncSession
+        self, session_id: uuid.UUID, db: AsyncSession,
+        covered_topics: list[str] | None = None,
     ) -> list[str]:
         """
         Extract topic keywords from wrong/partial answers in the Socratic check messages.
-        Uses simple heuristics: looks for assistant correction phrases and extracts
-        the question text from 2 positions prior.
+        Delegates to the static implementation after fetching ORM messages.
         """
-        messages = await self._get_checking_messages(db, session_id)
-        failed_topics = []
+        orm_messages = await self._get_checking_messages(db, session_id)
+        # Convert ORM objects to plain dicts for the static analyser
+        messages = [{"role": m.role, "content": m.content or ""} for m in orm_messages]
+        return self._extract_failed_topics_from_messages(messages, covered_topics or [])
 
-        correction_phrases = [
-            "not quite", "hmm", "close but", "actually", "let me explain",
-            "let's think", "the correct answer", "let me clarify",
+    @staticmethod
+    def _extract_failed_topics_from_messages(
+        messages: list[dict], covered_topics: list[str]
+    ) -> list[str]:
+        """
+        Extract topics the student answered incorrectly by scanning for
+        AI correction phrases paired with the preceding question.
+        """
+        CORRECTION_PHRASES = [
+            "not quite", "not exactly", "actually,", "let me clarify",
+            "the correct answer", "that's incorrect", "that is incorrect",
+            "good try", "close, but", "almost, but", "let's revisit",
+            "you said", "remember that", "recall that",
         ]
+        failed: list[str] = []
+        seen_keys: set[str] = set()
+        last_assistant_msg = ""
 
-        for i, msg in enumerate(messages):
-            if msg.role == "assistant":
-                content_lower = msg.content.lower()
-                if any(phrase in content_lower for phrase in correction_phrases):
-                    # Look 2 messages back for the question the student was answering
-                    if i >= 2 and messages[i - 2].role == "assistant":
-                        question_text = messages[i - 2].content[:100]
-                        failed_topics.append(question_text)
+        for msg in messages:
+            role = msg.get("role", "")
+            content = msg.get("content", "") or ""
+            content_lower = content.lower()
 
-        return failed_topics if failed_topics else ["the key concepts of this section"]
+            if role == "assistant":
+                # Check if this message contains a correction
+                is_correction = any(phrase in content_lower for phrase in CORRECTION_PHRASES)
+                if is_correction and last_assistant_msg:
+                    # The previous assistant message was the question student got wrong
+                    key = last_assistant_msg[:50]
+                    if key not in seen_keys:
+                        seen_keys.add(key)
+                        # Extract just the question portion (first sentence ending with ?)
+                        q_match = re.search(r'[^.!?]*\?', last_assistant_msg)
+                        topic = q_match.group(0).strip() if q_match else last_assistant_msg[:100]
+                        failed.append(topic)
+                last_assistant_msg = content
+
+        # Fallback: if no corrections detected, return empty list
+        # (caller handles empty → uses covered_topics or generic message)
+        return failed if failed else []
 
     async def regenerate_mcq(self, req: RegenerateMCQRequest) -> CardMCQ:
         """Generate a replacement MCQ after a wrong answer — same concept, different numbers/scenario."""
