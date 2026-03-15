@@ -39,7 +39,7 @@ import api.teaching_router as teaching_router_module
 from adaptive.adaptive_router import router as adaptive_router, cards_router as adaptive_cards_router
 import adaptive.adaptive_router as adaptive_router_module
 from db.connection import init_db, close_db
-from config import OUTPUT_DIR, OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, OPENAI_MODEL_MINI
+from config import OUTPUT_DIR, OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, OPENAI_MODEL_MINI, validate_required_env_vars
 
 
 def _discover_processed_books() -> list[str]:
@@ -102,6 +102,7 @@ def _save_translation_cache() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    validate_required_env_vars()
     global knowledge_svc, knowledge_services, _openai_client
     slugs = _discover_processed_books()
     if not slugs:

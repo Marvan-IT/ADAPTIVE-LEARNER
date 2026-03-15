@@ -57,7 +57,11 @@ class SwitchStyleRequest(BaseModel):
 # ── Response Schemas ──────────────────────────────────────────────
 
 class UpdateLanguageRequest(BaseModel):
-    language: str = Field(..., min_length=2, max_length=10)
+    language: str = Field(
+        ...,
+        pattern=r"^(en|ar|de|es|fr|hi|ja|ko|ml|pt|si|ta|zh)$",
+        description="Supported language code (ISO 639-1)",
+    )
 
 
 class StudentResponse(BaseModel):

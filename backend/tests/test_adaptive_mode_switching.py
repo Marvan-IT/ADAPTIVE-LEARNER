@@ -858,17 +858,17 @@ class TestCacheVersion:
     sentinel to prompt a deliberate decision.
     """
 
-    def test_cards_cache_version_is_12_in_source(self):
+    def test_cards_cache_version_is_13_in_source(self):
         """
         Inspect the source code of TeachingService.generate_cards() and assert
-        that '_CARDS_CACHE_VERSION = 12' appears verbatim.
+        that '_CARDS_CACHE_VERSION = 13' appears verbatim.
         This is the canonical regression guard for cache invalidation.
         """
         from api.teaching_service import TeachingService
 
         source = inspect.getsource(TeachingService.generate_cards)
 
-        assert "_CARDS_CACHE_VERSION = 12" in source, (
+        assert "_CARDS_CACHE_VERSION = 13" in source, (
             "Cache version literal has changed. Update it deliberately "
             "and bump this test."
         )
@@ -1019,12 +1019,12 @@ class TestSectionCoverage:
         assert max(CARDS_MAX_TOKENS_NORMAL_FLOOR, 50 * CARDS_MAX_TOKENS_NORMAL_PER_SECTION) > max(CARDS_MAX_TOKENS_NORMAL_FLOOR, 5 * CARDS_MAX_TOKENS_NORMAL_PER_SECTION)
         assert max(CARDS_MAX_TOKENS_FAST_FLOOR,   50 * CARDS_MAX_TOKENS_FAST_PER_SECTION)   > max(CARDS_MAX_TOKENS_FAST_FLOOR,   5 * CARDS_MAX_TOKENS_FAST_PER_SECTION)
 
-    def test_cards_cache_version_is_12(self):
+    def test_cards_cache_version_is_13(self):
         import re, pathlib
         _src_dir = pathlib.Path(__file__).resolve().parent.parent / "src"
         src = (_src_dir / "api" / "teaching_service.py").read_text()
         match = re.search(r"_CARDS_CACHE_VERSION\s*=\s*(\d+)", src)
-        assert match and int(match.group(1)) == 12
+        assert match and int(match.group(1)) == 13
 
 
 # ===========================================================================
@@ -1036,10 +1036,10 @@ class TestSectionCoverage:
 class TestHybridRollingCards:
     """Tests for the Hybrid Rolling Adaptive Card Generation architecture (cache version 11)."""
 
-    def test_starter_pack_initial_sections_is_2(self):
-        """STARTER_PACK_INITIAL_SECTIONS must be 2 — first 2 sub-sections form the starter pack."""
+    def test_starter_pack_initial_sections_is_3(self):
+        """STARTER_PACK_INITIAL_SECTIONS must be 3 — first 3 sub-sections form the starter pack."""
         from config import STARTER_PACK_INITIAL_SECTIONS
-        assert STARTER_PACK_INITIAL_SECTIONS == 2
+        assert STARTER_PACK_INITIAL_SECTIONS == 3
 
     def test_per_section_slow_floor_is_at_least_5000(self):
         """Slow learner section floor must be >=5000 tokens to generate 7-12 cards."""
@@ -1056,15 +1056,15 @@ class TestHybridRollingCards:
         from config import CARDS_MAX_TOKENS_FAST_PER_SECTION
         assert CARDS_MAX_TOKENS_FAST_PER_SECTION >= 2500
 
-    def test_cards_cache_version_is_12(self):
-        """Cache version must be 12 to invalidate all old bulk-generated card caches."""
+    def test_cards_cache_version_is_13(self):
+        """Cache version must be 13 to invalidate all old bulk-generated card caches."""
         import re
         import pathlib
         _src_dir = pathlib.Path(__file__).resolve().parent.parent / "src"
         src = (_src_dir / "api" / "teaching_service.py").read_text()
         match = re.search(r"_CARDS_CACHE_VERSION\s*=\s*(\d+)", src)
         assert match is not None, "_CARDS_CACHE_VERSION not found in teaching_service.py"
-        assert int(match.group(1)) == 12, f"Expected cache version 12, got {match.group(1)}"
+        assert int(match.group(1)) == 13, f"Expected cache version 13, got {match.group(1)}"
 
     def test_lesson_card_has_question2_field(self):
         """LessonCard must have question2 field (pre-generated second MCQ, no API call on first wrong)."""

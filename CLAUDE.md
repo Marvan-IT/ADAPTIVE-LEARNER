@@ -332,6 +332,34 @@ docs/
 | Socratic chat shows ALL card images whenever any keyword detected | `[CARD:N]` marker: AI tags which card's image it references; backend resolves exact image; frontend renders only that one per message | `prompts.py`, `teaching_service.py`, `teaching_schemas.py`, `teaching_router.py`, `SessionContext.jsx`, `SocraticChat.jsx` |
 | `DiagramPanel` showed every image always visible at top of chat | Removed entirely — replaced by per-message `msg.image` inline render | `SocraticChat.jsx` |
 
+### ✅ Multi-Book Support & Simulation Tests (2026-03-15)
+
+| Issue | Fix Applied | File |
+|---|---|---|
+| Code only worked for prealgebra | Auto-discovery of processed books; per-book KnowledgeService routing | `main.py`, `teaching_service.py`, `teaching_router.py` |
+| `book_slug` not in session API | Added `book_slug` to `StartSessionRequest` + session creation | `teaching_schemas.py`, `teaching_service.py`, `teaching_router.py` |
+| `STARTER_PACK_INITIAL_SECTIONS=2` caused test failure | Bumped to 3; cache version 12→13 | `config.py`, `teaching_service.py` |
+| Vite proxy pointed to wrong port (8891) | Fixed proxy to port 8889 | `vite.config.js` |
+| 10/12 simulation tests failing | All 12/12 now passing | `test_student_simulations.py` |
+
+### ✅ Real Student Readiness Fixes (2026-03-16)
+
+| Issue | Fix Applied | File |
+|---|---|---|
+| Language/style/interests changeable mid-lesson (confusing) | Settings locked at session start; customize panel disabled during active lesson; backend returns HTTP 409 if style/interest change attempted after cards started | `teaching_router.py`, `LearningPage.jsx` |
+| Recovery cards had no images | Use `concept_detail.images[:3]` in `generate_recovery_card()` | `adaptive_engine.py` |
+| Missing LLM timeout in adaptive engine | Added `timeout=30.0` to `_call_llm()` | `adaptive_engine.py` |
+| Mastery threshold (70) not communicated to student | Added "score 70 to pass" opening rule to Socratic system prompt | `prompts.py` |
+| Language code not validated (invalid codes silently accepted) | Added `pattern` validator to `UpdateLanguageRequest` | `teaching_schemas.py` |
+| JSON repair `return_objects=True` silently discarded repaired cards | Removed flag; `json.loads()` on repair string output | `teaching_service.py` |
+| `StudentMastery` IntegrityError on race condition (500 error) | Pre-check before insert; skip gracefully if already exists | `teaching_router.py` |
+| Duplicate language map in `adaptive_engine` (could diverge) | Import `LANGUAGE_NAMES` from `prompts.py` | `adaptive_engine.py` |
+| Hardcoded DB password in `config.py` fallback | Removed; raise `ValueError` on missing `DATABASE_URL` | `config.py` |
+| 20+ hardcoded English strings in frontend (breaks 13-language support) | Replaced with `t()` calls; added keys to all 13 locale files | `SocraticChat.jsx`, `CardLearningView.jsx`, `LearningPage.jsx` |
+| MCQ timer not cancelled on Next click (race condition) | `clearTimeout()` before card advance | `CardLearningView.jsx` |
+| `.env.example` files missing | Created `backend/.env.example` and `frontend/.env.example` | `backend/.env.example`, `frontend/.env.example` |
+| No startup env-var validation | Raise clear `ValueError` on startup if required vars missing | `config.py` |
+
 ### ⚠️ Known Technical Debt (Requires devops-engineer)
 
 | Issue | File | Priority |
@@ -341,8 +369,6 @@ docs/
 | No `docker-compose.yml` | — | Critical |
 | No CI/CD pipeline | — | Critical |
 | No frontend test framework (no vitest) | `frontend/package.json` | High |
-| No `.env.example` files | `backend/`, `frontend/` | High |
-| No startup env variable validation | `backend/src/config.py` | Medium |
 | `backend/src/models.py` duplicates `db/models.py` | `backend/src/models.py` | Low |
 
 ### 🏗️ Out of Scope (Architectural — Defer)

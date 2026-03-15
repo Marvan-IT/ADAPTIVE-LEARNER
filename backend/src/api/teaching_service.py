@@ -1470,7 +1470,7 @@ class TeachingService:
                 # Try json_repair first — handles unescaped quotes, bad escapes, truncation
                 try:
                     from json_repair import repair_json
-                    repaired = repair_json(raw_json, return_objects=True)
+                    repaired = json.loads(repair_json(raw_json))
                     if isinstance(repaired, dict) and "cards" in repaired and repaired["cards"]:
                         cards_data = repaired
                         logger.info("[cards-single] JSON repaired via json_repair (attempt %d)", attempt + 1)

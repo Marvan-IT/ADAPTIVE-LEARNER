@@ -501,6 +501,10 @@ export default function CardLearningView({ remediationMode = false }) {
 
   // Collect signals and call adaptive goToNextCard
   const handleNextCard = useCallback(async () => {
+    if (feedbackTimerRef.current) {
+      clearTimeout(feedbackTimerRef.current);
+      feedbackTimerRef.current = null;
+    }
     await goToNextCard({
       cardIndex:           currentCardIndex,
       timeOnCardSec:       cardStartTimeRef.current !== null ? (performance.now() - cardStartTimeRef.current) / 1000 : 0,
@@ -779,13 +783,13 @@ export default function CardLearningView({ remediationMode = false }) {
                         fontFamily: "inherit",
                       }}
                     >
-                      Got it! →
+                      {t("learning.gotIt")}
                     </button>
                   </div>
                 )}
                 {cardType === "FUN" && cs.checkinDone && (
                   <div style={{ marginTop: "0.75rem", fontSize: "0.85rem", color: "#7c3aed", fontWeight: 600 }}>
-                    ✓ Noted!
+                    {t("learning.noted")}
                   </div>
                 )}
 
@@ -836,7 +840,7 @@ export default function CardLearningView({ remediationMode = false }) {
         {masteryData.withMCQ > 0 && (
           <div className="mt-2">
             <div className="flex justify-between text-xs mb-1" style={{ color: "var(--color-text-muted)" }}>
-              <span>Mastery readiness</span>
+              <span>{t("learning.masteryReadiness")}</span>
               <span>{masteryData.correct}/{masteryData.withMCQ} correct</span>
             </div>
             <div className="h-1.5 rounded-full overflow-hidden" style={{ backgroundColor: "var(--color-border)" }}>
@@ -881,7 +885,7 @@ export default function CardLearningView({ remediationMode = false }) {
                 transition: "all var(--motion-fast)",
               }}
             >
-              Too Easy
+              {t("learning.tooEasy")}
             </button>
             <button
               onClick={() => setDifficultyBias(difficultyBias === "TOO_HARD" ? null : "TOO_HARD")}
@@ -898,7 +902,7 @@ export default function CardLearningView({ remediationMode = false }) {
                 transition: "all var(--motion-fast)",
               }}
             >
-              Too Hard
+              {t("learning.tooHard")}
             </button>
           </div>
         )}

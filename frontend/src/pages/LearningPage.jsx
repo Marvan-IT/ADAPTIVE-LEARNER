@@ -123,16 +123,22 @@ export default function LearningPage() {
           </button>
           {showCustomize && (
             <div style={{ background: '#f8f8f8', borderRadius: 8, padding: 12, marginBottom: 12, fontSize: 13, marginTop: 8 }}>
+              {!!session && (
+                <p style={{ fontSize: 11, color: '#b45309', marginBottom: 8, marginTop: 0, fontWeight: 600 }}>
+                  {t('customize.lockedDuringLesson')}
+                </p>
+              )}
               {/* Style selector */}
               <div style={{ marginBottom: 8 }}>
                 <label style={{ fontWeight: 600, marginRight: 8 }}>{t('customize.style') || 'Style:'}</label>
                 <select
                   value={lessonStyle}
+                  disabled={!!session}
                   onChange={async (e) => {
                     const newStyle = e.target.value;
                     setLessonStyle(newStyle);
                     if (session) {
-                      try { await switchStyle(session.id, newStyle); } catch (_) {}
+                      try { await switchStyle(session.id, newStyle); } catch (err) { console.error("[customize] failed to save:", err); }
                     }
                   }}
                 >
@@ -147,6 +153,7 @@ export default function LearningPage() {
                 <label style={{ fontWeight: 600, marginRight: 8 }}>{t('customize.interests') || 'Interests:'}</label>
                 <input
                   value={interestInput}
+                  disabled={!!session}
                   onChange={e => setInterestInput(e.target.value)}
                   onKeyDown={async (e) => {
                     if (e.key === 'Enter' && interestInput.trim()) {
@@ -154,7 +161,7 @@ export default function LearningPage() {
                       setLessonInterests(updated);
                       setInterestInput('');
                       if (session) {
-                        try { await updateSessionInterests(session.id, updated); } catch (_) {}
+                        try { await updateSessionInterests(session.id, updated); } catch (err) { console.error("[customize] failed to save:", err); }
                       }
                     }
                   }}
@@ -165,14 +172,15 @@ export default function LearningPage() {
                   <span key={i} style={{ background: '#e0e0e0', borderRadius: 4, padding: '2px 6px', marginRight: 4, fontSize: 12 }}>
                     {interest}
                     <button
+                      disabled={!!session}
                       onClick={async () => {
                         const updated = lessonInterests.filter((_, j) => j !== i);
                         setLessonInterests(updated);
                         if (session) {
-                          try { await updateSessionInterests(session.id, updated); } catch (_) {}
+                          try { await updateSessionInterests(session.id, updated); } catch (err) { console.error("[customize] failed to save:", err); }
                         }
                       }}
-                      style={{ background: 'none', border: 'none', cursor: 'pointer', marginLeft: 4 }}
+                      style={{ background: 'none', border: 'none', cursor: !!session ? 'not-allowed' : 'pointer', marginLeft: 4 }}
                     >x</button>
                   </span>
                 ))}
@@ -251,7 +259,7 @@ export default function LearningPage() {
           {"📚"}
         </div>
         <h2 style={{ fontWeight: 800, fontSize: "1.5rem", color: "var(--color-text)", margin: 0 }}>
-          That was tough — but you gave it your best!
+          {t("learning.toughLesson")}
         </h2>
         <p style={{ color: "var(--color-text-muted)", fontSize: "1rem", lineHeight: 1.6, maxWidth: "480px", margin: 0 }}>
           You worked through three rounds on <strong>{conceptTitle}</strong> and scored{" "}
@@ -329,7 +337,7 @@ export default function LearningPage() {
                 color: "var(--color-text)",
                 lineHeight: 1.3,
               }}>
-                Not quite ready yet!
+                {t("learning.notReadyYet")}
               </h2>
             </div>
 
@@ -340,7 +348,7 @@ export default function LearningPage() {
               color: "var(--color-text-muted)",
               lineHeight: 1.6,
             }}>
-              To get the most from this lesson, it helps to master these first:
+              {t("learning.helpsMasterFirst")}
             </p>
 
             {/* Unmet prerequisites list */}
@@ -394,7 +402,7 @@ export default function LearningPage() {
                 onMouseEnter={(e) => (e.currentTarget.style.opacity = "0.88")}
                 onMouseLeave={(e) => (e.currentTarget.style.opacity = "1")}
               >
-                Learn prerequisites first
+                {t("learning.learnPrereqFirst")}
               </button>
               <button
                 onClick={() => {
@@ -424,7 +432,7 @@ export default function LearningPage() {
                   e.currentTarget.style.borderColor = "var(--color-border)";
                 }}
               >
-                Start anyway
+                {t("learning.startAnyway")}
               </button>
             </div>
           </div>

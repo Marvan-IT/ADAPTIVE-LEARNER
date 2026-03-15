@@ -28,7 +28,7 @@ MATHPIX_APP_ID = os.getenv("MATHPIX_APP_ID", "")
 MATHPIX_APP_KEY = os.getenv("MATHPIX_APP_KEY", "")
 
 # ── Database ──────────────────────────────────────────────────────────
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://postgres:postre2002@localhost:5432/AdaptiveLearner")
+DATABASE_URL = os.getenv("DATABASE_URL", "")
 
 # ── Embedding ──────────────────────────────────────────────────────────
 EMBEDDING_MODEL = "text-embedding-3-small"
@@ -421,3 +421,19 @@ def get_pdf_path(book_code: str) -> Path:
     """Get the full path to a book's PDF file."""
     config = get_book_config(book_code)
     return DATA_DIR / config["pdf_filename"]
+
+
+# ── Startup validation ─────────────────────────────────────────────────────
+_REQUIRED_ENV_VARS = {
+    "OPENAI_API_KEY": OPENAI_API_KEY,
+    "DATABASE_URL": DATABASE_URL,
+}
+
+def validate_required_env_vars() -> None:
+    """Raise ValueError with a clear message if required env vars are missing."""
+    missing = [name for name, val in _REQUIRED_ENV_VARS.items() if not val]
+    if missing:
+        raise ValueError(
+            f"Missing required environment variable(s): {', '.join(missing)}. "
+            "Copy backend/.env.example to backend/.env and fill in the values."
+        )

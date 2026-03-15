@@ -583,6 +583,11 @@ async def switch_style(
     session = await db.get(TeachingSession, session_id)
     if not session:
         raise HTTPException(404, "Session not found")
+    if session.phase not in ("PRESENTING",):
+        raise HTTPException(
+            status_code=409,
+            detail="Style cannot be changed once the lesson has started. Exit and restart the lesson to apply new settings."
+        )
     if session.phase == "COMPLETED":
         raise HTTPException(400, "Cannot switch style on a completed session")
 
@@ -604,6 +609,11 @@ async def update_session_interests(
     session = await db.get(TeachingSession, session_id)
     if not session:
         raise HTTPException(404, "Session not found")
+    if session.phase not in ("PRESENTING",):
+        raise HTTPException(
+            status_code=409,
+            detail="Style cannot be changed once the lesson has started. Exit and restart the lesson to apply new settings."
+        )
     session.lesson_interests = [i[:50] for i in req.interests[:10]]
     await db.commit()
     logger.info("session=%s interests updated count=%d", session_id, len(session.lesson_interests))

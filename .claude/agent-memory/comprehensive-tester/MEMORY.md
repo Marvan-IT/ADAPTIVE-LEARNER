@@ -160,3 +160,23 @@ Key facts:
 - MCQ buttons: `button:has(span:text-is("A"))` — circular letter badge (no data-testid exists in the codebase)
 - WRONG_FEEDBACK_MS = 1800ms in app code — always wait 2200ms+ after a wrong click in tests
 - See `playwright-e2e.md` for full DOM selector reference, helper API, and concept IDs
+
+### Bug Regression Test File
+`backend/tests/test_bug_regressions.py` — 22 tests across 5 groups (21 unit + 1 e2e):
+- `TestLanguageValidation` (6 tests): B-07 — `UpdateLanguageRequest` pattern constraint rejects invalid codes
+- `TestRecoveryCardImages` (5 tests): B-02 — `generate_recovery_card()` populates `card["images"]` from `concept_detail[:3]`
+- `TestCallLlmTimeout` (2 tests): B-03 — `_call_llm()` passes `timeout=30.0` to OpenAI
+- `TestJsonRepairPattern` (2 tests): B-05 — repair uses `json.loads(repair_json(raw))`, NOT `return_objects=True`
+- `TestStyleLockPhaseGuard` (6 unit + 1 e2e tests): B-01 — `switch_style`/`update_session_interests` return 409 when phase != PRESENTING
+- E2E test `test_switch_style_locked_after_cards_e2e` requires `TEST_API_KEY` env var and live backend
+
+### Slowapi Router Handler Testing Pattern
+Direct invocation of `@limiter.limit()` decorated handlers fails with:
+`Exception: parameter 'request' must be an instance of starlette.requests.Request`
+Fix: use a minimal `FastAPI()` + `TestClient` app that replicates the handler logic, or test the phase guard via source code inspection (`inspect.getsource()`).
+
+### Stale Constant-Pin Failures in Existing Tests (pre-existing, not regressions)
+`test_adaptive_mode_switching.py` and `test_card_generation.py` have 10 tests asserting old constant values:
+- `_CARDS_CACHE_VERSION = 6` / `= 12` — actual value is now `13` (bumped per CLAUDE.md, 2026-03-15)
+- `STARTER_PACK_INITIAL_SECTIONS = 2` — actual value is now `3` (bumped per CLAUDE.md, 2026-03-15)
+These tests need their expected constants updated to 13 and 3 respectively.

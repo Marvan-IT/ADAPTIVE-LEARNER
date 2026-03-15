@@ -43,6 +43,7 @@ function TypingDots() {
 
 /* ─── Score announcement banner shown after check_complete ─── */
 function ScoreAnnouncement({ score, passed, remediationNeeded, onContinueToReview, sessionId, loadRemediationCards }) {
+  const { t } = useTranslation();
   const navigate = useNavigate();
 
   if (passed) {
@@ -61,7 +62,7 @@ function ScoreAnnouncement({ score, passed, remediationNeeded, onContinueToRevie
         color: "#166534",
       }}>
         <span aria-hidden="true">✅</span>
-        Score: {score}% — You passed!
+        {t("chat.scorePassed", { score })}
       </div>
     );
   }
@@ -87,7 +88,7 @@ function ScoreAnnouncement({ score, passed, remediationNeeded, onContinueToRevie
           color: "#92400e",
         }}>
           <span aria-hidden="true">📊</span>
-          Score: {score}% — Let's review those parts!
+          {t("chat.scoreReview", { score })}
         </div>
         <button
           onClick={() => loadRemediationCards(sessionId)}
@@ -104,7 +105,7 @@ function ScoreAnnouncement({ score, passed, remediationNeeded, onContinueToRevie
             alignSelf: "flex-start",
           }}
         >
-          Continue to Review →
+          {t("chat.continueReview")}
         </button>
       </div>
     );
@@ -127,7 +128,7 @@ function ScoreAnnouncement({ score, passed, remediationNeeded, onContinueToRevie
         color: "var(--color-text-muted)",
         lineHeight: 1.5,
       }}>
-        You gave it your absolute best — score: <strong>{score}%</strong>. You can return to this concept from the map whenever you're ready to try again.
+        {t("chat.allAttemptsExhausted", { score })}
       </div>
       <button
         onClick={() => navigate("/map")}
@@ -144,7 +145,7 @@ function ScoreAnnouncement({ score, passed, remediationNeeded, onContinueToRevie
           alignSelf: "flex-start",
         }}
       >
-        Back to Concept Map
+        {t("learning.backToMap")}
       </button>
     </div>
   );
@@ -251,7 +252,7 @@ export default function SocraticChat({ recheckMode = false }) {
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ color: "#fff", fontWeight: 700, fontSize: "1.05rem" }}>
-            {recheckMode ? "Let's try those topics again!" : t("chat.practiceChat")}
+            {recheckMode ? t("chat.recheckTitle") : t("chat.practiceChat")}
           </div>
           <div style={{ color: "rgba(255,255,255,0.8)", fontSize: "0.8rem" }}>
             {t("chat.chatSubtitle", { title: conceptTitle })}
@@ -288,7 +289,7 @@ export default function SocraticChat({ recheckMode = false }) {
           gap: "0.4rem",
         }}>
           <span aria-hidden="true">🎯</span>
-          Let's try those topics again!
+          {t("chat.recheckTitle")}
         </div>
       )}
 
@@ -344,7 +345,7 @@ export default function SocraticChat({ recheckMode = false }) {
               color: "var(--color-text-muted)",
               fontWeight: 600,
             }}>
-              Question {userMessageCount}
+              {t("chat.questionCount", { count: userMessageCount })}
             </span>
           </div>
         )}
@@ -401,7 +402,7 @@ export default function SocraticChat({ recheckMode = false }) {
             padding: "0.4rem 0",
             fontStyle: "italic",
           }}>
-            {checkPassed ? "Well done! Moving on..." : remediationNeeded ? "See the review cards above." : "Session complete."}
+            {checkPassed ? t("chat.wellDone") : remediationNeeded ? t("chat.seeReviewCards") : t("chat.sessionComplete")}
           </p>
         ) : (
           <>
@@ -453,7 +454,7 @@ export default function SocraticChat({ recheckMode = false }) {
               </button>
             </form>
             <p style={{ fontSize: "0.7rem", color: "var(--color-text-muted)", marginTop: "0.35rem", paddingLeft: "0.25rem" }}>
-              Enter to send · Shift+Enter for new line
+              {t("chat.enterToSend")}
             </p>
           </>
         )}

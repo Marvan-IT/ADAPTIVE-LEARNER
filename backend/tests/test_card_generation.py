@@ -1045,11 +1045,11 @@ class TestCacheVersionBump:
     student gets up-to-date card quality after a release.
     """
 
-    def test_cache_version_is_6(self):
+    def test_cache_version_is_13(self):
         """
-        The local _CARDS_CACHE_VERSION constant inside generate_cards() must equal 6
+        The local _CARDS_CACHE_VERSION constant inside generate_cards() must equal 13
         after the expanded STUDENT STATE + PROFILE MODIFIERS prompt upgrades. Any value
-        below 6 would allow stale cards (missing expanded learner-type rules) to be served.
+        below 13 would allow stale cards (missing expanded learner-type rules) to be served.
 
         Since it is a method-local variable (not a class attribute), we verify it by
         reading the method's source code — a deliberate regression guard that will break
@@ -1058,8 +1058,8 @@ class TestCacheVersionBump:
         import inspect
         source = inspect.getsource(TeachingService.generate_cards)
         # The assignment must appear literally in the function body
-        assert "_CARDS_CACHE_VERSION = 6" in source, (
-            "generate_cards() must define _CARDS_CACHE_VERSION = 6; "
+        assert "_CARDS_CACHE_VERSION = 13" in source, (
+            "generate_cards() must define _CARDS_CACHE_VERSION = 13; "
             "if it was changed, the cache-bust logic is broken"
         )
 
@@ -1104,7 +1104,7 @@ class TestCacheVersionBump:
         mock_ks.get_concept_detail.return_value = None
 
         service = TeachingService.__new__(TeachingService)
-        service.knowledge_svc = mock_ks
+        service.knowledge_services = {"prealgebra": mock_ks}
         service.openai = MagicMock()
         service.model = "gpt-4o"
         service.model_mini = "gpt-4o-mini"
@@ -1196,18 +1196,18 @@ class TestStarterPackLimit:
 
     def test_starter_pack_constant_matches_config(self):
         """
-        STARTER_PACK_MAX_SECTIONS must equal 2 as specified in config.py.
+        STARTER_PACK_INITIAL_SECTIONS must equal 3 as specified in config.py.
         If the constant drifts, the starter pack will either be too large (slow)
         or too small (insufficient initial content).
         """
-        from config import STARTER_PACK_MAX_SECTIONS
-        assert STARTER_PACK_MAX_SECTIONS == 2
+        from config import STARTER_PACK_INITIAL_SECTIONS
+        assert STARTER_PACK_INITIAL_SECTIONS == 3
 
-    async def test_starter_pack_limits_to_2_sections(self):
+    async def test_starter_pack_limits_to_3_sections(self):
         """
         When _group_by_major_topic returns 5 sections, _generate_cards_per_section
-        must be called with only the first 2 sections (STARTER_PACK_MAX_SECTIONS).
-        The remaining 3 sections are deferred to the adaptive loop.
+        must be called with only the first 3 sections (STARTER_PACK_INITIAL_SECTIONS).
+        The remaining 2 sections are deferred to the adaptive loop.
         """
         from unittest.mock import MagicMock, AsyncMock, patch
         import uuid as uuid_mod
@@ -1242,7 +1242,7 @@ class TestStarterPackLimit:
         }
 
         service = TeachingService.__new__(TeachingService)
-        service.knowledge_svc = mock_ks
+        service.knowledge_services = {"prealgebra": mock_ks}
         service.openai = MagicMock()
         service.model = "gpt-4o"
         service.model_mini = "gpt-4o-mini"
@@ -1274,7 +1274,8 @@ class TestStarterPackLimit:
             patch("adaptive.adaptive_engine.load_wrong_option_pattern", new=AsyncMock(return_value=None)),
             patch("adaptive.adaptive_engine.build_blended_analytics", return_value=MagicMock()),
             patch("adaptive.profile_builder.build_learning_profile",
-                  return_value=MagicMock(speed="NORMAL", comprehension="OK", engagement="ENGAGED")),
+                  return_value=MagicMock(speed="NORMAL", comprehension="OK", engagement="ENGAGED",
+                                         confidence_score=0.5)),
             patch("api.teaching_service.TeachingService._get_message_count", new=AsyncMock(return_value=0)),
             patch("api.teaching_service.TeachingService._save_message", new=AsyncMock()),
         ):
@@ -1283,15 +1284,16 @@ class TestStarterPackLimit:
             except Exception:
                 pass  # generation may fail due to shallow mocks; what matters is sections_received
 
-        # Only the first 2 sections must have been passed to the generator
-        assert len(sections_received) == 2
+        # Only the first 3 sections must have been passed to the generator
+        assert len(sections_received) == 3
         assert sections_received[0]["title"] == "Section 1"
         assert sections_received[1]["title"] == "Section 2"
+        assert sections_received[2]["title"] == "Section 3"
 
-    async def test_starter_pack_no_limit_when_2_or_fewer(self):
+    async def test_starter_pack_no_limit_when_3_or_fewer(self):
         """
-        When _group_by_major_topic returns 2 sections (equal to STARTER_PACK_MAX_SECTIONS),
-        no trimming occurs — both sections are passed to _generate_cards_per_section unchanged.
+        When _group_by_major_topic returns 3 sections (equal to STARTER_PACK_INITIAL_SECTIONS),
+        no trimming occurs — all 3 sections are passed to _generate_cards_per_section unchanged.
         """
         from unittest.mock import MagicMock, AsyncMock, patch
         import uuid as uuid_mod
@@ -1310,9 +1312,10 @@ class TestStarterPackLimit:
         student.interests = []
         student.preferred_language = "en"
 
-        two_sections = [
+        three_sections = [
             {"title": "Section 1", "text": "Content 1"},
             {"title": "Section 2", "text": "Content 2"},
+            {"title": "Section 3", "text": "Content 3"},
         ]
 
         mock_ks = MagicMock()
@@ -1325,7 +1328,7 @@ class TestStarterPackLimit:
         }
 
         service = TeachingService.__new__(TeachingService)
-        service.knowledge_svc = mock_ks
+        service.knowledge_services = {"prealgebra": mock_ks}
         service.openai = MagicMock()
         service.model = "gpt-4o"
         service.model_mini = "gpt-4o-mini"
@@ -1349,15 +1352,16 @@ class TestStarterPackLimit:
         }
 
         with (
-            patch.object(service, "_parse_sub_sections", return_value=two_sections),
-            patch.object(service, "_group_by_major_topic", return_value=two_sections),
+            patch.object(service, "_parse_sub_sections", return_value=three_sections),
+            patch.object(service, "_group_by_major_topic", return_value=three_sections),
             patch.object(service, "_generate_cards_per_section", side_effect=fake_generate_per_section),
             patch.object(service, "_find_missing_sections", return_value=[]),  # skip gap-fill pass
             patch("adaptive.adaptive_engine.load_student_history", new=AsyncMock(return_value=_history)),
             patch("adaptive.adaptive_engine.load_wrong_option_pattern", new=AsyncMock(return_value=None)),
             patch("adaptive.adaptive_engine.build_blended_analytics", return_value=MagicMock()),
             patch("adaptive.profile_builder.build_learning_profile",
-                  return_value=MagicMock(speed="NORMAL", comprehension="OK", engagement="ENGAGED")),
+                  return_value=MagicMock(speed="NORMAL", comprehension="OK", engagement="ENGAGED",
+                                         confidence_score=0.5)),
             patch("api.teaching_service.TeachingService._get_message_count", new=AsyncMock(return_value=0)),
             patch("api.teaching_service.TeachingService._save_message", new=AsyncMock()),
         ):
@@ -1366,8 +1370,8 @@ class TestStarterPackLimit:
             except Exception:
                 pass
 
-        # Both sections must pass through — no trimming when count <= STARTER_PACK_MAX_SECTIONS
-        assert len(sections_received) == 2
+        # All 3 sections must pass through — no trimming when count <= STARTER_PACK_INITIAL_SECTIONS
+        assert len(sections_received) == 3
 
 
 # =============================================================================
@@ -2744,12 +2748,12 @@ class TestAllPathsCoverageOrdering:
         repaired, missing = validate_and_repair_cards(cards, [], required_sections=None)
         assert len(repaired) == 1
 
-    def test_cache_version_is_6(self):
-        """Regression guard: _CARDS_CACHE_VERSION must equal 6 in teaching_service.py."""
+    def test_cache_version_is_13(self):
+        """Regression guard: _CARDS_CACHE_VERSION must equal 13 in teaching_service.py."""
         import inspect
         from src.api import teaching_service
         source = inspect.getsource(teaching_service)
-        assert "_CARDS_CACHE_VERSION = 6" in source
+        assert "_CARDS_CACHE_VERSION = 13" in source
 
     def test_required_sections_all_covered(self):
         """When all required sections have cards, missing list is empty."""

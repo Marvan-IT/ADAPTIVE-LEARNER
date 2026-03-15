@@ -44,6 +44,7 @@ from adaptive.profile_builder import build_learning_profile
 from adaptive.generation_profile import build_generation_profile
 from adaptive.remediation import find_remediation_prereq, build_remediation_cards
 from adaptive.prompt_builder import build_adaptive_prompt
+from api.prompts import LANGUAGE_NAMES
 from config import (
     OPENAI_MODEL,
     ADAPTIVE_MIN_HISTORY_CARDS,
@@ -157,6 +158,7 @@ async def _call_llm(
                 messages=messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
+                timeout=30.0,
             )
             content = response.choices[0].message.content or ""
             if content.strip():
@@ -829,12 +831,6 @@ _RECOVERY_STYLE_MODIFIERS: dict[str, str] = {
     "default":   "",
 }
 
-_RECOVERY_LANG_MAP: dict[str, str] = {
-    "ta": "Tamil", "ar": "Arabic", "hi": "Hindi", "fr": "French",
-    "es": "Spanish", "zh": "Chinese", "ja": "Japanese", "de": "German",
-    "ko": "Korean", "pt": "Portuguese", "ml": "Malayalam", "si": "Sinhala",
-}
-
 
 async def generate_recovery_card(
     topic_title: str,
@@ -870,7 +866,7 @@ async def generate_recovery_card(
         style_modifier = _RECOVERY_STYLE_MODIFIERS.get(style or "default", "")
         style_text = f"\n\n{style_modifier}" if style_modifier else ""
 
-        lang_name = _RECOVERY_LANG_MAP.get(language, "English")
+        lang_name = LANGUAGE_NAMES.get(language, "English")
         lang_text = (
             f"\n\nIMPORTANT: Respond entirely in {lang_name}. All content must be in {lang_name}."
             if lang_name != "English" else ""
@@ -921,8 +917,9 @@ async def generate_recovery_card(
 
         card.setdefault("index", -1)
         card["is_recovery"] = True
-        card.setdefault("images", [])
-        card.setdefault("image_indices", [])
+        concept_images = concept_detail.get("images", [])[:3]
+        card["images"] = concept_images
+        card["image_indices"] = list(range(len(concept_images)))
         return card
 
     except Exception as exc:

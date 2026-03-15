@@ -62,12 +62,12 @@ All endpoints in `teaching_router.py` use `@limiter.limit()`. The `adaptive_rout
 | No docker-compose.yml | Pending |
 | No CI/CD pipeline | Pending |
 | No frontend test framework (vitest) | Pending |
-| No startup env validation in config.py | Pending |
+| No startup env validation in config.py | Done — validate_required_env_vars() in config.py; called first in lifespan |
 
 ## Notes
 
 - Platform: Windows 11, shell: bash — use forward slashes and Unix syntax in all scripts
 - Venv: `.venv/` at project root; activate with `source ../.venv/Scripts/activate` from within `backend/`
-- Database: `postgresql+asyncpg://postgres:postre2002@localhost:5432/AdaptiveLearner`
+- Database: `postgresql+asyncpg://postgres:<password>@localhost:5432/AdaptiveLearner` — password comes from DATABASE_URL env var; no hardcoded default in config.py
 - `STARTER_PACK_MAX_SECTIONS` is a hardcoded constant in `config.py`, not an env var — no .env.example entry needed
 - When integration tests are added, see `testing.md` (to be created) for test DB provisioning strategy
