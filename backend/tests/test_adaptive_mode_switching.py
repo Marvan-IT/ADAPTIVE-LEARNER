@@ -858,33 +858,36 @@ class TestCacheVersion:
     sentinel to prompt a deliberate decision.
     """
 
-    def test_cards_cache_version_is_11_in_source(self):
+    def test_cards_cache_version_is_12_in_source(self):
         """
         Inspect the source code of TeachingService.generate_cards() and assert
-        that '_CARDS_CACHE_VERSION = 11' appears verbatim.
+        that '_CARDS_CACHE_VERSION = 12' appears verbatim.
         This is the canonical regression guard for cache invalidation.
         """
         from api.teaching_service import TeachingService
 
         source = inspect.getsource(TeachingService.generate_cards)
 
-        assert "_CARDS_CACHE_VERSION = 11" in source, (
+        assert "_CARDS_CACHE_VERSION = 12" in source, (
             "Cache version literal has changed. Update it deliberately "
             "and bump this test."
         )
 
-    def test_cache_version_11_also_written_to_result_dict(self):
+    def test_cache_version_written_to_result_dict_via_variable(self):
         """
-        The result dict emitted at the end of generate_cards must contain
-        'cache_version': 11 so the cache-bust check on next load works.
+        The result dict emitted at the end of generate_cards must reference
+        _CARDS_CACHE_VERSION (not a hardcoded literal) so cache-bust is always
+        consistent with the constant.
         """
         from api.teaching_service import TeachingService
 
         source = inspect.getsource(TeachingService.generate_cards)
 
-        # The result dict assignment must include "cache_version": 11
-        assert '"cache_version": 11' in source or "'cache_version': 11" in source, (
-            "The result dict in generate_cards must assign cache_version=11."
+        # The result dict must use the variable, not a hardcoded integer
+        assert '"cache_version": _CARDS_CACHE_VERSION' in source or \
+               "'cache_version': _CARDS_CACHE_VERSION" in source, (
+            "The result dict in generate_cards must assign cache_version=_CARDS_CACHE_VERSION "
+            "(variable reference, not a hardcoded integer literal)."
         )
 
 
@@ -1016,12 +1019,12 @@ class TestSectionCoverage:
         assert max(CARDS_MAX_TOKENS_NORMAL_FLOOR, 50 * CARDS_MAX_TOKENS_NORMAL_PER_SECTION) > max(CARDS_MAX_TOKENS_NORMAL_FLOOR, 5 * CARDS_MAX_TOKENS_NORMAL_PER_SECTION)
         assert max(CARDS_MAX_TOKENS_FAST_FLOOR,   50 * CARDS_MAX_TOKENS_FAST_PER_SECTION)   > max(CARDS_MAX_TOKENS_FAST_FLOOR,   5 * CARDS_MAX_TOKENS_FAST_PER_SECTION)
 
-    def test_cards_cache_version_is_11(self):
+    def test_cards_cache_version_is_12(self):
         import re, pathlib
         _src_dir = pathlib.Path(__file__).resolve().parent.parent / "src"
         src = (_src_dir / "api" / "teaching_service.py").read_text()
         match = re.search(r"_CARDS_CACHE_VERSION\s*=\s*(\d+)", src)
-        assert match and int(match.group(1)) == 11
+        assert match and int(match.group(1)) == 12
 
 
 # ===========================================================================
@@ -1053,15 +1056,15 @@ class TestHybridRollingCards:
         from config import CARDS_MAX_TOKENS_FAST_PER_SECTION
         assert CARDS_MAX_TOKENS_FAST_PER_SECTION >= 2500
 
-    def test_cards_cache_version_is_11(self):
-        """Cache version must be 11 to invalidate all old bulk-generated card caches."""
+    def test_cards_cache_version_is_12(self):
+        """Cache version must be 12 to invalidate all old bulk-generated card caches."""
         import re
         import pathlib
         _src_dir = pathlib.Path(__file__).resolve().parent.parent / "src"
         src = (_src_dir / "api" / "teaching_service.py").read_text()
         match = re.search(r"_CARDS_CACHE_VERSION\s*=\s*(\d+)", src)
         assert match is not None, "_CARDS_CACHE_VERSION not found in teaching_service.py"
-        assert int(match.group(1)) == 11, f"Expected cache version 11, got {match.group(1)}"
+        assert int(match.group(1)) == 12, f"Expected cache version 12, got {match.group(1)}"
 
     def test_lesson_card_has_question2_field(self):
         """LessonCard must have question2 field (pre-generated second MCQ, no API call on first wrong)."""

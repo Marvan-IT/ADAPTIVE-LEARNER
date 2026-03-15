@@ -50,6 +50,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v2", tags=["teaching"])
 
+# Injected at startup by main.py
+_knowledge_services: dict = {}   # book_slug → KnowledgeService
+
 
 # ── Request / response schemas for new endpoints ──────────────────────────────
 
@@ -409,9 +412,12 @@ async def start_session(request: Request, req: StartSessionRequest, db: AsyncSes
     student = await db.get(Student, req.student_id)
     if not student:
         raise HTTPException(404, "Student not found")
+    if req.book_slug not in _knowledge_services:
+        available = list(_knowledge_services.keys())
+        raise HTTPException(400, f"Book '{req.book_slug}' not loaded. Available: {available}")
 
     session = await teaching_svc.start_session(
-        db, req.student_id, req.concept_id, req.style, req.lesson_interests
+        db, req.student_id, req.concept_id, req.book_slug, req.style, req.lesson_interests
     )
     return session
 
@@ -666,6 +672,7 @@ async def get_cards(request: Request, session_id: UUID, db: AsyncSession = Depen
         has_more_concepts=bool(result.get("concepts_queue", [])),
         concepts_total=result.get("concepts_total", 0),
         concepts_covered_count=len(result.get("concepts_covered", [])),
+        cache_version=result.get("cache_version", 0),
     )
 
 

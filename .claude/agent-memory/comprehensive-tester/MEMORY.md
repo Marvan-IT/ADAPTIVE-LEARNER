@@ -46,6 +46,17 @@
 
 See `adaptive-engine-tests.md` for full test count and group breakdown.
 
+### E2E Test File
+`backend/tests/test_real_students_e2e.py` — 10 tests across 5 journey classes (all `@pytest.mark.e2e`).
+Uses synchronous `requests`, no mocks. Backend at `http://localhost:8889`.
+Key helpers: `_create_student`, `_start_session`, `_generate_cards`, `_record_interaction`,
+`_section_complete`, `_complete_cards`, `_complete_card_adaptive`, `_next_section_cards`, `_get_student_mastery`.
+Recovery card: `POST /api/v2/sessions/{id}/complete-card` with `wrong_attempts>=2` AND `re_explain_card_title` set.
+Mode classification lives in `learning_profile_summary.speed` (SLOW/NORMAL/FAST) on the `NextCardResponse`.
+Section persistence via `POST /api/v2/sessions/{id}/section-complete` (state_score: 1.0=STRUGGLING, 2.0=NORMAL, 3.0=FAST).
+State blending: cold-start at section_count=0 (100% current); warm-start at 1; partial at 2; full history at 3+.
+Skip pattern: `_start_session` calls `pytest.skip()` on 404 when ChromaDB not loaded.
+
 ### Concept Enrichment Module (chroma_store + vision_annotator + knowledge_service)
 - `store_concept_blocks` upserts with `latex_expressions=json.dumps(block.latex)` and `latex_count=len(block.latex)` — both always present
 - `annotate_image(image_bytes, concept_title, image_type, llm_client, model, cache_dir)` — skips DECORATIVE immediately; graceful degradation on API/JSON errors → `{"description": None, "relevance": None}`
@@ -139,3 +150,13 @@ Key facts:
 - `build_cards_system_prompt(remediation_weak_concepts=[...])` — appends "REMEDIATION RE-ATTEMPT" block only when list is non-empty; concept names appear verbatim in block
 - `build_socratic_system_prompt()` question count: `base_min = max(8, n_topics)`, `base_max = min(15, n_topics + 4)` — so min >= 8, max <= 15 always; "SPREAD RULE" always present when covered_topics is non-empty; `MAX_SOCRATIC_EXCHANGES = 30` in config
 - `_extract_failed_topics_from_messages(messages, covered_topics)` — @staticmethod; CORRECTION_PHRASES include "not quite", "actually,", "that is incorrect", "good try", etc.; regex `[^.!?]*\?` extracts first question-ending sentence from prior assistant message (stops at `.` in decimals — "3.45?" yields "45?"); deduplication by `last_assistant_msg[:50]` key; ignores student/non-assistant messages
+
+### Playwright E2E Tests (frontend)
+- `frontend/playwright.config.js` + `frontend/e2e/` — 9 spec files + helpers.js (36 tests total)
+- `@playwright/test ^1.48.0` added to devDependencies; `"test:e2e": "playwright test"` script in package.json
+- API key auto-read from `../../backend/.env` via `loadApiKey()` in helpers.js — no env config needed
+- Student isolation: every test creates a unique student via `createStudent()` to prevent state pollution
+- `waitForCards()` watches for `.rounded-full` dots AND absence of "crafting" loading text (90s default)
+- MCQ buttons: `button:has(span:text-is("A"))` — circular letter badge (no data-testid exists in the codebase)
+- WRONG_FEEDBACK_MS = 1800ms in app code — always wait 2200ms+ after a wrong click in tests
+- See `playwright-e2e.md` for full DOM selector reference, helper API, and concept IDs

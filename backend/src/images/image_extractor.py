@@ -4,10 +4,13 @@ Uses PyMuPDF for extraction. Images are NOT stored in concept blocks or vector D
 """
 
 import fitz
+import logging
 from pathlib import Path
 from typing import Optional
 
 import sys, os
+
+logger = logging.getLogger(__name__)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from models import PageText, SectionBoundary, ImageDecision
 
@@ -39,7 +42,8 @@ def extract_image_decisions(
                 img_info = doc.extract_image(xref)
                 if not img_info:
                     continue
-            except Exception:
+            except Exception as e:
+                logger.warning("Failed to extract image xref %d: %s", xref, e)
                 continue
 
             width = img_info.get("width", 0)

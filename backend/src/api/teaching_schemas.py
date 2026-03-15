@@ -28,6 +28,10 @@ class StartSessionRequest(BaseModel):
     concept_id: str = Field(
         ..., description="e.g., PREALG.C1.S1.INTRODUCTION_TO_WHOLE_NUMBERS"
     )
+    book_slug: str = Field(
+        default="prealgebra",
+        description="Book slug matching the processed output directory, e.g. 'prealgebra', 'elementary_algebra'",
+    )
     style: str = Field(
         default="default",
         pattern="^(default|pirate|astronaut|gamer)$",
@@ -180,6 +184,7 @@ class CardsResponse(BaseModel):
     has_more_concepts: bool = False           # True when concepts_queue is non-empty
     concepts_total: int = 0                   # Total sub-sections in this concept
     concepts_covered_count: int = 0           # How many covered so far (including this batch)
+    cache_version: int = 0                    # Internal generation version for staleness detection
 
 
 class NextSectionCardsRequest(BaseModel):

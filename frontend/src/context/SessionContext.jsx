@@ -266,15 +266,15 @@ function sessionReducer(state, action) {
       };
       if (!action.payload.check_complete) return base;
 
-      const { passed, mastered, remediation_needed, score, attempt, locked, best_score } = action.payload;
+      const { mastered, remediation_needed, score, attempt, locked, best_score } = action.payload;
 
-      // Mastered or passed on this attempt
-      if (passed || mastered) {
+      // Mastered on this attempt
+      if (mastered) {
         return {
           ...base,
           phase: "COMPLETED",
           score,
-          mastered: mastered ?? passed,
+          mastered: true,
           checkPassed: true,
           checkScore: score,
           bestScore: best_score ?? score,
@@ -429,11 +429,13 @@ export function SessionProvider({ children }) {
           if (res.data?.recovery_card) {
             dispatch({ type: "INSERT_RECOVERY_CARD", payload: res.data.recovery_card });
           }
+          dispatch({ type: "NEXT_CARD" });   // advance past the failed card
           useAdaptiveStore.getState().updateMode(res.data.learning_profile_summary);
           useAdaptiveStore.getState().awardXP(5);
         } catch (err) {
           console.error("[SessionContext] adaptive card fetch failed:", err);
           dispatch({ type: "ADAPTIVE_CARD_ERROR" });
+          dispatch({ type: "NEXT_CARD" });   // still advance so student is not stuck
         } finally {
           dispatch({ type: "ADAPTIVE_CALL_DONE" });
         }

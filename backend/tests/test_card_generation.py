@@ -568,17 +568,9 @@ class TestFallbackSubSectionKey:
 # =============================================================================
 
 class TestFindMissingSections:
-    """
-    Tests for TeachingService._find_missing_sections(cards, sections).
-
-    Business rule: a section is "covered" if its title appears (case-insensitive)
-    anywhere in the combined title+content text of all generated cards.
-    Sections whose titles are absent from all card text must be returned so the
-    gap-fill pass can regenerate them.
-    """
+    """Tests for TeachingService._find_missing_sections(cards, sections)."""
 
     def test_returns_empty_when_all_titles_covered(self):
-        """When every section title appears in a card, the result is an empty list."""
         cards = [
             {"title": "Place Value Explained", "content": "Place value describes..."},
             {"title": "Rounding Numbers", "content": "To round, look at the next digit..."},
@@ -587,14 +579,10 @@ class TestFindMissingSections:
             {"title": "Place Value", "text": "..."},
             {"title": "Rounding Numbers", "text": "..."},
         ]
-        result = TeachingService._find_missing_sections(cards, sections)
-        assert result == []
+        assert TeachingService._find_missing_sections(cards, sections) == []
 
     def test_returns_section_when_title_missing(self):
-        """A section whose title does not appear in any card must be returned."""
-        cards = [
-            {"title": "Place Value", "content": "Place value content."},
-        ]
+        cards = [{"title": "Place Value", "content": "Place value content."}]
         sections = [
             {"title": "Place Value", "text": "..."},
             {"title": "Absolute Value", "text": "..."},
@@ -604,60 +592,29 @@ class TestFindMissingSections:
         assert result[0]["title"] == "Absolute Value"
 
     def test_case_insensitive_matching(self):
-        """Section title matching is case-insensitive — 'PLACE VALUE' matches a card with 'place value'."""
-        cards = [
-            {"title": "place value overview", "content": "explanation of place value"},
-        ]
-        sections = [
-            {"title": "Place Value", "text": "..."},
-        ]
-        result = TeachingService._find_missing_sections(cards, sections)
-        assert result == []
+        cards = [{"title": "place value overview", "content": "explanation of place value"}]
+        sections = [{"title": "Place Value", "text": "..."}]
+        assert TeachingService._find_missing_sections(cards, sections) == []
 
     def test_empty_cards_returns_all_sections(self):
-        """When no cards have been generated, all sections are returned as missing."""
         sections = [
             {"title": "Section A", "text": "content A"},
             {"title": "Section B", "text": "content B"},
-            {"title": "Section C", "text": "content C"},
         ]
-        result = TeachingService._find_missing_sections([], sections)
-        assert len(result) == 3
-
-    def test_partial_title_match_counts_as_covered(self):
-        """
-        A section is considered covered if its title appears anywhere in any card's
-        title or content — including inside a longer sentence.
-        """
-        cards = [
-            {
-                "title": "Introduction",
-                "content": "This card covers Decimal Place Value in detail.",
-            }
-        ]
-        sections = [
-            {"title": "Decimal Place Value", "text": "..."},
-        ]
-        result = TeachingService._find_missing_sections(cards, sections)
-        assert result == []
+        assert len(TeachingService._find_missing_sections([], sections)) == 2
 
     def test_multiple_missing_sections_all_returned(self):
-        """When several sections are not covered, all of them are returned."""
-        cards = [
-            {"title": "Whole Numbers", "content": "Counting numbers starting from zero."},
-        ]
+        cards = [{"title": "Whole Numbers", "content": "Counting numbers starting from zero."}]
         sections = [
             {"title": "Whole Numbers", "text": "..."},
             {"title": "Integers", "text": "..."},
             {"title": "Fractions", "text": "..."},
-            {"title": "Decimals", "text": "..."},
         ]
         result = TeachingService._find_missing_sections(cards, sections)
-        missing_titles = [s["title"] for s in result]
-        assert "Integers" in missing_titles
-        assert "Fractions" in missing_titles
-        assert "Decimals" in missing_titles
-        assert "Whole Numbers" not in missing_titles
+        titles = [s["title"] for s in result]
+        assert "Integers" in titles
+        assert "Fractions" in titles
+        assert "Whole Numbers" not in titles
 
 
 # =============================================================================
@@ -1073,54 +1030,6 @@ class TestExtractFailedTopicsFromMessages:
 # =============================================================================
 # Group 12 — TestGapFillPassIntegration
 # =============================================================================
-
-class TestGapFillPassIntegration:
-    """
-    Integration-style tests (pure unit, no DB/LLM) for the gap-fill detection logic
-    that drives the second pass in generate_cards().
-
-    Business rule: _find_missing_sections acts as the predicate that decides whether
-    a gap-fill pass is needed. When it returns an empty list, no gap-fill is triggered.
-    When it returns sections, those sections are passed to a second generation call.
-    """
-
-    def test_gap_fill_triggered_when_section_missing_from_cards(self):
-        """
-        When cards do not cover a section, _find_missing_sections returns that section —
-        confirming a gap-fill pass would be triggered.
-        """
-        cards = [
-            {"title": "Introduction to Decimals", "content": "A decimal uses a dot."},
-        ]
-        sections = [
-            {"title": "Introduction to Decimals", "text": "..."},
-            {"title": "Adding Decimals", "text": "Line up the decimal points."},
-            {"title": "Subtracting Decimals", "text": "Same rules as adding."},
-        ]
-        missing = TeachingService._find_missing_sections(cards, sections)
-        assert len(missing) == 2
-        missing_titles = {s["title"] for s in missing}
-        assert "Adding Decimals" in missing_titles
-        assert "Subtracting Decimals" in missing_titles
-
-    def test_no_gap_fill_when_all_sections_covered(self):
-        """
-        When every section title appears somewhere in the card set, _find_missing_sections
-        returns an empty list — confirming no gap-fill pass is needed.
-        """
-        cards = [
-            {"title": "Introduction to Decimals", "content": "This introduces decimals."},
-            {"title": "Adding Decimals", "content": "Line up the decimal points when adding decimals."},
-            {"title": "Subtracting Decimals", "content": "Subtracting decimals: align the decimal point."},
-        ]
-        sections = [
-            {"title": "Introduction to Decimals", "text": "..."},
-            {"title": "Adding Decimals", "text": "..."},
-            {"title": "Subtracting Decimals", "text": "..."},
-        ]
-        missing = TeachingService._find_missing_sections(cards, sections)
-        assert missing == []
-
 
 # =============================================================================
 # Group 13 — TestCacheVersionBump

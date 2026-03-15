@@ -90,6 +90,50 @@ def _salvage_truncated_json(raw: str) -> str:
     return raw
 
 
+def _strip_markdown_tags(value: str) -> str:
+    """
+    Remove <markdown> / </markdown> wrapper tags that some LLMs emit around
+    string field values.  Only the outermost open/close tags are stripped so
+    that any legitimate use of angle-bracket syntax inside the content is
+    preserved.
+
+    Examples
+    --------
+    "<markdown>Hello **world**</markdown>"  →  "Hello **world**"
+    "<markdown>Some text"                   →  "Some text"
+    "Normal content"                        →  "Normal content"
+    """
+    if not isinstance(value, str):
+        return value
+    # Strip leading <markdown> (case-insensitive, optional whitespace after tag)
+    value = re.sub(r"(?i)^<markdown>\s*", "", value)
+    # Strip trailing </markdown> (case-insensitive, optional whitespace before tag)
+    value = re.sub(r"(?i)\s*</markdown>$", "", value)
+    return value
+
+
+def _clean_card_string_fields(parsed: dict) -> dict:
+    """
+    Apply _strip_markdown_tags to every top-level string field in a raw parsed
+    card dict, and recursively to string values inside the 'questions' list.
+
+    Fields cleaned: title, content, explanation, hint.
+    Question sub-fields cleaned: text, explanation, hint.
+    """
+    for field in ("title", "content", "explanation", "hint"):
+        if isinstance(parsed.get(field), str):
+            parsed[field] = _strip_markdown_tags(parsed[field])
+
+    for question in parsed.get("questions", []):
+        if not isinstance(question, dict):
+            continue
+        for field in ("text", "explanation", "hint"):
+            if isinstance(question.get(field), str):
+                question[field] = _strip_markdown_tags(question[field])
+
+    return parsed
+
+
 # ── LLM client helper ─────────────────────────────────────────────────────────
 
 async def _call_llm(
@@ -727,15 +771,23 @@ async def generate_next_card(
     cleaned = _extract_json_block(raw)
 
     parsed: dict | None = None
-    for attempt_raw in (cleaned, _salvage_truncated_json(cleaned)):
+    salvaged = _salvage_truncated_json(cleaned)
+    for attempt_raw in (cleaned, salvaged, repair_json(salvaged)):
         try:
-            parsed = json.loads(attempt_raw)
-            break
-        except json.JSONDecodeError:
+            result = json.loads(attempt_raw)
+            if isinstance(result, dict):
+                parsed = result
+                break
+        except (json.JSONDecodeError, ValueError):
             pass
 
     if parsed is None:
         raise ValueError(f"LLM output could not be parsed. Raw (first 300): {raw[:300]}")
+
+    # Strip <markdown> wrapper tags that some LLMs emit around string field values
+    # (e.g. "content": "<markdown>When we add..."). This is a resilience measure —
+    # the prompt asks for plain strings but certain models ignore that instruction.
+    parsed = _clean_card_string_fields(parsed)
 
     motivational_note = parsed.pop("motivational_note", None)
 

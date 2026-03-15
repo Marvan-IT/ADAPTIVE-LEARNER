@@ -32,7 +32,6 @@ DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://postgres:postre20
 
 # ── Embedding ──────────────────────────────────────────────────────────
 EMBEDDING_MODEL = "text-embedding-3-small"
-EMBEDDING_DIMENSIONS = 1536
 
 # ── ChromaDB ───────────────────────────────────────────────────────────
 CHROMA_COLLECTION_NAME = "openstax_concepts"
@@ -51,7 +50,7 @@ SOCRATIC_PROGRESS_INTERVAL  = 3   # Show progress summary every N questions
 
 # ── Card session settings ─────────────────────────────────────────────────────
 CARDS_MID_SESSION_CHECK_INTERVAL = 12  # Mood/engagement check-in every N cards
-STARTER_PACK_INITIAL_SECTIONS: int = 2   # Sub-sections generated on first request (fast initial load)
+STARTER_PACK_INITIAL_SECTIONS: int = 3   # Sub-sections generated on first request (fast initial load)
 STARTER_PACK_MAX_SECTIONS: int = 50    # Safety cap — rolling generation won't exceed this total
 
 # ── Adaptive card generation ──────────────────────────────────────────────────
@@ -80,7 +79,6 @@ XP_MASTERY: int = 50                  # Base XP awarded on concept mastery
 XP_MASTERY_BONUS: int = 25            # Bonus XP when check_score >= XP_MASTERY_BONUS_THRESHOLD
 XP_MASTERY_BONUS_THRESHOLD: int = 90  # Score (0–100) qualifying for mastery bonus
 XP_CONSOLATION: int = 10              # Consolation XP when session completes without mastery
-XP_CARD_ADVANCE: int = 5              # XP awarded in the frontend per card advance (informational)
 
 # ── Adaptive Transparency ─────────────────────────────────────────────────────
 WRONG_OPTION_PATTERN_THRESHOLD: int = 3  # Times a wrong option must be chosen to trigger pattern injection
@@ -106,8 +104,6 @@ ADAPTIVE_PARTIAL_CURRENT_WEIGHT     = 0.65   # section_count == 2
 ADAPTIVE_PARTIAL_HISTORY_WEIGHT     = 0.35
 ADAPTIVE_STATE_BLEND_CURRENT_WEIGHT = 0.60   # section_count >= 3
 ADAPTIVE_STATE_BLEND_HISTORY_WEIGHT = 0.40
-ADAPTIVE_NUMERIC_STATE_STRUGGLING_MAX = 1.5
-ADAPTIVE_NUMERIC_STATE_FAST_MIN       = 2.5
 
 # ── Boilerplate patterns to strip (line-level) ─────────────────────────
 BOILERPLATE_PATTERNS = [
@@ -165,25 +161,6 @@ BOOK_CODE_MAP = {
     "principles_data_science": "PDS",
 }
 
-# ── Book order (early → late) for cross-book guardrail ─────────────────
-BOOK_ORDER = [
-    "prealgebra",
-    "elementary_algebra",
-    "algebra_1",
-    "intermediate_algebra",
-    "college_algebra_coreq",
-    "college_algebra",
-    "algebra_trigonometry",
-    "precalculus",
-    "calculus_1",
-    "calculus_2",
-    "calculus_3",
-    "intro_statistics",
-    "statistics",
-    "business_statistics",
-    "contemporary_math",
-    "principles_data_science",
-]
 
 # ── Book Registry ──────────────────────────────────────────────────────
 # Each entry maps a book_code to its PDF-specific configuration.

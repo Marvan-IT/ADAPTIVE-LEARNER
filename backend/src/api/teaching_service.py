@@ -188,11 +188,19 @@ async def _update_strategy_effectiveness(
 class TeachingService:
     """Manages the full lifecycle of a teaching session."""
 
-    def __init__(self, knowledge_svc: KnowledgeService):
-        self.knowledge_svc = knowledge_svc
+    def __init__(self, knowledge_services: "dict[str, KnowledgeService]"):
+        self.knowledge_services = knowledge_services
         self.openai = AsyncOpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
         self.model = OPENAI_MODEL
         self.model_mini = OPENAI_MODEL_MINI
+
+    def _get_ksvc(self, session: "TeachingSession") -> KnowledgeService:
+        """Return the KnowledgeService for the session's book, falling back to prealgebra."""
+        slug = getattr(session, "book_slug", "prealgebra") or "prealgebra"
+        svc = self.knowledge_services.get(slug)
+        if svc is None:
+            svc = self.knowledge_services.get("prealgebra") or next(iter(self.knowledge_services.values()))
+        return svc
 
     async def _chat(self, messages: list, max_tokens: int = 2000, temperature: float = 0.7, model: str | None = None, timeout: float = 30.0) -> str:
         """Call GPT and return the response content. Pass model='mini' to use gpt-4o-mini."""
@@ -232,6 +240,7 @@ class TeachingService:
         db: AsyncSession,
         student_id: uuid.UUID,
         concept_id: str,
+        book_slug: str = "prealgebra",
         style: str = "default",
         lesson_interests: list[str] | None = None,
     ) -> TeachingSession:
@@ -239,7 +248,7 @@ class TeachingService:
         session = TeachingSession(
             student_id=student_id,
             concept_id=concept_id,
-            book_slug="prealgebra",
+            book_slug=book_slug,
             phase="PRESENTING",
             style=style,
             lesson_interests=lesson_interests or None,
@@ -265,7 +274,7 @@ class TeachingService:
             return session.presentation_text
 
         # 1. Retrieve concept content from KnowledgeService (RAG)
-        concept = self.knowledge_svc.get_concept_detail(session.concept_id)
+        concept = self._get_ksvc(session).get_concept_detail(session.concept_id)
         if not concept:
             raise ValueError(f"Concept not found: {session.concept_id}")
 
@@ -327,7 +336,7 @@ class TeachingService:
 
         session.phase = "CHECKING"
 
-        concept = self.knowledge_svc.get_concept_detail(session.concept_id)
+        concept = self._get_ksvc(session).get_concept_detail(session.concept_id)
         concept_text = concept["text"]
         concept_title = concept["concept_title"]
         images = concept.get("images", [])
@@ -715,7 +724,7 @@ class TeachingService:
         Returns dict with cards array and metadata.
         """
         # Return cached if available — reject stale sessions with old grouping artifacts
-        _CARDS_CACHE_VERSION = 11  # Rolling architecture: concepts_queue + per-section floor
+        _CARDS_CACHE_VERSION = 13  # Rolling architecture: concepts_queue + per-section floor
         if session.presentation_text:
             try:
                 cached = json.loads(session.presentation_text)
@@ -738,7 +747,7 @@ class TeachingService:
                 pass
 
         # 1. Retrieve concept
-        concept = self.knowledge_svc.get_concept_detail(session.concept_id)
+        concept = self._get_ksvc(session).get_concept_detail(session.concept_id)
         if not concept:
             raise ValueError(f"Concept not found: {session.concept_id}")
 
@@ -1040,18 +1049,19 @@ class TeachingService:
             )
             all_raw_cards.extend(gap_cards)
 
-            # RC4: Re-sort all_raw_cards to restore curriculum section order after gap-fill append.
-            # Uses stable integer _section_index stamps set in generate_for_section().
-            all_raw_cards.sort(key=lambda c: c.get("_section_index", len(sub_sections)))
-
         # Post-generation validation: infer missing section_ids, deduplicate, and re-sort.
         # Build section_order from sub_section titles (used as stable section identifiers here).
+        # NOTE: validate_and_repair_cards runs FIRST (fuzzy section assignment), then integer
+        # _section_index sort runs SECOND so curriculum order is always the final authority.
         _section_order_titles = [s["title"] for s in sub_sections]
         all_raw_cards, _still_missing = validate_and_repair_cards(
             all_raw_cards,
             section_order=_section_order_titles,
             required_sections=None,  # gap-fill pass above already handled re-gen; just repair
         )
+        # RC4: Re-sort all_raw_cards to restore curriculum section order after gap-fill append.
+        # Uses stable integer _section_index stamps set in generate_for_section().
+        all_raw_cards.sort(key=lambda c: c.get("_section_index", len(sub_sections)))
         if _still_missing:
             logger.warning(
                 "[card-validate] session=%s sections still uncovered after gap-fill: %s",
@@ -1116,6 +1126,37 @@ class TeachingService:
                     }
             else:
                 card["question"] = None
+
+            # ---- Validate and normalise question2 ----
+            q2 = card.get("question2")
+            if isinstance(q2, dict):
+                opts2 = q2.get("options", [])
+                if not isinstance(opts2, list) or len(opts2) != 4:
+                    logger.warning(
+                        "[card-schema] session=%s card=%d '%s': question2.options invalid — will use question fallback",
+                        str(session.id), ci, card.get("title", "?"),
+                    )
+                    card["question2"] = None
+                else:
+                    ci2 = q2.get("correct_index", 0)
+                    if not isinstance(ci2, int) or not (0 <= ci2 < len(opts2)):
+                        ci2 = 0
+                    card["question2"] = {
+                        "text": str(q2.get("text") or q2.get("question") or ""),
+                        "options": [str(o) for o in opts2],
+                        "correct_index": ci2,
+                        "explanation": str(q2.get("explanation", "")),
+                    }
+            else:
+                card["question2"] = None
+
+            # Fallback: if question2 still null but question is valid, copy question as fallback
+            if card.get("question2") is None and isinstance(card.get("question"), dict):
+                card["question2"] = dict(card["question"])
+                logger.warning(
+                    "[card-schema] session=%s card=%d '%s': question2 missing from LLM — using question as fallback",
+                    str(session.id), ci, card.get("title", "?"),
+                )
 
             # Ensure image_indices is a list (LLM may omit it)
             if not isinstance(card.get("image_indices"), list):
@@ -1248,7 +1289,7 @@ class TeachingService:
             "phase": session.phase,
             "cards": raw_cards,
             "total_questions": 0,  # Retained for API compat; no longer a meaningful count
-            "cache_version": 11,   # Must match _CARDS_CACHE_VERSION above
+            "cache_version": _CARDS_CACHE_VERSION,
             "concepts_queue": concepts_queue,                          # remaining sub-sections
             "concepts_covered": [s["title"] for s in sub_sections],   # covered so far
             "concepts_total": len(all_sub_sections),                   # total count
@@ -1668,7 +1709,7 @@ class TeachingService:
             raise ValueError(f"Session not found: {session_id}")
 
         failed_topics = json.loads(session.remediation_context or '["key concepts"]')
-        concept = self.knowledge_svc.get_concept_detail(session.concept_id)
+        concept = self._get_ksvc(session).get_concept_detail(session.concept_id)
         if not concept:
             raise ValueError(f"Concept not found: {session.concept_id}")
         student = await db.get(Student, session.student_id)
@@ -1800,7 +1841,7 @@ class TeachingService:
             raise ValueError(f"Session not found: {session_id}")
 
         failed_topics = json.loads(session.remediation_context or "[]")
-        concept = self.knowledge_svc.get_concept_detail(session.concept_id)
+        concept = self._get_ksvc(session).get_concept_detail(session.concept_id)
         if not concept:
             raise ValueError(f"Concept not found: {session.concept_id}")
         student = await db.get(Student, session.student_id)
@@ -1892,69 +1933,6 @@ class TeachingService:
         sections = [s for s in sections if s["text"]]
 
         return sections
-
-    @staticmethod
-    def _split_into_n_chunks(text: str, n: int) -> list[dict]:
-        """Split concept text into n equal chunks when header-based parsing yields < n sections."""
-        sentences = [s.strip() for s in text.replace('\n', ' ').split('. ') if s.strip()]
-        if not sentences:
-            return [{"title": "Part 1", "text": text}]
-        chunk_size = max(1, len(sentences) // n)
-        chunks = []
-        for i in range(0, len(sentences), chunk_size):
-            part = '. '.join(sentences[i:i + chunk_size]).strip()
-            if part:
-                chunks.append({"title": f"Part {len(chunks) + 1}", "text": part})
-        # Pad to n if sentence splitting produced fewer chunks
-        while len(chunks) < n:
-            chunks.append(chunks[-1])
-        return chunks[:n]
-
-    @staticmethod
-    def _group_sub_sections(
-        sections: list[dict], max_chars: int = 4000, max_cards: int = 10
-    ) -> list[dict]:
-        """
-        Greedily group adjacent sub-sections so each card's combined text stays
-        within max_chars. If that still yields more than max_cards groups, merge
-        the two adjacent groups with the smallest combined size until within limit.
-        No content is ever dropped.
-        """
-        groups: list[dict] = []
-        current_title = sections[0]["title"]
-        current_texts = [sections[0]["text"]]
-        current_len = len(sections[0]["text"])
-
-        for sec in sections[1:]:
-            addition = len(sec["text"]) + 2  # +2 for the "\n\n" separator
-            if current_len + addition <= max_chars:
-                current_texts.append(sec["text"])
-                current_len += addition
-            else:
-                groups.append({"title": current_title, "text": "\n\n".join(current_texts)})
-                current_title = sec["title"]
-                current_texts = [sec["text"]]
-                current_len = len(sec["text"])
-
-        if current_texts:
-            groups.append({"title": current_title, "text": "\n\n".join(current_texts)})
-
-        # If still over max_cards, merge the pair of adjacent groups with smallest combined size
-        while len(groups) > max_cards:
-            min_combined = float("inf")
-            min_idx = 0
-            for i in range(len(groups) - 1):
-                combined = len(groups[i]["text"]) + len(groups[i + 1]["text"])
-                if combined < min_combined:
-                    min_combined = combined
-                    min_idx = i
-            merged = {
-                "title": groups[min_idx]["title"],
-                "text": groups[min_idx]["text"] + "\n\n" + groups[min_idx + 1]["text"],
-            }
-            groups = groups[:min_idx] + [merged] + groups[min_idx + 2:]
-
-        return groups
 
     @staticmethod
     def _group_by_major_topic(sections: list[dict]) -> list[dict]:
@@ -2081,16 +2059,6 @@ class TeachingService:
         return "TYPE_A"
 
     @staticmethod
-    def _extract_inline_image_filenames(text: str) -> list[str]:
-        """
-        Extract bare filenames from inline image refs in sub-section text.
-        Matches: ![any description](/images/concept_id/filename.jpeg)
-        Returns filenames in reading order (positional — matches PDF layout).
-        """
-        import re
-        return re.findall(r"!\[.*?\]\(/images/[^/]+/([^)\s]+)\)", text)
-
-    @staticmethod
     def _salvage_truncated_json(raw: str):
         """Try to fix truncated JSON by closing open structures."""
         if not raw:
@@ -2180,17 +2148,6 @@ class TeachingService:
             .where(ConversationMessage.session_id == session_id)
         )
         return result.scalar_one()
-
-    async def _get_checking_messages(
-        self, db: AsyncSession, session_id: uuid.UUID
-    ) -> list[ConversationMessage]:
-        result = await db.execute(
-            select(ConversationMessage)
-            .where(ConversationMessage.session_id == session_id)
-            .where(ConversationMessage.phase == "CHECKING")
-            .order_by(ConversationMessage.message_order)
-        )
-        return list(result.scalars().all())
 
     async def _get_phase_messages(
         self, db: AsyncSession, session_id: uuid.UUID, phase: str

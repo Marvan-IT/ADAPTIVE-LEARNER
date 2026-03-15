@@ -52,7 +52,33 @@
       "Bash(__NEW_LINE_9d0a0ccae763b352__ echo \"Backend:\")",
       "Bash(__NEW_LINE_9d0a0ccae763b352__ echo \"Auth:\")",
       "Bash(__NEW_LINE_321688dbdc648119__ echo \"Frontend:\")",
-      "Read(//c/Users/Muhammed Marvan/.claude/projects/c--files-Desktop-ADA/e90111be-9da5-4c43-9dda-ca61ea6a9466/tool-results/**)"
+      "Read(//c/Users/Muhammed Marvan/.claude/projects/c--files-Desktop-ADA/e90111be-9da5-4c43-9dda-ca61ea6a9466/tool-results/**)",
+      "Bash(psql -U postgres -d AdaptiveLearner -c \"TRUNCATE student_mastery, conversation_messages, teaching_sessions, students RESTART IDENTITY CASCADE;\")",
+      "Bash(cmd /c \"taskkill /F /IM node.exe\")",
+      "Bash(wmic process where \"name=''node.exe''\" get ProcessId,CommandLine)",
+      "Bash(wmic process where \"CommandLine like ''%vite%''\" get ProcessId)",
+      "Bash(wmic process where \"CommandLine like ''%uvicorn%''\" get ProcessId)",
+      "Bash(wmic process where \"CommandLine like ''%uvicorn%''\" get ProcessId,CommandLine)",
+      "Bash(wmic process where \"CommandLine like ''%uvicorn%'' and Name=''python.exe''\" get ProcessId)",
+      "Bash(wmic process where \"Name=''python.exe''\" get ProcessId)",
+      "Bash(cmd /c \"taskkill /F /PID 143056 & taskkill /F /PID 150784 & taskkill /F /PID 9404 & taskkill /F /PID 153592\" 2)",
+      "Bash(1 sleep 2 netstat -ano)",
+      "Bash(cmd /c \"for /f \"\"tokens=5\"\" %a in \\(''netstat -ano ^| findstr :8888 ^| findstr LISTENING''\\) do taskkill /F /PID %a\")",
+      "Bash(python3:*)",
+      "Bash(.venv/Scripts/python.exe -c \"import ast; ast.parse\\(open\\(''backend/src/api/teaching_service.py''\\).read\\(\\)\\); print\\(''teaching_service.py: OK''\\)\")",
+      "Bash(.venv/Scripts/python.exe -c \"import ast; ast.parse\\(open\\(''backend/src/api/prompts.py''\\).read\\(\\)\\); print\\(''prompts.py: OK''\\)\")",
+      "Bash(.venv/Scripts/python.exe -c \"import ast; ast.parse\\(open\\(''backend/src/api/prompts.py'', encoding=''utf-8''\\).read\\(\\)\\); print\\(''prompts.py: OK''\\)\")",
+      "Bash(.venv/Scripts/python.exe -c \"import ast; ast.parse\\(open\\(''backend/src/config.py'', encoding=''utf-8''\\).read\\(\\)\\); print\\(''config.py: OK''\\)\")",
+      "Bash(../../.venv/Scripts/python.exe -c \":*)",
+      "Bash(rtk npx acorn --ecma2020 --module /c/files/Desktop/ADA/frontend/src/context/SessionContext.jsx)",
+      "Bash(~/.local/bin/rtk npx acorn --ecma2020 --module /c/files/Desktop/ADA/frontend/src/context/SessionContext.jsx)",
+      "Bash(node -e \":*)",
+      "Bash(~/.local/bin/rtk ls c:/files/Desktop/ADA/backend/alembic/versions/)",
+      "Bash(export PATH=\"$PATH:$HOME/.local/bin\")",
+      "Bash(grep -h \"^revision\\\\|^down_revision\" c:/files/Desktop/ADA/backend/alembic/versions/*.py)"
+    ],
+    "additionalDirectories": [
+      "c:\\files\\Desktop\\ADA"
     ]
   }
 }

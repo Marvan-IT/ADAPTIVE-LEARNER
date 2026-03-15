@@ -40,6 +40,16 @@ from adaptive.adaptive_router import router as adaptive_router, cards_router as 
 import adaptive.adaptive_router as adaptive_router_module
 from db.connection import init_db, close_db
 from config import OUTPUT_DIR, OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, OPENAI_MODEL_MINI
+
+
+def _discover_processed_books() -> list[str]:
+    """Scan OUTPUT_DIR for subdirectories that contain a chroma_db/ folder."""
+    slugs = []
+    if OUTPUT_DIR.exists():
+        for subdir in sorted(OUTPUT_DIR.iterdir()):
+            if subdir.is_dir() and (subdir / "chroma_db").exists():
+                slugs.append(subdir.name)
+    return slugs
 from api.prompts import LANGUAGE_NAMES
 
 
@@ -55,7 +65,8 @@ _SKIP_AUTH = {"/health", "/docs", "/openapi.json", "/redoc"}
 
 # ── Lifespan: load services once at startup ────────────────────────
 
-knowledge_svc: KnowledgeService = None
+knowledge_svc: KnowledgeService = None          # default (prealgebra) — used by v1 endpoints
+knowledge_services: dict[str, KnowledgeService] = {}  # all loaded books keyed by slug
 _openai_client: AsyncOpenAI = None
 
 # Persistent translation cache: { (language, concept_id): translated_title }
@@ -91,19 +102,31 @@ def _save_translation_cache() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global knowledge_svc, _openai_client
-    logger.info("Loading KnowledgeService (ChromaDB + NetworkX)...")
-    knowledge_svc = KnowledgeService(book_slug="prealgebra")
+    global knowledge_svc, knowledge_services, _openai_client
+    slugs = _discover_processed_books()
+    if not slugs:
+        logger.warning("No processed books found in %s — falling back to prealgebra.", OUTPUT_DIR)
+        slugs = ["prealgebra"]
+    logger.info("Loading KnowledgeService for books: %s", slugs)
+    for slug in slugs:
+        try:
+            knowledge_services[slug] = KnowledgeService(book_slug=slug)
+            logger.info("  Loaded book: %s", slug)
+        except Exception:
+            logger.exception("  Failed to load book: %s — skipping.", slug)
+    # Default service for v1 endpoints (prealgebra, or first available)
+    knowledge_svc = knowledge_services.get("prealgebra") or next(iter(knowledge_services.values()), None)
     logger.info("Initializing PostgreSQL...")
     await init_db()
-    teaching_router_module.teaching_svc = TeachingService(knowledge_svc)
+    teaching_router_module.teaching_svc = TeachingService(knowledge_services)
+    teaching_router_module._knowledge_services = knowledge_services
     adaptive_router_module.adaptive_knowledge_svc = knowledge_svc
     adaptive_router_module.adaptive_llm_client = AsyncOpenAI(
         api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL
     )
     _openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
     _load_translation_cache()
-    logger.info("Services loaded. API ready.")
+    logger.info("Services loaded. Loaded %d book(s): %s. API ready.", len(knowledge_services), list(knowledge_services))
     yield
     _save_translation_cache()
     await close_db()
@@ -172,6 +195,7 @@ app.mount("/static/output", StaticFiles(directory=str(OUTPUT_DIR)), name="static
 async def health():
     return {
         "status": "ok",
+        "loaded_books": list(knowledge_services.keys()),
         "collection_count": knowledge_svc.collection.count() if knowledge_svc else 0,
         "graph_nodes": knowledge_svc.graph.number_of_nodes() if knowledge_svc else 0,
         "graph_edges": knowledge_svc.graph.number_of_edges() if knowledge_svc else 0,
