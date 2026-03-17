@@ -207,6 +207,7 @@ class NextSectionCardsResponse(BaseModel):
     concepts_total: int
     concepts_covered_count: int
     current_mode: str    # "SLOW" | "NORMAL" | "FAST"
+    learning_profile_summary: dict | None = None
 
 
 class UpdateSessionInterestsRequest(BaseModel):
@@ -227,6 +228,26 @@ class RegenerateMCQRequest(BaseModel):
 
 class RegenerateMCQResponse(BaseModel):
     question: CardMCQ
+
+
+class CompleteCardRequest(BaseModel):
+    card_index: int
+    time_on_card_sec: float = 0.0
+    wrong_attempts: int = 0
+    selected_wrong_option: int | None = None
+    hints_used: int = 0
+    idle_triggers: int = 0
+    difficulty_bias: str | None = None
+    re_explain_card_title: str | None = None  # set by frontend when wrong_attempts >= 2
+    wrong_question: str | None = None        # The MCQ question text the student got wrong
+    wrong_answer_text: str | None = None     # The exact text of the wrong answer chosen
+
+
+class CompleteCardResponse(BaseModel):
+    recovery_card: LessonCard | None = None
+    learning_profile_summary: dict | None = None
+    motivational_note: str | None = None
+    adaptation_applied: str | None = None
 
 
 class AssistRequest(BaseModel):

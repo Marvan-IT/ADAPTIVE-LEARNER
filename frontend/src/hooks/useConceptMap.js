@@ -4,7 +4,7 @@ import { getGraphFull, getNextConcepts, translateConceptTitles } from "../api/co
 import { useStudent } from "../context/StudentContext";
 import { formatConceptTitle } from "../utils/formatConceptTitle";
 
-export function useConceptMap() {
+export function useConceptMap(bookSlug = "prealgebra") {
   const { masteredConcepts } = useStudent();
   const { i18n } = useTranslation();
   const [nodes, setNodes] = useState([]);
@@ -18,8 +18,8 @@ export function useConceptMap() {
     setError(null);
     try {
       const [graphRes, nextRes] = await Promise.all([
-        getGraphFull(),
-        getNextConcepts(masteredConcepts),
+        getGraphFull(bookSlug),
+        getNextConcepts(masteredConcepts, bookSlug),
       ]);
 
       let graphNodes = graphRes.data.nodes;
@@ -67,7 +67,7 @@ export function useConceptMap() {
     } finally {
       setLoading(false);
     }
-  }, [masteredConcepts, i18n.language]);
+  }, [masteredConcepts, i18n.language, bookSlug]);
 
   useEffect(() => {
     fetchData();

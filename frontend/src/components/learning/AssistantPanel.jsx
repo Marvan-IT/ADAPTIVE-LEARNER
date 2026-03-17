@@ -14,7 +14,7 @@ const MAX_IDLE_TRIGGERS_PER_CARD = 2;
 
 const modeColors = {
   NORMAL:     "linear-gradient(135deg, var(--color-accent), var(--color-primary))",
-  EXCELLING:  "linear-gradient(135deg, var(--xp-gold), #f97316)",
+  FAST:       "linear-gradient(135deg, var(--xp-gold), #f97316)",
   SLOW:       "linear-gradient(135deg, var(--adapt-slow), #818cf8)",
   STRUGGLING: "linear-gradient(135deg, var(--adapt-struggling), #fb923c)",
   BORED:      "linear-gradient(135deg, var(--adapt-bored), #06b6d4)",

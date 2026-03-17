@@ -22,6 +22,7 @@ from config import (
     XP_MASTERY_BONUS,
     XP_MASTERY_BONUS_THRESHOLD,
     XP_CONSOLATION,
+    DEFAULT_BOOK_SLUG,
 )
 from db.connection import get_db
 from db.models import Student, TeachingSession, ConversationMessage, StudentMastery, SpacedReview, CardInteraction
@@ -43,6 +44,7 @@ from api.teaching_schemas import (
     SectionCompleteRequest, SectionCompleteResponse,
     UpdateSessionInterestsRequest,
     NextSectionCardsRequest, NextSectionCardsResponse,
+    CompleteCardRequest, CompleteCardResponse,
 )
 from api.rate_limiter import limiter
 
@@ -335,7 +337,11 @@ async def get_concept_readiness(
     )
     mastered_ids = {row for row in mastery_result.scalars().all()}
 
-    graph = teaching_svc.knowledge_svc.graph
+    _ksvc = (
+        teaching_svc.knowledge_services.get(DEFAULT_BOOK_SLUG)
+        or next(iter(teaching_svc.knowledge_services.values()))
+    )
+    graph = _ksvc.graph
 
     if concept_id not in graph:
         return ConceptReadinessResponse(
@@ -416,6 +422,14 @@ async def start_session(request: Request, req: StartSessionRequest, db: AsyncSes
         available = list(_knowledge_services.keys())
         raise HTTPException(400, f"Book '{req.book_slug}' not loaded. Available: {available}")
 
+    ksvc = _knowledge_services[req.book_slug]
+    concept_detail = ksvc.get_concept_detail(req.concept_id)
+    if not concept_detail:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Concept '{req.concept_id}' not found in book '{req.book_slug}'"
+        )
+
     session = await teaching_svc.start_session(
         db, req.student_id, req.concept_id, req.book_slug, req.style, req.lesson_interests
     )
@@ -437,7 +451,8 @@ async def get_presentation(request: Request, session_id: UUID, db: AsyncSession 
     student = await db.get(Student, session.student_id)
     presentation = await teaching_svc.generate_presentation(db, session, student)
 
-    concept = teaching_svc.knowledge_svc.get_concept_detail(session.concept_id)
+    _ksvc2 = teaching_svc.knowledge_services.get(session.book_slug or "prealgebra") or next(iter(teaching_svc.knowledge_services.values()))
+    concept = _ksvc2.get_concept_detail(session.concept_id)
 
     # Filter images: only DIAGRAM-type with reasonable dimensions
     raw_images = concept.get("images", []) if concept else []
@@ -874,6 +889,25 @@ async def record_card_interaction(
     return {"saved": True}
 
 
+@router.post("/sessions/{session_id}/complete-card")
+@limiter.limit("30/minute")
+async def complete_card(
+    request: Request,
+    session_id: UUID,
+    req: CompleteCardRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Record card interaction; optionally generate recovery card; return updated learning profile."""
+    session = await db.get(TeachingSession, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    student = await db.get(Student, session.student_id)
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+    result = await teaching_svc.complete_card_interaction(db, session, student, req)
+    return CompleteCardResponse(**result)
+
+
 # ═══════════════════════════════════════════════════════════════════
 # SPACED REVIEW
 # ═══════════════════════════════════════════════════════════════════
@@ -1107,3 +1141,26 @@ async def get_session_card_interactions(
             for ci in interactions
         ],
     }
+
+
+@router.get("/books", response_model=list[dict])
+async def list_available_books():
+    """Return all processed books available for study."""
+    try:
+        from config import BOOK_REGISTRY
+        # Build slug → title lookup from the registry (each entry has "book_slug" and "title")
+        slug_to_title = {
+            entry["book_slug"]: entry["title"]
+            for entry in BOOK_REGISTRY.values()
+            if isinstance(entry, dict) and "book_slug" in entry and "title" in entry
+        }
+    except (ImportError, AttributeError):
+        slug_to_title = {}
+
+    return [
+        {
+            "slug": slug,
+            "title": slug_to_title.get(slug, slug.replace("_", " ").title()),
+        }
+        for slug in sorted(teaching_svc.knowledge_services.keys())
+    ]

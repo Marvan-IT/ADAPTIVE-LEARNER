@@ -33,19 +33,28 @@ from models import ConceptBlock, DependencyEdge
 logger = logging.getLogger(__name__)
 
 # Max words used when computing the embedding (not for storage).
-# LaTeX math runs ~2.1 tokens/word; 3000w × 2.1 ≈ 6300 tokens < 8192-token limit.
-_EMBED_MAX_WORDS = 3000
+# LaTeX math can run 3–4 tokens/word in dense sections; 2000w × 4 = 8000 tokens < 8192-token limit.
+_EMBED_MAX_WORDS = 2000
+
+# Max texts per single embeddings API call.
+# 20 texts × 6300 tokens ≈ 126,000 tokens — well under the 300,000-token request limit.
+_EMBED_API_BATCH = 20
 
 
 def _compute_embeddings(texts: list[str]) -> list[list[float]]:
-    """Call the OpenAI embeddings API for a batch of texts. Returns embedding vectors."""
+    """Call the OpenAI embeddings API, sub-batching to stay under the 300k-token limit."""
     client = openai.OpenAI(
         api_key=OPENAI_API_KEY,
         base_url=OPENAI_BASE_URL or None,
     )
-    response = client.embeddings.create(input=texts, model=EMBEDDING_MODEL)
-    sorted_data = sorted(response.data, key=lambda d: d.index)
-    return [item.embedding for item in sorted_data]
+    all_embeddings: list[list[float]] = []
+    for i in range(0, len(texts), _EMBED_API_BATCH):
+        sub = texts[i : i + _EMBED_API_BATCH]
+        response = client.embeddings.create(input=sub, model=EMBEDDING_MODEL)
+        all_embeddings.extend(
+            item.embedding for item in sorted(response.data, key=lambda d: d.index)
+        )
+    return all_embeddings
 
 
 def initialize_collection(

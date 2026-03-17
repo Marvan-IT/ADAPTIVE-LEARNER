@@ -5,7 +5,7 @@ const LEVEL_XP = 100;
 function detectMode(signals) {
   if (!signals) return 'NORMAL';
   const { speed, comprehension, engagement, wrong_attempts, avg_time_per_card } = signals;
-  if (speed === 'FAST' && comprehension === 'STRONG') return 'EXCELLING';
+  if (speed === 'FAST' && comprehension === 'STRONG') return 'FAST';
   if (comprehension === 'STRUGGLING' && (wrong_attempts || 0) >= 3) return 'STRUGGLING';
   if (engagement === 'BORED') return 'BORED';
   if (speed === 'SLOW' || (avg_time_per_card || 0) > 90) return 'SLOW';

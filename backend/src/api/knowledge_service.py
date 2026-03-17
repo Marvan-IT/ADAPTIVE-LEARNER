@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 def _resolve_image_urls(
     text: str,
     book_slug: str,
-    base_url: str = "http://localhost:8000",
+    base_url: str = "",
 ) -> str:
     """
     Replace relative image filenames in MMD text with full static URLs so the
@@ -180,7 +180,8 @@ class KnowledgeService:
                     "metadata": result["metadatas"][0] if result["metadatas"] else {},
                 }
         except Exception:
-            pass
+            logger.exception("Unexpected error fetching concept %s", concept_id)
+            return None
         return None
 
     def get_concept_detail(self, concept_id: str) -> Optional[dict]:
@@ -383,18 +384,15 @@ class KnowledgeService:
                     None,
                 )
                 if resolved is None:
-                    logger.debug(
-                        "image_not_found concept=%s filename=%s page=%s",
-                        concept_id, img["filename"], img.get("page"),
-                    )
-                    continue
+                    resolved = img["filename"]  # Use indexed name; 404 is better than no image slot
+                    logger.debug("image_not_found concept=%s using indexed fallback", concept_id)
             else:
                 # No disk access (test context or missing dir) — use indexed filename as-is
                 resolved = img["filename"]
 
             results.append({
                 "filename": resolved,
-                "url": f"/images/{concept_id}/{resolved}",
+                "url": f"/images/{self.book_slug}/{concept_id}/{resolved}",
                 "width": img["width"],
                 "height": img["height"],
                 "image_type": img["image_type"],

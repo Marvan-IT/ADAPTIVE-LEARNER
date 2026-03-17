@@ -177,6 +177,36 @@ Fix: use a minimal `FastAPI()` + `TestClient` app that replicates the handler lo
 
 ### Stale Constant-Pin Failures in Existing Tests (pre-existing, not regressions)
 `test_adaptive_mode_switching.py` and `test_card_generation.py` have 10 tests asserting old constant values:
-- `_CARDS_CACHE_VERSION = 6` / `= 12` — actual value is now `13` (bumped per CLAUDE.md, 2026-03-15)
+- `_CARDS_CACHE_VERSION = 6` / `= 12` — actual value is now `14` (bumped again 2026-03-16 for FUN/RECAP removal)
 - `STARTER_PACK_INITIAL_SECTIONS = 2` — actual value is now `3` (bumped per CLAUDE.md, 2026-03-15)
-These tests need their expected constants updated to 13 and 3 respectively.
+These tests need their expected constants updated to 14 and 3 respectively.
+
+### Bug Fixes Test File
+`backend/tests/test_bug_fixes.py` — 96 tests across 19 groups (all passing):
+- `TestCardOrdering` (4): Fix 1 — FUN/RECAP reorder block removed; _section_index sort is authoritative
+- `TestImageFilter` (9): Fix 2A — image filter no longer restricts to DIAGRAM/FORMULA; PHOTO/TABLE/FIGURE all pass
+- `TestImageFallback` (4): Fix 2B — file-not-found path retains indexed filename rather than dropping image
+- `TestRecoveryCardInsertion` (4): Fix 3 — REPLACE_UPCOMING_CARD replaces targetIndex slot; appends when at end
+- `TestFastModeDetection` + `TestConservativeCapThreshold` (13): Fix 4A/4B — expected_time floor 90s; cap threshold lowered 5→2
+- `TestPropertyBatching` (10): Fix 5A — _batch_consecutive_properties merges consecutive property CONCEPT sections
+- `TestFixLatexBackslashes` (9): Fix 6 — doubles non-safe-escape backslashes; `\t` IS safe so `\times` is NOT doubled
+- `TestImageUrlIncludesBookSlug` (4): Fix 7 — image URLs include book_slug; uses `object.__new__` bypass
+- `TestBlendedScoreForwarded` (2): Fix 8 — blended_score forwarded not hardcoded; `db.flush = AsyncMock()`
+- `TestListBooksEndpoint` (5): Fix 9 — `/api/v2/books` endpoint; `_install_rate_limiter_stub()` pattern
+- `TestCardBehaviorSignalsImport` (4): Fix 10 — CardBehaviorSignals comes from adaptive.schemas
+- `TestSortCards` (6): Fix 11 — `_sort_cards()`: FUN first, difficulty-ascending middle, RECAP last
+- `TestParseCardImageRef` (4): Fix 12 — strips [CARD:N], returns image at index, out-of-bounds → None
+- `TestImageUrlNoHardcodedPort` (3): Fix 13 — base_url default is `""` not `localhost:8000`
+- `TestAdaptiveModeDerivation` (5): SLOW/low-comp → STRUGGLING; FAST+high-comp → FAST; else NORMAL
+- `TestCacheVersionBump` (1): Fix 14 — `_CARDS_CACHE_VERSION == 15`; read via source regex (local var, not importable)
+- `TestBlankCardFilter` (2): Fix 15 — cards with empty/whitespace title or content are filtered out
+- `TestRecoveryCardWrongAnswer` (3): Fix 16 — `CompleteCardRequest` has optional `wrong_question`/`wrong_answer_text`; `generate_recovery_card` accepts both
+- `TestBookSlugRouting` (2): Fix 17 — `/api/v1/books` in main.py source; `graph_full` has `book_slug` param (AST inspection, no lifespan trigger)
+- `TestRollingModeMapping` (4+4): Fix 18 — SLOW maps to STRUGGLING; `_CARD_MODE_DELIVERY` has no SLOW key
+
+Key patterns:
+- Method-local constants (not importable): use `pathlib + re.search` on source text
+- Routes on `app` in `api/main.py` (lifespan requires DB): use `ast.parse` on source file to inspect functions/decorators
+- Static method import: `from api.teaching_service import TeachingService as _TS; _fn = _TS._method`
+- `inspect.signature(fn).parameters["param"].default` to assert no hardcoded values
+- `object.__new__(KnowledgeService)` to bypass `__init__` (avoids ChromaDB/file I/O)

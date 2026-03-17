@@ -64,6 +64,22 @@ All endpoints in `teaching_router.py` use `@limiter.limit()`. The `adaptive_rout
 | No frontend test framework (vitest) | Pending |
 | No startup env validation in config.py | Done — validate_required_env_vars() in config.py; called first in lifespan |
 
+## Pipeline / Image Extraction Notes
+
+- ALG1 PDF TOC uses `"Lesson N.N Title"` format; all other books use bare `"N.N Title"`. Fix: add `toc_section_pattern` key to ALG1 entry in `BOOK_REGISTRY` and update `_load_source_pages_from_pdf()` in `pipeline.py` to prefer it.
+- `_load_source_pages_from_pdf()` returns empty dict when 0 TOC entries match → Stage C silently skips image extraction. Always confirm `len(toc_sections) > 0` after adding a new book.
+- Re-running pipeline with cached MMD overwrites `dependency_graph.json` (Stage E). Any manual graph patches must be re-applied AFTER the pipeline completes.
+- `image_index.json` is keyed by `concept_id`; values are lists of `{filename, width, height, image_type, page, description, relevance}`. Only images where `is_educational=True` AND `description` is non-null are indexed.
+
+## Dependency Graph Patch History (2026-03-17)
+
+| Book | Edge Added | Reason |
+|---|---|---|
+| algebra_1 | `ALG1.C4.S18` → `ALG1.C5.S1.PROPERTIES_OF_EXPONENTS` | Ch4→Ch5 continuity |
+| college_algebra | 7 cross-chapter edges (Ch2→Ch5, Ch3→Ch4, Ch3→Ch6, Ch5→Ch7, etc.) | Missing inter-chapter prerequisite links |
+| elementary_algebra | `ELEMALG.C2.S7` → `ELEMALG.C3.S1.USE_A_PROBLEM_SOLVING_STRATEGY` | Isolated node fix |
+| intermediate_algebra | `INTERALG.C9.S8` → `INTERALG.C10.S1.FINDING_COMPOSITE_AND_INVERSE_FUNCTIONS` | Isolated node fix |
+
 ## Notes
 
 - Platform: Windows 11, shell: bash — use forward slashes and Unix syntax in all scripts

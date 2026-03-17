@@ -1,6 +1,6 @@
 # Solution Architect Agent Memory — ADA Platform
 
-Last updated: 2026-03-11 (master-card-generation added)
+Last updated: 2026-03-17 (pre-deployment-audit-fixes added)
 
 ---
 
@@ -141,6 +141,18 @@ Feature directories are kebab-case. Never combine two features in one directory.
 - `docs/adaptive-flashcard-system/` — HLD, DLD, execution-plan (2026-03-10) → details below
 - `docs/master-card-generation/` — HLD, DLD, execution-plan (2026-03-11) → see `master-card-generation.md`
 - `docs/hybrid-adaptive-cards/` — HLD, DLD, execution-plan (2026-03-14) → see `hybrid-adaptive-cards.md`
+- `docs/pre-deployment-audit-fixes/` — HLD, DLD, execution-plan (2026-03-17) → see below
+
+### Pre-Deployment Audit Fixes — Key Design Decisions (2026-03-17)
+- **No schema changes, no migration, no new env vars** — pure logic fixes in service layer and frontend reducer
+- **Fix 1 (card ordering):** FUN/RECAP type-based reorder block removed; `_section_index` integer stamp is sole sort authority (cache version 14 already reflects this)
+- **Fix 2A (image filter):** `image_type in ("DIAGRAM","FORMULA")` restriction removed — any `is_educational != False` image with a description now passes through
+- **Fix 4A (FAST floor):** `expected_time = max(baseline_time, 90.0)` — normative 90s floor prevents sub-10s averages from suppressing FAST classification
+- **Fix 4B (conservative cap):** Mode-switch consecutive-signal threshold 5 → 2 for responsive adaptation
+- **P1-A (SessionContext):** `passed` field removed from `SOCRATIC_RESPONSE` reducer destructure + PostHog call — `passed` never existed in `SocraticResponse` backend schema
+- **P2 caution:** `_find_missing_sections` and `_get_checking_messages` have confirmed call sites in live code despite audit report — backend developer must re-verify before deletion
+- **test_bug_fixes.py** already exists at `backend/tests/test_bug_fixes.py` as an untracked file covering 5 fix classes (7+ test classes, 19+ tests)
+- **Effort:** 9.5 dev-days total; 3 calendar days with 4 parallel agents
 
 ### Adaptive Flashcard System — Key Design Decisions (2026-03-10)
 - **DB schema (already in models.py):** 11 new `students` cols + 3 new `card_interactions` cols. Alembic migration `005_add_adaptive_history_columns` needed. Models are already updated in `db/models.py`.

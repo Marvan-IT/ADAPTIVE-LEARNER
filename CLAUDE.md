@@ -44,7 +44,6 @@ ADA/
 │   │   └── pipeline.py       # End-to-end extraction orchestration
 │   ├── data/                 # Input PDF textbooks (do not commit — 1GB+)
 │   ├── output/               # Pipeline output: ChromaDB, JSON graphs, images (do not commit)
-│   ├── tests/                # pytest test suite (directory exists, needs setup)
 │   └── requirements.txt
 ├── frontend/                 # React 19 + Vite 7 SPA
 │   ├── src/
@@ -119,7 +118,7 @@ API_SECRET_KEY=            # random 32-char hex string — required for API auth
 
 ### Frontend (`frontend/.env`)
 ```
-VITE_API_BASE_URL=http://localhost:8000
+VITE_API_BASE_URL=http://localhost:8889
 VITE_POSTHOG_KEY=
 VITE_API_SECRET_KEY=       # must match backend API_SECRET_KEY
 ```
@@ -342,6 +341,19 @@ docs/
 | Vite proxy pointed to wrong port (8891) | Fixed proxy to port 8889 | `vite.config.js` |
 | 10/12 simulation tests failing | All 12/12 now passing | `test_student_simulations.py` |
 
+### ✅ Production Cleanup (2026-03-16)
+
+| Action | Detail |
+|---|---|
+| Removed `backend/tests/` | All pytest test files deleted (dev-only) |
+| Removed `frontend/e2e/` | All Playwright E2E specs and helpers deleted |
+| Removed `frontend/playwright.config.js` | Playwright config deleted |
+| Removed `frontend/test-results/` | All test run artifacts deleted |
+| Removed `backend/scripts/test_cards*.py` | Debug scripts deleted |
+| Removed stale nested `.claude/` dirs | `backend/.claude/`, `backend/src/.claude/`, `frontend/.claude/` deleted |
+| DB wiped | All 826 test students + cascaded data deleted |
+| Ports standardized | Everything on port 8889; `FRONTEND_URL` trimmed to `http://localhost:5173` |
+
 ### ✅ Real Student Readiness Fixes (2026-03-16)
 
 | Issue | Fix Applied | File |
@@ -368,7 +380,7 @@ docs/
 | No Dockerfile | — | Critical |
 | No `docker-compose.yml` | — | Critical |
 | No CI/CD pipeline | — | Critical |
-| No frontend test framework (no vitest) | `frontend/package.json` | High |
+| No frontend unit test framework (no vitest/jest) | `frontend/package.json` | High |
 | `backend/src/models.py` duplicates `db/models.py` | `backend/src/models.py` | Low |
 
 ### 🏗️ Out of Scope (Architectural — Defer)
@@ -388,7 +400,7 @@ cd backend
 source ../.venv/Scripts/activate   # Windows: source ../.venv/Scripts/activate.bat
 pip install -r requirements.txt
 # IMPORTANT: use python -m uvicorn (not bare uvicorn) to ensure venv deps are loaded
-# Port 8889 is used (8000/8001/8888 may be held by stale OS processes from previous sessions)
+# Port 8889 is the canonical backend port
 python -m uvicorn src.api.main:app --reload --port 8889
 ```
 

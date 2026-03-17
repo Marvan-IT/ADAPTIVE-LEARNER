@@ -2,8 +2,12 @@
 MMD Parser — splits a Mathpix Markdown (MMD) document into per-section blocks.
 
 Mathpix /v3/pdf returns one large Markdown document for the entire book.
-Section headings like "## 1.1 Introduction to Whole Numbers" are detected using
-the book config's section_pattern (e.g. r"^(\\d+)\\.(\\d+)\\s+(.+)").
+Section headings are detected in TWO formats depending on the book:
+  - Markdown: "## 1.1 Introduction to Whole Numbers"  (e.g. Prealgebra)
+  - LaTeX:    "\\subsection*{1.1 Introduction to Whole Numbers}"  (e.g. Elementary Algebra)
+
+The book config's section_pattern (e.g. r"^(\\d+)\\.(\\d+)\\s+(.+)") is applied
+to the heading TEXT extracted from whichever format is present.
 
 Key behaviour:
 - Content for each section spans from the section heading to the START of the
@@ -31,6 +35,37 @@ class MmdSection:
     section_title: str
     content_mmd: str           # Full MMD content with inline ![]() image refs
     image_filenames: list[str] = field(default_factory=list)
+
+
+@dataclass
+class _HeadingSpan:
+    """Unified heading from either Markdown (## Title) or LaTeX (\\subsection*{Title})."""
+    pos_start: int
+    pos_end: int
+    text: str
+
+    def start(self) -> int:
+        return self.pos_start
+
+    def end(self) -> int:
+        return self.pos_end
+
+
+def _find_all_headings(mmd_text: str) -> list[_HeadingSpan]:
+    """Find all headings from both Markdown and LaTeX formats, sorted by position.
+
+    Handles:
+      - Markdown: ## Title, ### Title  (used by Prealgebra and similar books)
+      - LaTeX: \\subsection*{Title}, \\subsection{Title}  (used by Elementary Algebra+)
+    """
+    spans: list[_HeadingSpan] = []
+    # Markdown headings: # through ####
+    for m in re.finditer(r'^#{1,4}\s+(.+)$', mmd_text, re.MULTILINE):
+        spans.append(_HeadingSpan(m.start(), m.end(), m.group(1).strip()))
+    # LaTeX subsection headings: \subsection*{Title} or \subsection{Title}
+    for m in re.finditer(r'^\\subsection\*?\{(.+?)\}', mmd_text, re.MULTILINE):
+        spans.append(_HeadingSpan(m.start(), m.end(), m.group(1).strip()))
+    return sorted(spans, key=lambda s: s.pos_start)
 
 
 def parse_mmd(
@@ -61,15 +96,14 @@ def parse_mmd(
     )
     _IMG_RE = re.compile(r'!\[.*?\]\(([^)]+)\)')
 
-    # Find all Markdown headings (# through ####)
-    heading_re = re.compile(r'^(#{1,4})\s+(.+)$', re.MULTILINE)
-    all_headings = list(heading_re.finditer(mmd_text))
+    # Find all headings — Markdown (## Title) and LaTeX (\subsection*{Title})
+    all_headings = _find_all_headings(mmd_text)
 
     # Build a separate list of SECTION headings only (matching section_pattern,
     # section_in_chapter <= 20). These define the content boundaries.
     section_headings = []
     for m in all_headings:
-        heading_text = m.group(2).strip()
+        heading_text = m.text
         sm = _SECTION_RE.match(heading_text)
         if not sm:
             continue

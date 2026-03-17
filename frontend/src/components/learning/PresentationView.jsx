@@ -1,6 +1,7 @@
 import ReactMarkdown from "react-markdown";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
+import { useTranslation } from "react-i18next";
 import { useSession } from "../../context/SessionContext";
 import { useTheme } from "../../context/ThemeContext";
 import { themes } from "../../theme/themes";
@@ -8,6 +9,7 @@ import ConceptImage from "./ConceptImage";
 import { MessageCircle, BookOpen, Sparkles } from "lucide-react";
 
 export default function PresentationView() {
+  const { t } = useTranslation();
   const { presentation, conceptTitle, startCheck, loading, images } = useSession();
   const { style } = useTheme();
   const theme = themes[style] || themes.default;
@@ -91,7 +93,7 @@ export default function PresentationView() {
           color: "var(--color-text-muted)", fontSize: "0.9rem", marginBottom: "0.75rem",
         }}>
           <Sparkles size={16} />
-          Finished reading? Let's test your understanding!
+          {t("presentation.readyForQuiz")}
         </div>
         <button
           onClick={startCheck}
@@ -109,7 +111,7 @@ export default function PresentationView() {
           }}
         >
           <MessageCircle size={20} />
-          {loading ? "Getting ready..." : "Start Quiz"}
+          {loading ? t("presentation.gettingReady") : t("presentation.startQuiz")}
         </button>
       </div>
     </div>

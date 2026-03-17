@@ -73,3 +73,17 @@ concept_id.txt
 .vscode/
 *.suo
 *.user
+
+# ── Playwright test artifacts ───────────────────────────────────────
+frontend/test-results/
+frontend/playwright-report/
+
+# ── Internal Claude agent memory (not project code) ────────────────
+backend/src/.claude/
+
+# ── Claude Code per-machine settings (not project code) ────────────
+.claude/settings.json
+.claude/worktrees/
+
+# ── Line ending normalisation ───────────────────────────────────────
+# (handled by .gitattributes)

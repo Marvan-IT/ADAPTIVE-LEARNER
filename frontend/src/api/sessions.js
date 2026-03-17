@@ -4,12 +4,36 @@ import api from "./client";
 const LLM_TIMEOUT = 180_000; // 3 minutes
 const CARDS_TIMEOUT = 300_000; // 5 minutes (generates multiple cards + questions)
 
+const BOOK_CODE_TO_SLUG = {
+  PREALG: "prealgebra",
+  ELEMALG: "elementary_algebra",
+  INTERALG: "intermediate_algebra",
+  COLALG: "college_algebra",
+  COLALGCRQ: "college_algebra_coreq",
+  ALGTRIG: "algebra_trigonometry",
+  PRECALC: "precalculus",
+  CALC1: "calculus_1",
+  CALC2: "calculus_2",
+  CALC3: "calculus_3",
+  INSTATS: "intro_statistics",
+  STATS: "statistics",
+  BUSTATS: "business_statistics",
+  CONTMATH: "contemporary_math",
+  PDS: "principles_data_science",
+};
+
+export const getBookSlugFromConceptId = (conceptId) => {
+  const code = conceptId?.split(".")?.[0];
+  return BOOK_CODE_TO_SLUG[code] ?? "prealgebra";
+};
+
 export const startSession = (studentId, conceptId, style = "default", lessonInterests = []) =>
   api.post("/api/v2/sessions", {
     student_id: studentId,
     concept_id: conceptId,
     style,
     lesson_interests: lessonInterests.length > 0 ? lessonInterests : [],
+    book_slug: getBookSlugFromConceptId(conceptId),
   });
 
 export const getPresentation = (sessionId) =>
@@ -75,6 +99,8 @@ export const completeCardAndGetNext = (sessionId, signals) =>
       idle_triggers:           signals.idleTriggers,
       difficulty_bias:         signals.difficultyBias ?? null,
       re_explain_card_title:   signals.reExplainCardTitle ?? null,
+      wrong_question:          signals.wrongQuestion ?? null,
+      wrong_answer_text:       signals.wrongAnswerText ?? null,
     },
     { timeout: COMPLETE_CARD_TIMEOUT }
   );
@@ -93,3 +119,21 @@ export const regenerateMCQ = (sessionId, body) =>
 
 export const getNextSectionCards = (sessionId, signals) =>
   api.post(`/api/v2/sessions/${sessionId}/next-section-cards`, signals || {}, { timeout: 45000 });
+
+export const getBooks = async () => {
+  const res = await api.get("/api/v2/books");
+  return res.data;
+};
+
+export const getSpacedReviews = async (sessionId) => {
+  const res = await api.get(`/api/v2/sessions/${sessionId}/spaced-reviews`);
+  return res.data;
+};
+
+export const completeSpacedReview = async (sessionId, reviewId, score) => {
+  const res = await api.post(
+    `/api/v2/sessions/${sessionId}/spaced-reviews/${reviewId}/complete`,
+    { score }
+  );
+  return res.data;
+};

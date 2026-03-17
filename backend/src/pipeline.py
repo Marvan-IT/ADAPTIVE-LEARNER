@@ -154,7 +154,11 @@ def _load_source_pages_from_pdf(
     from extraction.concept_builder import _generate_concept_name
 
     book_code = config["book_code"]
-    section_re = _re.compile(config["section_pattern"])
+    # Some books (e.g. ALG1) use a different heading format in the PDF TOC
+    # (e.g. "Lesson N.N Title") than in the MMD text ("N.N Title").
+    # toc_section_pattern overrides section_pattern for TOC-based page mapping.
+    toc_pattern_str = config.get("toc_section_pattern", config["section_pattern"])
+    section_re = _re.compile(toc_pattern_str)
 
     try:
         doc = fitz.open(str(pdf_path))

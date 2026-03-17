@@ -288,7 +288,7 @@ export default function LearningPage() {
           }}
         >
           <MapPin size={18} />
-          Back to Concept Map
+          {t("learning.backToMap")}
         </button>
       </div>
     );

@@ -7,6 +7,7 @@ adaptive_llm_client) are set by main.py's lifespan context manager,
 identical to the pattern used in api/teaching_router.py.
 """
 import asyncio
+import json
 import logging
 import sys
 from pathlib import Path
@@ -25,7 +26,7 @@ from adaptive.adaptive_engine import generate_adaptive_lesson, generate_recovery
 from api.rate_limiter import limiter
 from db.connection import get_db
 from db.models import Student, StudentMastery
-from config import ADAPTIVE_CARD_MODEL
+from config import ADAPTIVE_CARD_MODEL, DEFAULT_BOOK_SLUG
 
 logger = logging.getLogger(__name__)
 
@@ -37,8 +38,19 @@ cards_router = APIRouter(tags=["adaptive-cards"])
 
 # ── Service references — injected by main.py lifespan ─────────────────────────
 # Set to None here; main.py assigns real instances after startup.
-adaptive_knowledge_svc = None          # KnowledgeService
+# adaptive_knowledge_services holds the full book dict (slug → KnowledgeService).
+adaptive_knowledge_services: dict = {}   # book_slug → KnowledgeService (injected by main.py)
+adaptive_knowledge_svc = None            # kept for backward compatibility; points to default book
 adaptive_llm_client: AsyncOpenAI | None = None
+
+
+def _get_adaptive_ksvc(book_slug: str | None = None):
+    """Resolve a KnowledgeService from the injected dict, with fallback to default book."""
+    slug = book_slug or DEFAULT_BOOK_SLUG
+    svc = adaptive_knowledge_services.get(slug)
+    if svc is None:
+        svc = adaptive_knowledge_services.get(DEFAULT_BOOK_SLUG) or adaptive_knowledge_svc
+    return svc
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -99,13 +111,14 @@ async def generate_lesson(
         len(mastery_store),
     )
 
-    # 3. Delegate to the engine
+    # 3. Delegate to the engine — resolve the correct book's KnowledgeService
+    ksvc = _get_adaptive_ksvc(getattr(req, "book_slug", None))
     try:
         lesson = await generate_adaptive_lesson(
             student_id=str(req.student_id),
             concept_id=req.concept_id,
             analytics_summary=req.analytics_summary,
-            knowledge_svc=adaptive_knowledge_svc,
+            knowledge_svc=ksvc,
             mastery_store=mastery_store,
             llm_client=adaptive_llm_client,
             language=language,
@@ -164,7 +177,6 @@ async def complete_card(
       404 — Session not found
       502 — LLM failed after all retries
     """
-    import json as json_mod
     from sqlalchemy import select
     from db.models import CardInteraction, Student, TeachingSession, StudentMastery
     from adaptive.adaptive_engine import load_student_history, generate_next_card
@@ -209,7 +221,7 @@ async def complete_card(
     existing_cards: list = []
     if session.presentation_text:
         try:
-            parsed = json_mod.loads(session.presentation_text)
+            parsed = json.loads(session.presentation_text)
             if isinstance(parsed, list):
                 existing_cards = parsed
             elif isinstance(parsed, dict) and "cards" in parsed:
@@ -245,12 +257,15 @@ async def complete_card(
         getattr(student, "preferred_style", "default") or "default"
     )
 
+    # Resolve the correct KnowledgeService for this session's book
+    session_ksvc = _get_adaptive_ksvc(getattr(session, "book_slug", None))
+
     async def _maybe_recovery():
         if need_recovery:
             return await generate_recovery_card(
                 topic_title=req.re_explain_card_title,
                 concept_id=session.concept_id,
-                knowledge_svc=adaptive_knowledge_svc,
+                knowledge_svc=session_ksvc,
                 llm_client=adaptive_llm_client,
                 language=language,
                 interests=effective_interests,
@@ -266,7 +281,7 @@ async def complete_card(
                 signals=req,
                 card_index=len(existing_cards),
                 history=history,
-                knowledge_svc=adaptive_knowledge_svc,
+                knowledge_svc=session_ksvc,
                 mastery_store=mastery_store,
                 llm_client=adaptive_llm_client,
                 model=ADAPTIVE_CARD_MODEL,
@@ -332,16 +347,16 @@ async def complete_card(
     # full generation because the cache_version key disappears.
     if session.presentation_text:
         try:
-            envelope = json_mod.loads(session.presentation_text)
+            envelope = json.loads(session.presentation_text)
             if isinstance(envelope, dict) and "cards" in envelope:
                 envelope["cards"] = existing_cards
-                session.presentation_text = json_mod.dumps(envelope)
+                session.presentation_text = json.dumps(envelope)
             else:
-                session.presentation_text = json_mod.dumps(existing_cards)
+                session.presentation_text = json.dumps(existing_cards)
         except Exception:
-            session.presentation_text = json_mod.dumps(existing_cards)
+            session.presentation_text = json.dumps(existing_cards)
     else:
-        session.presentation_text = json_mod.dumps(existing_cards)
+        session.presentation_text = json.dumps(existing_cards)
     session.phase = "CARDS"
 
     await db.commit()

@@ -29,8 +29,8 @@ def validate_concept_block(block: ConceptBlock) -> ValidationResult:
     if word_count < 50:
         issues.append(f"EMPTY_CONTENT: Only {word_count} words (minimum 50)")
 
-    # Check: concept_id format
-    id_pattern = re.compile(r"^[A-Z]+\.C\d+\.S\d+\.[A-Z0-9_]+$")
+    # Check: concept_id format — book code may contain digits (e.g. ALG1, CALC1)
+    id_pattern = re.compile(r"^[A-Z][A-Z0-9]*\.C\d+\.S\d+\.[A-Z0-9_]+$")
     if not id_pattern.match(block.concept_id):
         issues.append(f"INVALID_ID_FORMAT: '{block.concept_id}' does not match expected pattern")
 
