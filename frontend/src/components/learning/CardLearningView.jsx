@@ -31,8 +31,9 @@ const WRONG_FEEDBACK_MS = 1800;
 
 /* ─── Difficulty Badge ─── */
 function DifficultyBadge({ difficulty }) {
+  const { t } = useTranslation();
   return (
-    <div className="flex gap-0.5 items-center" title={`Difficulty: ${difficulty}/5`}>
+    <div className="flex gap-0.5 items-center" title={t("learning.difficultyLabel", { value: difficulty, max: 5 })}>
       {[1, 2, 3, 4, 5].map((i) => (
         <span
           key={i}
@@ -149,6 +150,7 @@ export default function CardLearningView({ remediationMode = false }) {
   const {
     cards,
     currentCardIndex,
+    maxReachedIndex,
     conceptTitle,
     session,
     goToNextCard,
@@ -394,6 +396,8 @@ export default function CardLearningView({ remediationMode = false }) {
               difficultyBias:      null,
               // Anti-loop: don't request recovery for a recovery card
               reExplainCardTitle:  !card?.is_recovery ? (card?.title ?? null) : null,
+              wrongQuestion:       mcq?.question || null,
+              wrongAnswerText:     mcq?.options?.[selectedWrongOptionRef.current] || null,
             });
             return;
           }
@@ -587,65 +591,6 @@ export default function CardLearningView({ remediationMode = false }) {
     ? `linear-gradient(135deg, ${headerAccent}, ${headerAccent}cc)`
     : "linear-gradient(135deg, var(--color-primary), var(--color-accent))";
 
-  // CHECKIN card is rendered as a centered full-width card
-  if (cardType === "CHECKIN") {
-    return (
-      <div className="flex gap-6 items-start">
-        <div className="flex-1 min-w-0 transition-all duration-500">
-          {/* Segmented progress bar */}
-          <ProgressDots cards={cards} cardStates={cardStates} currentCardIndex={currentCardIndex} />
-
-          {/* Remediation banner */}
-          {remediationMode && <RemediationBanner />}
-
-          <div style={{
-            backgroundColor: "var(--color-surface)",
-            borderRadius: "16px",
-            border: "2px solid var(--color-border)",
-            overflow: "hidden",
-            textAlign: "center",
-          }}>
-            <div style={{
-              background: headerGradient,
-              padding: "1rem 1.5rem",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: "0.75rem",
-            }}>
-              <div style={{ color: "#fff", fontWeight: 700, fontSize: "1.1rem" }}>
-                {card.title}
-              </div>
-              <CardTypeBadge cardType={cardType} />
-            </div>
-            <div style={{ padding: "1.5rem 1.75rem" }}>
-              <CheckInCard
-                card={card}
-                onSelect={() => updateCardState(currentCardIndex, { checkinDone: true })}
-              />
-            </div>
-          </div>
-
-          <NavButtons
-            currentCardIndex={currentCardIndex}
-            isLastCard={isLastCard}
-            canProceed={canProceed}
-            loading={loading}
-            onPrev={goToPrevCard}
-            onNext={handleNextCard}
-            onFinish={handleFinish}
-            remediationMode={remediationMode}
-            t={t}
-          />
-        </div>
-        <div className="transition-all duration-500 overflow-hidden" style={{
-          width: "0px", opacity: 0, flexShrink: 0,
-        }} />
-        <XPBurst />
-      </div>
-    );
-  }
-
   return (
     <div className="flex gap-6 items-start">
       {/* ─── Main Card Area ─── */}
@@ -678,7 +623,7 @@ export default function CardLearningView({ remediationMode = false }) {
 
         {/* Card Content */}
         <div
-          className={`${mode === "SLOW" ? "adaptive-slow" : ""} ${mode === "EXCELLING" ? "adaptive-excelling" : ""} ${mode === "STRUGGLING" ? "adaptive-struggling" : ""}`}
+          className={`${mode === "SLOW" ? "adaptive-slow" : ""} ${mode === "FAST" ? "adaptive-excelling" : ""} ${mode === "STRUGGLING" ? "adaptive-struggling" : ""}`}
           style={{
             backgroundColor: "var(--color-surface)",
             borderRadius: "16px",
@@ -726,28 +671,35 @@ export default function CardLearningView({ remediationMode = false }) {
           <div style={{ padding: "1.5rem 1.75rem" }}>
             {/* VISUAL card: show images prominently at top, content as caption */}
             {cardType === "VISUAL" ? (
-              <>
-                {/* Images first — block-level for VISUAL cards */}
-                {card.images?.filter((img) => img.url).map((img, i) => (
-                  <ConceptImage key={i} img={img} maxWidth="560px" />
-                ))}
-                {/* image_indices fallback — pick from all session card images */}
-                {(!card.images || card.images.length === 0) && card.image_indices?.length > 0 && (
-                  <SessionImagesByIndex indices={card.image_indices} cards={cards} />
-                )}
-                {/* Content as caption */}
-                <div className="markdown-content" style={{
-                  marginTop: "0.75rem",
-                  padding: "0.75rem 1rem",
-                  borderRadius: "var(--radius-md)",
-                  backgroundColor: "var(--color-bg)",
-                  border: "1px solid var(--color-border)",
-                  fontSize: "0.9rem",
-                  color: "var(--color-text-muted)",
-                }}>
+              (card?.images?.filter(img => img?.url)?.length > 0 || card?.image_indices?.length > 0) ? (
+                <>
+                  {/* Images first — block-level for VISUAL cards */}
+                  {card.images?.filter((img) => img.url).map((img, i) => (
+                    <ConceptImage key={i} img={img} maxWidth="560px" />
+                  ))}
+                  {/* image_indices fallback — pick from all session card images */}
+                  {(!card.images || card.images.length === 0) && card.image_indices?.length > 0 && (
+                    <SessionImagesByIndex indices={card.image_indices} cards={cards} />
+                  )}
+                  {/* Content as caption */}
+                  <div className="markdown-content" style={{
+                    marginTop: "0.75rem",
+                    padding: "0.75rem 1rem",
+                    borderRadius: "var(--radius-md)",
+                    backgroundColor: "var(--color-bg)",
+                    border: "1px solid var(--color-border)",
+                    fontSize: "0.9rem",
+                    color: "var(--color-text-muted)",
+                  }}>
+                    {renderContentWithInlineImages(card.content, card.images)}
+                  </div>
+                </>
+              ) : (
+                // No images available — render as standard text card
+                <div className="markdown-content" style={{ padding: '16px' }}>
                   {renderContentWithInlineImages(card.content, card.images)}
                 </div>
-              </>
+              )
             ) : (
               <>
                 {/* Content with inline [IMAGE:N] markers rendered as ConceptImage */}
@@ -909,6 +861,7 @@ export default function CardLearningView({ remediationMode = false }) {
 
         <NavButtons
           currentCardIndex={currentCardIndex}
+          maxReachedIndex={maxReachedIndex}
           isLastCard={isLastCard}
           canProceed={canProceed}
           loading={loading}
@@ -1034,7 +987,7 @@ function RemediationBanner() {
 }
 
 /* ─── Nav buttons (extracted to avoid duplication between card types) ─── */
-function NavButtons({ currentCardIndex, isLastCard, canProceed, loading, onPrev, onNext, onFinish, remediationMode, t }) {
+function NavButtons({ currentCardIndex, maxReachedIndex, isLastCard, canProceed, loading, onPrev, onNext, onFinish, remediationMode, t }) {
   return (
     <div style={{
       display: "flex", justifyContent: "space-between", alignItems: "center",
@@ -1087,14 +1040,14 @@ function NavButtons({ currentCardIndex, isLastCard, canProceed, loading, onPrev,
       ) : (
         <button
           onClick={onNext}
-          disabled={!canProceed || isLastCard}
+          disabled={currentCardIndex < maxReachedIndex ? false : (!canProceed || isLastCard)}
           style={{
             display: "flex", alignItems: "center", gap: "0.4rem",
             padding: "0.7rem 1.2rem", borderRadius: "12px", border: "none",
-            backgroundColor: canProceed && !isLastCard ? "var(--color-primary)" : "var(--color-border)",
-            color: canProceed && !isLastCard ? "#fff" : "var(--color-text-muted)",
+            backgroundColor: (currentCardIndex < maxReachedIndex || (canProceed && !isLastCard)) ? "var(--color-primary)" : "var(--color-border)",
+            color: (currentCardIndex < maxReachedIndex || (canProceed && !isLastCard)) ? "#fff" : "var(--color-text-muted)",
             fontWeight: 600, fontSize: "0.9rem",
-            cursor: canProceed && !isLastCard ? "pointer" : "not-allowed",
+            cursor: (currentCardIndex < maxReachedIndex || (canProceed && !isLastCard)) ? "pointer" : "not-allowed",
             fontFamily: "inherit",
           }}
         >
@@ -1200,6 +1153,7 @@ function MCQBlock({ question, index, feedback, isCorrect, onAnswer }) {
               key={oi}
               onClick={() => onAnswer(oi)}
               disabled={isLocked}
+              aria-label={t("aria.mcqOption", { label: String.fromCharCode(65 + oi) })}
               style={{
                 display: "flex", alignItems: "center", gap: "0.75rem",
                 width: "100%", padding: "0.75rem 1rem",

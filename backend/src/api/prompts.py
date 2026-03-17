@@ -464,6 +464,13 @@ QUESTION DIVERSITY:
   - Use simple, friendly, child-appropriate language — not textbook style.
     WRONG: "Describe the commutative property of addition."
     RIGHT: "If you flip the numbers in 3 + 5 and write 5 + 3 instead, do you get the same answer? Why?"
+
+MCQ LATEX RULE — MANDATORY:
+Every mathematical expression in question text and every answer option MUST use $...$.
+CORRECT: option text "$\frac{1}{2}$" or "0, $\frac{1}{2}$"
+WRONG: option text "\\frac{1}{2}" — this will not render
+Applies to ALL \\commands: \\frac, \\times, \\cdot, \\sqrt, exponents, Greek letters.
+Plain integers ("24") do not need $...$.
 """
 
     return prompt
@@ -566,26 +573,30 @@ _MODE_DELIVERY: dict[str, str] = {
 ## DELIVERY MODE: STRUGGLING
 Language: age 8–10 reading level. Define EVERY term before using it.
 Open with a real-world analogy FIRST — before any formula or definition.
-Analogy density: ~80%. Numbered steps: ALWAYS. MCQ: EASY (confidence-building).
-EXAMPLE cards: each step on its own line + plain-English 'why' after the step.
+Analogy density: ~80%. Numbered steps: ALWAYS — every procedural step on its own numbered line.
+MCQ: EASY (confidence-building). EXAMPLE cards: each step on its own line + plain-English 'why' after.
 APPLICATION cards: 6-step scaffold (given/find/draw/set-up/solve/check).
 QUESTION (TRY_IT) hint: MUST use a visual method — dot arrays (● ● ●), number line, or labeled diagram.
-Tone: warm, patient, encouraging. Never assume prior knowledge.""",
+MANDATORY: ALL definitions, formulas, and worked example steps MUST appear — never skip content.
+FUN ENGAGEMENT: Add 1 brief surprising or fun fact (1 sentence) to one card per section — keep it warm and directly related to the concept.
+Tone: warm, patient, encouraging.""",
 
     "NORMAL": """\
 ## DELIVERY MODE: NORMAL
-Language: high school level. Define terms on first use.
-Analogy density: ~50%. Numbered steps: only for worked examples.
-MCQ: MEDIUM difficulty — tests real understanding, uses common-mistake distractors.
-QUESTION hint: concrete approach description (not just 'try it').
-Tone: clear, supportive.""",
+Language: high school level. Define terms on first use. Analogy density: ~50%.
+Numbered steps: for all worked examples. MCQ: MEDIUM — real understanding, common-mistake distractors.
+MANDATORY: ALL definitions, formulas, and worked example steps MUST appear on every card.
+FUN ENGAGEMENT: Add 1 real-world application hook or interesting connection to one card per section where it fits naturally.
+QUESTION hint: concrete approach description (not just 'try it'). Tone: clear, supportive.""",
 
     "FAST": """\
 ## DELIVERY MODE: FAST
 Language: technical terminology freely used. Include 'why it works' reasoning.
-No numbered steps — use connected prose. MCQ: HARD (edge cases, traps, reversed questions).
-Analogy density: ~20%. Lead with formula/rule directly.
-NOTE: ALL definitions and formulas MUST appear — reduce scaffolding, NOT substance.
+ALL procedural steps MUST appear — written as connected technical prose (no numbered step labels).
+MCQ: HARD (edge cases, traps, reversed questions). Analogy density: ~20%. Lead with formula/rule directly.
+MANDATORY: ALL definitions, formulas, and ALL worked example steps MUST appear on every card.
+FUN ENGAGEMENT: Add 1 intellectually stimulating challenge or 'did you know?' depth extension to one card per section — no basic fun hooks, only content that deepens understanding.
+Reduce hand-holding scaffolding only — never reduce content, procedures, or worked examples.
 TRY_IT_BATCH: consecutive Try It exercises merged into one multi-part card (a)(b)(c).""",
 }
 
@@ -644,7 +655,8 @@ def _build_card_profile_block(learning_profile, history: dict | None) -> str:
             "1-2 focused cards per major topic section:\n"
             "  - 1 TEACH card: concept + key property/formula combined (keep it tight)\n"
             "  - 1 EXAMPLE card only if the section has a worked example\n"
-            "Pack substance into each card. Avoid padding or repetitive scaffolding."
+            "Pack substance into each card. Avoid padding or repetitive scaffolding.\n"
+            "MANDATORY: NEVER skip worked examples. Integrate them into TEACH if only one example exists."
         )
         parts.append(
             "MCQ difficulty: HARD. Combine properties or use trap distractors (carry errors, sign errors)."
@@ -730,8 +742,7 @@ def build_cards_system_prompt(
         )
         useful = [
             img for img in images
-            if img.get("image_type", "").upper() in ("DIAGRAM", "FORMULA")
-            and img.get("is_educational") is not False
+            if img.get("is_educational") is not False
             and img.get("description")
             and not any(
                 kw in (img.get("description") or "").lower()
@@ -748,21 +759,21 @@ def build_cards_system_prompt(
                 f"\n\nAVAILABLE IMAGES FOR THIS SECTION ({len(useful)} total):\n"
                 + "\n".join(lines)
                 + "\n\nIMAGE ASSIGNMENT RULES — FOLLOW EXACTLY:\n"
-                "- Distribute images across cards based on topic match. Match image description to card content.\n"
+                "IMAGE PLACEMENT RULE:\n"
+                "You are generating cards for ONE sub-section. The images listed are from the entire\n"
+                "concept section. Use ONLY images whose description matches content IN THIS sub-section.\n"
+                "\n"
+                "Embed [IMAGE:N] inline at the exact sentence that references that image's content.\n"
+                "If the source text says \"as shown in Figure 1.11\" or \"Figure 1.11 shows...\", the image\n"
+                "goes at that exact sentence. Do not move images to the end of the card.\n"
+                "\n"
+                "If no image in the list clearly belongs to this sub-section's content, set\n"
+                "image_indices: [] — leaving an image unassigned is CORRECT if it doesn't belong here.\n"
+                "Do NOT force-assign an image just to use it.\n"
+                "\n"
+                "Keep all other image rules:\n"
                 "- Each image appears on EXACTLY ONE card — never share the same image between cards.\n"
                 "- Assign MAXIMUM ONE image per card (image_indices must have 0 or 1 entry, never 2+).\n"
-                "- Embed [IMAGE:N] in the content at the exact sentence where that image is referenced.\n"
-                "  Example: 'The number line below shows counting: [IMAGE:0] Each step adds one unit.'\n"
-                "- Number line image → assign to addition/subtraction/counting card.\n"
-                "- Multiplication table/array image → assign to multiplication/division card.\n"
-                "- Geometric shape image → assign to measurement/geometry card.\n"
-                "- Formula/equation image → assign to the card that introduces that formula.\n"
-                "- Distribute ALL images. Every available image should appear on some card.\n"
-                "FORBIDDEN:\n"
-                "- image_indices: [0, 1, 2] on one card (max 1 image per card)\n"
-                "- Same image index on multiple cards\n"
-                "- All images on the first 1-2 cards\n"
-                "- image_indices: [] on ALL cards when images are available\n"
             )
 
     _DOMAIN_NOTES = {
@@ -864,6 +875,11 @@ CARD SEQUENCE ORDER — NON-NEGOTIABLE:
   → Each part labeled (a), (b), (c)... with the original problem text.
   → ONE MCQ covering the underlying concept (not just one sub-part).
 
+[TYPE: PROPERTY_BATCH]  (pre-merged by backend for FAST mode — consecutive related properties/rules)
+  → ONE TEACH card covering ALL properties listed. Title: "Properties of [topic]".
+  → Each property: formal notation + one-line "why it works" reasoning.
+  → MCQ: identify which property is shown in a given expression (medium-hard difficulty).
+
 [TYPE: TIP] → already merged into preceding card. No separate card needed.
 
 EXPLANATION RULES (apply to every card):
@@ -873,6 +889,13 @@ EXPLANATION RULES (apply to every card):
 - MARKDOWN ONLY — NEVER use HTML tags. Bold with **text**, bullets with "- item", math with $...$
 - FORBIDDEN in card content: <p>, <ul>, <li>, <strong>, <em>, <br>, <markdown>, or ANY XML/HTML tag
 - Include $...$ for math notation and explain what each symbol means
+MATH FORMATTING RULE — MANDATORY ON EVERY CARD:
+Every mathematical expression MUST use LaTeX delimiters:
+  Inline: $expression$  e.g. $\frac{1}{2}$, $x^2 + y^2$, $\sqrt{9} = 3$
+  Block:  $$expression$$ for standalone equations
+NEVER write bare LaTeX commands: WRONG: \frac{1}{2}  CORRECT: $\frac{1}{2}$
+NEVER leave unmatched $ signs.
+Applies to ALL card content, titles, examples, MCQ questions and options.
 - Each card should be self-contained — understandable on its own
 - TEXTBOOK ACCURACY IS NON-NEGOTIABLE: every key definition, formula, theorem, and property
   in the sub-section MUST appear across the cards. Never paraphrase away a formula.
@@ -949,6 +972,27 @@ UNIVERSAL DISTRACTOR RULES:
   4. RANDOMIZE correct answer position across cards — distribute evenly across a/b/c/d.
      Do NOT default to (c) as the correct option on every card.
   5. Explanation: 1-2 sentences. Name the specific rule or key step.
+
+MCQ LATEX RULE — MANDATORY:
+Every mathematical expression in question text and every answer option MUST use $...$.
+CORRECT: option text "$\frac{1}{2}$" or "0, $\frac{1}{2}$"
+WRONG: option text "\\frac{1}{2}" — this will not render
+Applies to ALL \\commands: \\frac, \\times, \\cdot, \\sqrt, exponents, Greek letters.
+Plain integers ("24") do not need $...$.
+
+MCQ DISTRACTOR RULE — MODE-SPECIFIC:
+Distractors must represent real student errors, not random wrong values:
+STRUGGLING: one obviously-correct option, one common confusion error, two clearly wrong — help student build confidence
+NORMAL: all four plausible; include the most common errors (e.g. "includes zero", "includes fractions")
+FAST: two options look almost right and require careful reasoning to distinguish — no giveaways
+
+MCQ QUALITY — UNAMBIGUITY RULES (MANDATORY):
+- EXACTLY ONE option must be correct. After writing all 4 options, verify no other option is also correct.
+- NEVER ask "Which of the following equals X?" if multiple equivalent forms of X exist.
+- NEVER use commutative equivalents as distractors (e.g., "3×4" and "4×3" cannot both appear as options).
+- Prefer SPECIFIC computation questions: "What is 3 × 4?" → only one answer (12) is correct.
+- Wrong options must be DEFINITIVELY wrong, not just less common correct forms.
+- Each wrong option should represent a realistic student mistake (e.g., added instead of multiplied, sign error).
 
 IMAGE RULE: If you reference an image in content, write [IMAGE:N] at that exact position
 (N = 0-based index from the AVAILABLE IMAGES list). Also add N to image_indices.
@@ -1116,8 +1160,7 @@ def build_cards_user_prompt(
     if images:
         diagrams = [
             img for img in images
-            if img.get("image_type", "").upper() in ("DIAGRAM", "FORMULA")
-            and img.get("is_educational") is not False
+            if img.get("is_educational") is not False
             and img.get("description")
             and not any(
                 kw in (img.get("description") or "").lower()
@@ -1138,7 +1181,7 @@ def build_cards_user_prompt(
                 "position where the image adds value (N = index from list above). "
                 "Also add N to that card's image_indices. "
                 "Distribute images across cards by topic match — one image per card max.\n"
-                "REQUIRED: Every available image MUST appear on exactly one card.\n"
+                "Only assign image_indices if the image description DIRECTLY illustrates this card's content. Leave image_indices as [] if no image clearly matches — empty is ALWAYS better than a wrong image. Never assign an image just to use it up.\n"
                 "Match: number line → counting/addition card. Array → multiplication card.\n"
                 "Formula image → card that introduces that formula."
             )

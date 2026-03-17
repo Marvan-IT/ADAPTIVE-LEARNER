@@ -23,6 +23,7 @@ from config import (
     CARDS_MAX_TOKENS_SLOW, CARDS_MAX_TOKENS_SLOW_FLOOR, CARDS_MAX_TOKENS_SLOW_PER_SECTION,
     CARDS_MAX_TOKENS_NORMAL, CARDS_MAX_TOKENS_NORMAL_FLOOR, CARDS_MAX_TOKENS_NORMAL_PER_SECTION,
     CARDS_MAX_TOKENS_FAST, CARDS_MAX_TOKENS_FAST_FLOOR, CARDS_MAX_TOKENS_FAST_PER_SECTION,
+    DEFAULT_BOOK_SLUG,
 )
 from api.knowledge_service import KnowledgeService
 from api.prompts import (
@@ -39,6 +40,48 @@ from db.models import TeachingSession, ConversationMessage, StudentMastery, Stud
 from api.teaching_schemas import CardMCQ, RegenerateMCQRequest
 
 logger = logging.getLogger(__name__)
+
+import re as _re
+
+
+def _sanitize_math(text: str) -> str:
+    """Wrap bare LaTeX commands in $...$ and balance unmatched $ signs."""
+    if not text:
+        return text
+    # Wrap bare \command not already inside $...$
+    # Match \command followed by { or space, but not already preceded by $
+    text = _re.sub(r'(?<!\$)(\\[a-zA-Z]+(?:\{|\s))', r'$\1', text)
+    # Balance unmatched $ (odd count → append $)
+    if text.count('$') % 2 != 0:
+        text = text + '$'
+    return text
+
+
+_JSON_SAFE_ESCAPES: frozenset[str] = frozenset('"\\/nrtu')
+
+
+def _fix_latex_backslashes(raw: str) -> str:
+    """Double-escape backslashes that are LaTeX commands, not valid JSON escapes.
+
+    json.loads / json_repair treat \\f as form-feed, \\b as backspace.
+    LaTeX: \\frac, \\beta, \\times start with those same letters and get corrupted.
+    This function pre-escapes them so the decoder sees \\\\frac → \\frac in output.
+    Already-doubled backslashes (\\\\frac) pass through unchanged.
+    Preserves \\n, \\r, \\t (valid JSON whitespace escapes).
+    """
+    out: list[str] = []
+    i = 0
+    while i < len(raw):
+        ch = raw[i]
+        if ch == '\\' and i + 1 < len(raw):
+            nxt = raw[i + 1]
+            if nxt in _JSON_SAFE_ESCAPES:
+                out.append(ch); out.append(nxt); i += 2
+            else:
+                out.append('\\\\'); i += 1
+        else:
+            out.append(ch); i += 1
+    return ''.join(out)
 
 
 # Section type classifier — priority order, first match wins
@@ -185,6 +228,27 @@ async def _update_strategy_effectiveness(
         )
 
 
+def _build_learning_profile_summary(summary, generate_as: str, blended_score: float) -> dict:
+    """Map adaptive engine output → shape expected by detectMode() in adaptiveStore.js."""
+    if generate_as == "STRUGGLING":
+        speed, comprehension = "SLOW", "STRUGGLING"
+    elif generate_as == "FAST":
+        speed, comprehension = "FAST", "STRONG"
+    else:
+        speed, comprehension = "NORMAL", "OK"
+
+    attempts = getattr(summary, "attempts", 1) or 1
+    avg_time = getattr(summary, "time_spent_sec", 0.0) / attempts
+
+    return {
+        "speed": speed,
+        "comprehension": comprehension,
+        "engagement": "FOCUSED",
+        "wrong_attempts": getattr(summary, "wrong_attempts", 0),
+        "avg_time_per_card": avg_time,
+    }
+
+
 class TeachingService:
     """Manages the full lifecycle of a teaching session."""
 
@@ -195,11 +259,11 @@ class TeachingService:
         self.model_mini = OPENAI_MODEL_MINI
 
     def _get_ksvc(self, session: "TeachingSession") -> KnowledgeService:
-        """Return the KnowledgeService for the session's book, falling back to prealgebra."""
-        slug = getattr(session, "book_slug", "prealgebra") or "prealgebra"
+        """Return the KnowledgeService for the session's book, falling back to default book."""
+        slug = getattr(session, "book_slug", DEFAULT_BOOK_SLUG) or DEFAULT_BOOK_SLUG
         svc = self.knowledge_services.get(slug)
         if svc is None:
-            svc = self.knowledge_services.get("prealgebra") or next(iter(self.knowledge_services.values()))
+            svc = self.knowledge_services.get(DEFAULT_BOOK_SLUG) or next(iter(self.knowledge_services.values()))
         return svc
 
     async def _chat(self, messages: list, max_tokens: int = 2000, temperature: float = 0.7, model: str | None = None, timeout: float = 30.0) -> str:
@@ -240,7 +304,7 @@ class TeachingService:
         db: AsyncSession,
         student_id: uuid.UUID,
         concept_id: str,
-        book_slug: str = "prealgebra",
+        book_slug: str = DEFAULT_BOOK_SLUG,
         style: str = "default",
         lesson_interests: list[str] | None = None,
     ) -> TeachingSession:
@@ -724,7 +788,7 @@ class TeachingService:
         Returns dict with cards array and metadata.
         """
         # Return cached if available — reject stale sessions with old grouping artifacts
-        _CARDS_CACHE_VERSION = 13  # Rolling architecture: concepts_queue + per-section floor
+        _CARDS_CACHE_VERSION = 16  # Force regen: math formatting, image relevance sort, image assignment fix
         if session.presentation_text:
             try:
                 cached = json.loads(session.presentation_text)
@@ -807,14 +871,14 @@ class TeachingService:
         )
         useful_images = [
             img for img in images
-            if img.get("image_type", "").upper() in ("DIAGRAM", "FORMULA")
-            and img.get("is_educational") is not False
+            if img.get("is_educational") is not False
             and img.get("description")
             and not any(
                 kw in (img.get("description") or "").lower()
                 for kw in _CHECKLIST_KEYWORDS
             )
         ]
+        useful_images = sorted(useful_images, key=lambda img: img.get("relevance", 0) or 0, reverse=True)[:8]
         logger.info(
             "cards concept=%s total_images=%d useful_images=%d",
             session.concept_id, len(images), len(useful_images),
@@ -869,7 +933,7 @@ class TeachingService:
             )
             # Conservative mode cap: new students (< 5 interactions) must not get FAST mode
             total_interactions = history.get("total_interactions", 0) if history else 0
-            if total_interactions < 5 and _generate_as == "FAST":
+            if total_interactions < 2 and _generate_as == "FAST":
                 _generate_as = "NORMAL"
                 _blended_score = min(_blended_score, 2.4)
                 logger.info(
@@ -992,6 +1056,11 @@ class TeachingService:
             if batch_count:
                 logger.info("[fast-batch] concept=%s try_it_batches=%d total_sections=%d",
                             session.concept_id, batch_count, len(sub_sections))
+            sub_sections = self._batch_consecutive_properties(sub_sections)
+            prop_batch_count = sum(1 for s in sub_sections if s.get("section_type") == "PROPERTY_BATCH")
+            if prop_batch_count:
+                logger.info("[fast-batch] concept=%s property_batches=%d total_sections=%d",
+                            session.concept_id, prop_batch_count, len(sub_sections))
 
         # Initialize concept/image tracking for coverage context
         concepts_covered: list[str] = []
@@ -1025,6 +1094,9 @@ class TeachingService:
                     if fname and fname not in images_used_this_section:
                         images_used_this_section.append(fname)
 
+        # Build section title order before gap-fill so actual_pos lookup is available.
+        _section_order_titles = [s["title"] for s in sub_sections]
+
         # Gap-fill pass: detect and regenerate any section that produced no card
         missing = self._find_missing_sections(all_raw_cards, sub_sections)
         if missing:
@@ -1032,28 +1104,35 @@ class TeachingService:
                 "[card-gen] gap-fill: %d sections missing: %s",
                 len(missing), [s["title"] for s in missing],
             )
-            gap_cards = await self._generate_cards_per_section(
-                system_prompt=system_prompt,
-                concept_title=concept_title,
-                concept_overview=concept_overview,
-                sections=missing,
-                latex=latex,
-                images=useful_images,
-                max_tokens_per_section=per_section_floor,
-                per_section_floor=per_section_floor,
-                concept_index=concept_index,
-                concepts_covered=concepts_covered,
-                images_used_this_section=images_used_this_section,
-                generate_as=_generate_as,
-                blended_score=_blended_score,
-            )
-            all_raw_cards.extend(gap_cards)
+            for missing_section in missing:
+                actual_pos = (
+                    _section_order_titles.index(missing_section["title"])
+                    if missing_section["title"] in _section_order_titles
+                    else len(_section_order_titles)
+                )
+                section_cards = await self._generate_cards_per_section(
+                    system_prompt=system_prompt,
+                    concept_title=concept_title,
+                    concept_overview=concept_overview,
+                    sections=[missing_section],
+                    latex=latex,
+                    images=useful_images,
+                    max_tokens_per_section=per_section_floor,
+                    per_section_floor=per_section_floor,
+                    concept_index=concept_index,
+                    concepts_covered=concepts_covered,
+                    images_used_this_section=images_used_this_section,
+                    generate_as=_generate_as,
+                    blended_score=_blended_score,
+                )
+                for card in section_cards:
+                    card["_section_index"] = actual_pos
+                all_raw_cards.extend(section_cards)
 
         # Post-generation validation: infer missing section_ids, deduplicate, and re-sort.
         # Build section_order from sub_section titles (used as stable section identifiers here).
         # NOTE: validate_and_repair_cards runs FIRST (fuzzy section assignment), then integer
         # _section_index sort runs SECOND so curriculum order is always the final authority.
-        _section_order_titles = [s["title"] for s in sub_sections]
         all_raw_cards, _still_missing = validate_and_repair_cards(
             all_raw_cards,
             section_order=_section_order_titles,
@@ -1062,6 +1141,11 @@ class TeachingService:
         # RC4: Re-sort all_raw_cards to restore curriculum section order after gap-fill append.
         # Uses stable integer _section_index stamps set in generate_for_section().
         all_raw_cards.sort(key=lambda c: c.get("_section_index", len(sub_sections)))
+        # Remove cards with empty title or content — prevents blank card renders
+        all_raw_cards = [
+            c for c in all_raw_cards
+            if c.get("title", "").strip() and c.get("content", "").strip()
+        ]
         if _still_missing:
             logger.warning(
                 "[card-validate] session=%s sections still uncovered after gap-fill: %s",
@@ -1158,27 +1242,22 @@ class TeachingService:
                     str(session.id), ci, card.get("title", "?"),
                 )
 
+            # Apply math sanitization: wrap bare LaTeX commands and balance $ signs
+            if card.get("content"):
+                card["content"] = _sanitize_math(card["content"])
+            if card.get("question"):
+                q = card["question"]
+                if q.get("question"):
+                    q["question"] = _sanitize_math(q["question"])
+                if q.get("options"):
+                    q["options"] = [_sanitize_math(o) if isinstance(o, str) else o for o in q["options"]]
+
             # Ensure image_indices is a list (LLM may omit it)
             if not isinstance(card.get("image_indices"), list):
                 card["image_indices"] = []
 
             # Initialise empty images list; index-based resolution below
             card["images"] = []
-
-        # 7b. Pedagogical ordering safety net:
-        # Move FUN cards to the front (engagement opener) and RECAP cards to the back.
-        # Preserves all other relative order — only corrects clearly misplaced bookend cards.
-        _front_cards = [c for c in raw_cards if c.get("card_type") == "FUN"]
-        _middle_cards = [c for c in raw_cards if c.get("card_type") not in ("FUN", "RECAP")]
-        _back_cards = [c for c in raw_cards if c.get("card_type") == "RECAP"]
-        if _front_cards or _back_cards:
-            raw_cards = _front_cards + _middle_cards + _back_cards
-            for new_ci, card in enumerate(raw_cards):
-                card["index"] = new_ci
-            logger.info(
-                "[cards-ordering] session=%s reordered: %d FUN front, %d RECAP back",
-                str(session.id), len(_front_cards), len(_back_cards),
-            )
 
         # 7c. Insert mid-session check-in cards at every CARDS_MID_SESSION_CHECK_INTERVAL position
         # e.g., after card index 11 (0-based), 23, 35 ... (every 12 cards)
@@ -1260,6 +1339,9 @@ class TeachingService:
                     if score > best_score:
                         best_score, best_pool_idx = score, pool_idx
                 global_idx, img = pool[best_pool_idx]
+                min_score = 1 if card.get("card_type") == "VISUAL" else 2
+                if best_score < min_score:
+                    continue
                 img_copy = dict(img)
                 img_copy["caption"] = img.get("description") or f"Diagram: {card.get('title', '')}"
                 card["images"] = [img_copy]
@@ -1267,8 +1349,8 @@ class TeachingService:
                     unassigned.pop(best_pool_idx)
                     assigned_global.add(global_idx)
                 logger.info(
-                    "[image-fallback] VISUAL card '%s' assigned image %d via keyword fallback (score=%d)",
-                    card.get("title", ""), global_idx, best_score,
+                    "[image-fallback] card '%s' (type=%s) assigned image %d via keyword fallback (score=%d)",
+                    card.get("title", ""), card.get("card_type", ""), global_idx, best_score,
                 )
         else:
             for card in raw_cards:
@@ -1280,6 +1362,22 @@ class TeachingService:
             "[cards-generated] session=%s concept=%s cards=%d with_images=%d",
             str(session.id), session.concept_id, len(raw_cards), cards_with_images,
         )
+
+        # Save assigned image indices so rolling generation can exclude already-used images
+        assigned_global = {
+            idx
+            for card in raw_cards
+            for idx in (card.get("image_indices") or [])
+            if isinstance(idx, int)
+        }
+        # Fallback: also collect indices from cards that received images via fallback assignment
+        # by checking which useful_images are present in card["images"] by description match
+        for gi, img in enumerate(useful_images):
+            for card in raw_cards:
+                if card.get("images") and any(
+                    i.get("description") == img.get("description") for i in card["images"]
+                ):
+                    assigned_global.add(gi)
 
         result = {
             "session_id": str(session.id),
@@ -1296,6 +1394,7 @@ class TeachingService:
             "needs_review": [],                                        # double-fail recovery tracking
             "system_prompt": system_prompt,                            # needed by generate_next_section_cards()
             "_images": useful_images,                                  # resolved images for rolling generation
+            "assigned_image_indices": list(assigned_global),          # indices already used in initial batch
         }
 
         # 8. Cache and save messages
@@ -1319,8 +1418,8 @@ class TeachingService:
 
         Returns a dict suitable for constructing NextSectionCardsResponse.
         """
-        import json as json_mod
-        cached = json_mod.loads(session.presentation_text or "{}")
+        _raw_cache = json.loads(session.presentation_text or "{}")
+        cached = _raw_cache if isinstance(_raw_cache, dict) else {}
         concepts_queue = list(cached.get("concepts_queue", []))
         concepts_covered = list(cached.get("concepts_covered", []))
         all_sub_sections_count = cached.get("concepts_total", 1)
@@ -1352,16 +1451,29 @@ class TeachingService:
 
         _current_mode = "NORMAL"
         _per_section_floor = CARDS_MAX_TOKENS_NORMAL_PER_SECTION
+        _blended_score: float = 2.0
+        _generate_as: str = "NORMAL"
+        blended = None
         try:
             history = await load_student_history(str(session.student_id), session.concept_id, db)
-            # Use the latest session signal as the current CardBehaviorSignals
-            latest = session_signals[-1]
+            # Use exponential recency-weighted aggregation of all session signals
+            # so that a recovery event (high wrong_attempts) doesn't snap back to NORMAL
+            # immediately on the next section.
+            if len(session_signals) == 1:
+                agg_time = session_signals[0]["time_on_card_sec"]
+                agg_wrong = float(session_signals[0]["wrong_attempts"])
+            else:
+                weights = [0.5 ** (len(session_signals) - 1 - i) for i in range(len(session_signals))]
+                total_w = sum(weights)
+                agg_time  = sum(s["time_on_card_sec"] * w for s, w in zip(session_signals, weights)) / total_w
+                agg_wrong = sum(s["wrong_attempts"]   * w for s, w in zip(session_signals, weights)) / total_w
+
             current_signals = CardBehaviorSignals(
-                card_index=latest["card_index"],
-                time_on_card_sec=latest["time_on_card_sec"],
-                wrong_attempts=latest["wrong_attempts"],
-                hints_used=latest["hints_used"],
-                idle_triggers=0,
+                card_index=session_signals[-1]["card_index"],
+                time_on_card_sec=agg_time,
+                wrong_attempts=round(agg_wrong),
+                hints_used=session_signals[-1].get("hints_used", 0),
+                idle_triggers=session_signals[-1].get("idle_triggers", 0),
             )
             blended, _blended_score, _generate_as = build_blended_analytics(
                 current_signals, history,
@@ -1370,6 +1482,8 @@ class TeachingService:
             )
             profile = build_learning_profile(blended, has_unmet_prereq=False)
             _current_mode = profile.speed
+            # Map profile.speed keys to _CARD_MODE_DELIVERY keys (SLOW is not a valid key)
+            _generate_as = "STRUGGLING" if (_current_mode == "SLOW" or getattr(profile, 'comprehension', '') == "STRUGGLING") else _current_mode
             if _current_mode == "SLOW" or profile.comprehension == "STRUGGLING":
                 _per_section_floor = CARDS_MAX_TOKENS_SLOW_PER_SECTION
             elif _current_mode == "FAST" and profile.comprehension == "STRONG":
@@ -1386,6 +1500,11 @@ class TeachingService:
         concept_title = cached.get("concept_title", "")
         latex: list = []  # LaTeX already embedded in section text from initial generation
 
+        # Load image pool from cache (saved during initial generation)
+        cached_images = cached.get("_images", [])
+        already_assigned = set(cached.get("assigned_image_indices", []))
+        available_images = [img for i, img in enumerate(cached_images) if i not in already_assigned]
+
         # Generate cards for this ONE sub-section
         new_raw_cards = await self._generate_cards_per_section(
             system_prompt=system_prompt,
@@ -1393,12 +1512,27 @@ class TeachingService:
             concept_overview="",
             sections=[next_section],
             latex=latex,
-            images=[],  # images already resolved in cached cards; new section uses text only
+            images=available_images,
             max_tokens_per_section=_per_section_floor,
             per_section_floor=_per_section_floor,
-            generate_as=_current_mode,
-            blended_score=2.0,
+            generate_as=_generate_as,
+            blended_score=_blended_score,
         )
+
+        # Remove cards with empty title or content — prevents blank card renders
+        new_raw_cards = [
+            c for c in new_raw_cards
+            if c.get("title", "").strip() and c.get("content", "").strip()
+        ]
+
+        # Track newly assigned images for future rolling calls
+        new_assigned = {
+            idx
+            for card in new_raw_cards
+            for idx in (card.get("image_indices") or [])
+            if isinstance(idx, int)
+        }
+        cached["assigned_image_indices"] = list(already_assigned | new_assigned)
 
         # Stamp absolute indices starting after the existing cached cards
         base_idx = len(cached.get("cards", []))
@@ -1424,7 +1558,7 @@ class TeachingService:
         concepts_covered.append(next_section.get("title", ""))
         cached["concepts_covered"] = concepts_covered
         cached["session_signals"] = session_signals
-        session.presentation_text = json_mod.dumps(cached)
+        session.presentation_text = json.dumps(cached)
         await db.flush()
 
         logger.info(
@@ -1439,6 +1573,81 @@ class TeachingService:
             "concepts_total": all_sub_sections_count,
             "concepts_covered_count": len(concepts_covered),
             "current_mode": _current_mode,
+            "learning_profile_summary": _build_learning_profile_summary(blended, _generate_as, _blended_score),
+        }
+
+    async def complete_card_interaction(
+        self, db: AsyncSession, session, student, req
+    ) -> dict:
+        """Record card interaction, optionally generate recovery card, return learning profile."""
+        from adaptive.adaptive_engine import (
+            generate_recovery_card, load_student_history,
+            build_blended_analytics,
+        )
+        from adaptive.schemas import CardBehaviorSignals
+        import uuid as _uuid
+        from datetime import datetime, timezone
+
+        # 1. Record CardInteraction to DB
+        interaction = CardInteraction(
+            id=_uuid.uuid4(),
+            session_id=session.id,
+            student_id=student.id,
+            concept_id=session.concept_id,
+            card_index=req.card_index,
+            time_on_card_sec=req.time_on_card_sec,
+            wrong_attempts=req.wrong_attempts,
+            selected_wrong_option=getattr(req, "selected_wrong_option", None),
+            hints_used=req.hints_used,
+            idle_triggers=req.idle_triggers,
+            adaptation_applied="recovery" if (req.wrong_attempts >= 2 and req.re_explain_card_title) else None,
+            completed_at=datetime.now(timezone.utc),
+        )
+        db.add(interaction)
+        await db.flush()
+
+        # 2. Compute learning profile summary
+        history = await load_student_history(str(student.id), session.concept_id, db)
+        current_signals = CardBehaviorSignals(
+            card_index=req.card_index,
+            time_on_card_sec=req.time_on_card_sec,
+            wrong_attempts=req.wrong_attempts,
+            hints_used=req.hints_used,
+            idle_triggers=req.idle_triggers,
+        )
+        summary, blended_score, generate_as = build_blended_analytics(
+            current_signals, history, session.concept_id, str(student.id)
+        )
+        learning_profile_summary = _build_learning_profile_summary(summary, generate_as, blended_score)
+
+        # 3. Generate recovery card if needed
+        recovery_card = None
+        if req.wrong_attempts >= 2 and req.re_explain_card_title:
+            cached = json.loads(session.presentation_text or "{}")
+            seen_titles = cached.get("concepts_covered", [])
+            ksvc = self._get_ksvc(session)
+            try:
+                recovery_card = await generate_recovery_card(
+                    topic_title=req.re_explain_card_title,
+                    concept_id=session.concept_id,
+                    knowledge_svc=ksvc,
+                    llm_client=self.openai,
+                    language=getattr(student, "preferred_language", "en") or "en",
+                    interests=getattr(student, "interests", None),
+                    style=getattr(session, "style", None) or "default",
+                    seen_titles=seen_titles,
+                    wrong_question=req.wrong_question,
+                    wrong_answer_text=req.wrong_answer_text,
+                )
+            except Exception:
+                logger.exception("[complete_card] recovery card generation failed")
+                recovery_card = None
+
+        return {
+            "recovery_card": recovery_card,
+            "learning_profile_summary": learning_profile_summary,
+            "motivational_note": None,
+            "adaptation_applied": "recovery" if recovery_card else None,
         }
 
     async def _generate_cards_single(
@@ -1462,15 +1671,16 @@ class TeachingService:
                 logger.warning("[cards-single] Empty response (attempt %d)", attempt + 1)
                 continue
             raw_json = self._extract_json_block(raw_json)
+            safe_json = _fix_latex_backslashes(raw_json)
             try:
-                cards_data = json.loads(raw_json)
+                cards_data = json.loads(safe_json)
                 break
             except json.JSONDecodeError as e:
                 last_error = e
                 # Try json_repair first — handles unescaped quotes, bad escapes, truncation
                 try:
                     from json_repair import repair_json
-                    repaired = json.loads(repair_json(raw_json))
+                    repaired = json.loads(repair_json(safe_json))
                     if isinstance(repaired, dict) and "cards" in repaired and repaired["cards"]:
                         cards_data = repaired
                         logger.info("[cards-single] JSON repaired via json_repair (attempt %d)", attempt + 1)
@@ -2048,6 +2258,57 @@ class TeachingService:
         return result
 
     @staticmethod
+    def _batch_consecutive_properties(
+        sections: list[dict],
+        max_batch: int = 5,
+    ) -> list[dict]:
+        """
+        FAST mode only: merge runs of consecutive CONCEPT sections whose titles
+        contain property/rule keywords into a single PROPERTY_BATCH section.
+        e.g., Zero Property + Identity Property + Commutative Property → 1 section.
+        Solo sections (run length = 1) are passed through unchanged.
+        """
+        import re as _re2
+        _PROP_TITLE = _re2.compile(
+            r"\bproperty\b|\brule\b|\blaw\b|\bidentity\b|\bzero\b|\bcommutative\b"
+            r"|\bassociative\b|\bdistributive\b",
+            _re2.IGNORECASE,
+        )
+        result: list[dict] = []
+        i = 0
+        while i < len(sections):
+            sec = sections[i]
+            if sec.get("section_type") != "CONCEPT" or not _PROP_TITLE.search(sec.get("title", "")):
+                result.append(sec)
+                i += 1
+                continue
+            # Collect consecutive matching CONCEPT sections
+            batch: list[dict] = [sec]
+            while (
+                i + len(batch) < len(sections)
+                and sections[i + len(batch)].get("section_type") == "CONCEPT"
+                and _PROP_TITLE.search(sections[i + len(batch)].get("title", ""))
+                and len(batch) < max_batch
+            ):
+                batch.append(sections[i + len(batch)])
+            if len(batch) == 1:
+                result.append(batch[0])
+            else:
+                merged_text = "\n\n".join(
+                    f"### {s['title']}\n{s['text']}" for s in batch
+                )
+                # Build a clean combined title: "Properties of Multiplication"
+                first_title = batch[0]["title"]
+                topic = first_title.split("Property")[0].split("property")[0].strip()
+                result.append({
+                    "title": f"Properties of {topic}" if topic else first_title,
+                    "text": merged_text,
+                    "section_type": "PROPERTY_BATCH",
+                })
+            i += len(batch)
+        return result
+
+    @staticmethod
     def _classify_section_type(concept_id: str, concept_title: str) -> str:
         """Return math domain type (TYPE_A–G) for domain-specific prompt rules."""
         # Normalize underscores and dots to spaces so \b word boundaries work on concept IDs
@@ -2242,7 +2503,7 @@ class TeachingService:
                 model=OPENAI_MODEL_MINI,
                 temperature=0.8,
             )
-            raw = response.choices[0].message.content.strip()
+            raw = response.strip()
             # Strip markdown code blocks if present
             if raw.startswith("```"):
                 raw = re.sub(r"^```[a-z]*\n?", "", raw)

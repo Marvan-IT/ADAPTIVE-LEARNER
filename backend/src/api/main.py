@@ -4,6 +4,7 @@ Week 1: RAG + Graph integrated endpoints.
 Week 2: Pedagogical Loop — teaching sessions with Socratic checks.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -39,7 +40,7 @@ import api.teaching_router as teaching_router_module
 from adaptive.adaptive_router import router as adaptive_router, cards_router as adaptive_cards_router
 import adaptive.adaptive_router as adaptive_router_module
 from db.connection import init_db, close_db
-from config import OUTPUT_DIR, OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, OPENAI_MODEL_MINI, validate_required_env_vars
+from config import OUTPUT_DIR, OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, OPENAI_MODEL_MINI, validate_required_env_vars, DEFAULT_BOOK_SLUG
 
 
 def _discover_processed_books() -> list[str]:
@@ -68,6 +69,7 @@ _SKIP_AUTH = {"/health", "/docs", "/openapi.json", "/redoc"}
 knowledge_svc: KnowledgeService = None          # default (prealgebra) — used by v1 endpoints
 knowledge_services: dict[str, KnowledgeService] = {}  # all loaded books keyed by slug
 _openai_client: AsyncOpenAI = None
+_cache_write_lock: asyncio.Lock | None = None
 
 # Persistent translation cache: { (language, concept_id): translated_title }
 _title_translation_cache: dict[tuple[str, str], str] = {}
@@ -103,11 +105,12 @@ def _save_translation_cache() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     validate_required_env_vars()
-    global knowledge_svc, knowledge_services, _openai_client
+    global knowledge_svc, knowledge_services, _openai_client, _cache_write_lock
+    _cache_write_lock = asyncio.Lock()
     slugs = _discover_processed_books()
     if not slugs:
-        logger.warning("No processed books found in %s — falling back to prealgebra.", OUTPUT_DIR)
-        slugs = ["prealgebra"]
+        logger.warning("No processed books found in %s — falling back to %s.", OUTPUT_DIR, DEFAULT_BOOK_SLUG)
+        slugs = [DEFAULT_BOOK_SLUG]
     logger.info("Loading KnowledgeService for books: %s", slugs)
     for slug in slugs:
         try:
@@ -115,18 +118,28 @@ async def lifespan(app: FastAPI):
             logger.info("  Loaded book: %s", slug)
         except Exception:
             logger.exception("  Failed to load book: %s — skipping.", slug)
-    # Default service for v1 endpoints (prealgebra, or first available)
-    knowledge_svc = knowledge_services.get("prealgebra") or next(iter(knowledge_services.values()), None)
+    # Default service for v1 endpoints (default book, or first available)
+    knowledge_svc = knowledge_services.get(DEFAULT_BOOK_SLUG) or next(iter(knowledge_services.values()), None)
     logger.info("Initializing PostgreSQL...")
     await init_db()
     teaching_router_module.teaching_svc = TeachingService(knowledge_services)
     teaching_router_module._knowledge_services = knowledge_services
     adaptive_router_module.adaptive_knowledge_svc = knowledge_svc
+    adaptive_router_module.adaptive_knowledge_services = knowledge_services
     adaptive_router_module.adaptive_llm_client = AsyncOpenAI(
         api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL
     )
     _openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
     _load_translation_cache()
+    # Mount per-book image directories so frontend can resolve /images/{book_slug}/...
+    for _bslug in slugs:
+        _img_dir = OUTPUT_DIR / _bslug / "images"
+        if _img_dir.exists():
+            app.mount(
+                f"/images/{_bslug}",
+                StaticFiles(directory=str(_img_dir)),
+                name=f"images_{_bslug}",
+            )
     logger.info("Services loaded. Loaded %d book(s): %s. API ready.", len(knowledge_services), list(knowledge_services))
     yield
     _save_translation_cache()
@@ -177,11 +190,6 @@ app.include_router(teaching_router)
 app.include_router(adaptive_router)
 app.include_router(adaptive_cards_router)
 
-# ── Static files: serve extracted images ──────────────────────────
-_images_dir = OUTPUT_DIR / "prealgebra" / "images"
-if _images_dir.exists():
-    app.mount("/images", StaticFiles(directory=str(_images_dir)), name="images")
-
 # Serve whole-PDF extracted images (Mathpix /v3/pdf output)
 # Mounted at /static/output/{book_slug}/mathpix_extracted/{filename}
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -208,7 +216,8 @@ async def health():
 # ═══════════════════════════════════════════════════════════════════
 
 @app.post("/api/v1/concepts/query", response_model=ConceptQueryResponse)
-async def query_concepts(req: ConceptQuery):
+@limiter.limit("60/minute")
+async def query_concepts(request: Request, req: ConceptQuery):
     """
     THE Week 1 deliverable:
     "Get me the concept of 'Variables' knowing the child has mastered 'Integers'."
@@ -246,10 +255,12 @@ async def query_concepts(req: ConceptQuery):
 
 
 @app.post("/api/v1/concepts/next", response_model=NextConceptsResponse)
-async def next_concepts(req: NextConceptsRequest):
+@limiter.limit("60/minute")
+async def next_concepts(request: Request, req: NextConceptsRequest, book_slug: str = DEFAULT_BOOK_SLUG):
     """Given mastered concepts, return all concepts now ready to learn and locked ones."""
-    ready = knowledge_svc.get_next_concepts(req.mastered_concepts)
-    locked = knowledge_svc.get_locked_concepts(req.mastered_concepts)
+    svc = knowledge_services.get(book_slug, knowledge_svc)
+    ready = svc.get_next_concepts(req.mastered_concepts)
+    locked = svc.get_locked_concepts(req.mastered_concepts)
     return NextConceptsResponse(
         mastered_concepts=req.mastered_concepts,
         ready_to_learn=ready,
@@ -293,9 +304,10 @@ async def get_concept_images(concept_id: str):
 # ═══════════════════════════════════════════════════════════════════
 
 @app.get("/api/v1/graph/info", response_model=GraphInfoResponse)
-async def graph_info():
+async def graph_info(book_slug: str = DEFAULT_BOOK_SLUG):
     """Dependency graph statistics."""
-    info = knowledge_svc.get_graph_info()
+    svc = knowledge_services.get(book_slug, knowledge_svc)
+    info = svc.get_graph_info()
     return GraphInfoResponse(
         num_nodes=info["num_nodes"],
         num_edges=info["num_edges"],
@@ -306,16 +318,19 @@ async def graph_info():
 
 
 @app.get("/api/v1/graph/nodes")
-async def graph_nodes():
+async def graph_nodes(book_slug: str = DEFAULT_BOOK_SLUG):
     """List all concept nodes with graph properties."""
-    nodes = knowledge_svc.get_all_nodes()
+    svc = knowledge_services.get(book_slug, knowledge_svc)
+    nodes = svc.get_all_nodes()
     return {"nodes": nodes, "count": len(nodes)}
 
 
 @app.post("/api/v1/graph/learning-path", response_model=LearningPathResponse)
-async def learning_path(req: LearningPathRequest):
+@limiter.limit("60/minute")
+async def learning_path(request: Request, req: LearningPathRequest, book_slug: str = DEFAULT_BOOK_SLUG):
     """Compute the optimal learning path to reach a target concept."""
-    result = knowledge_svc.get_learning_path(req.target_concept_id, req.mastered_concepts)
+    svc = knowledge_services.get(book_slug, knowledge_svc)
+    result = svc.get_learning_path(req.target_concept_id, req.mastered_concepts)
     return LearningPathResponse(
         target=result["target"],
         path=[LearningPathStep(**step) for step in result["path"]],
@@ -324,21 +339,38 @@ async def learning_path(req: LearningPathRequest):
 
 
 @app.get("/api/v1/graph/full")
-async def graph_full():
+async def graph_full(book_slug: str = DEFAULT_BOOK_SLUG):
     """Full graph with nodes and edges for frontend visualization."""
-    nodes = knowledge_svc.get_all_nodes()
+    svc = knowledge_services.get(book_slug, knowledge_svc)
+    nodes = svc.get_all_nodes()
     edges = [
         {"source": u, "target": v}
-        for u, v in knowledge_svc.graph.edges()
+        for u, v in svc.graph.edges()
     ]
     return {"nodes": nodes, "edges": edges}
 
 
 @app.get("/api/v1/graph/topological-order")
-async def topological_order():
+async def topological_order(book_slug: str = DEFAULT_BOOK_SLUG):
     """Return all concepts in a valid learning sequence."""
-    order = knowledge_svc.get_topological_order()
+    svc = knowledge_services.get(book_slug, knowledge_svc)
+    order = svc.get_topological_order()
     return {"order": order, "count": len(order)}
+
+
+@app.get("/api/v1/books")
+async def list_books_v1():
+    from config import BOOK_REGISTRY
+    _slug_to_title = {cfg["book_slug"]: cfg.get("title", cfg["book_slug"]) for cfg in BOOK_REGISTRY.values()}
+    all_slugs = sorted(_slug_to_title.keys())
+    return [
+        {
+            "slug": s,
+            "title": _slug_to_title.get(s, s),
+            "processed": s in knowledge_services,
+        }
+        for s in all_slugs
+    ]
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -352,7 +384,8 @@ class TranslateTitlesRequest(BaseModel):
 
 
 @app.post("/api/v2/concepts/translate-titles")
-async def translate_concept_titles(req: TranslateTitlesRequest):
+@limiter.limit("20/minute")
+async def translate_concept_titles(request: Request, req: TranslateTitlesRequest):
     """Translate concept titles in batch using LLM, with in-memory caching."""
     if not req.titles or req.language == "en":
         return {"translations": req.titles}
@@ -413,16 +446,16 @@ async def translate_concept_titles(req: TranslateTitlesRequest):
         result = json.loads(raw)
         translated_list = result.get("titles", [])
 
-        for i, (cid, _) in enumerate(items):
-            if i < len(translated_list):
-                translated = translated_list[i]
-                _title_translation_cache[(req.language, cid)] = translated
-                translations[cid] = translated
-            else:
-                translations[cid] = untranslated[cid]  # fallback to English
-
-        # Persist after each batch so cache survives crashes
-        _save_translation_cache()
+        async with _cache_write_lock:
+            for i, (cid, _) in enumerate(items):
+                if i < len(translated_list):
+                    translated = translated_list[i]
+                    _title_translation_cache[(req.language, cid)] = translated
+                    translations[cid] = translated
+                else:
+                    translations[cid] = untranslated[cid]  # fallback to English
+        # Persist after each batch so cache survives crashes — run blocking I/O off event loop
+        await asyncio.get_event_loop().run_in_executor(None, _save_translation_cache)
 
     except Exception as e:
         logger.error("[translate-titles] ERROR: %s", e, exc_info=True)
@@ -440,6 +473,6 @@ if __name__ == "__main__":
     uvicorn.run(
         "api.main:app",
         host="0.0.0.0",
-        port=8000,
+        port=8889,
         reload=True,
     )

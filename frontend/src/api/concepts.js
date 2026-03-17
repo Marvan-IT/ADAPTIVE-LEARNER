@@ -1,13 +1,19 @@
 import api from "./client";
 
-export const getGraphFull = () =>
-  api.get("/api/v1/graph/full");
+export const getGraphFull = (bookSlug = "prealgebra") =>
+  api.get("/api/v1/graph/full", { params: { book_slug: bookSlug } });
 
 export const getGraphNodes = () =>
   api.get("/api/v1/graph/nodes");
 
-export const getNextConcepts = (masteredConcepts) =>
-  api.post("/api/v1/concepts/next", { mastered_concepts: masteredConcepts });
+export const getNextConcepts = (masteredConcepts, bookSlug = "prealgebra") =>
+  api.post("/api/v1/concepts/next",
+    { mastered_concepts: masteredConcepts },
+    { params: { book_slug: bookSlug } }
+  );
+
+export const getAvailableBooks = () =>
+  api.get("/api/v1/books");
 
 export const getConceptDetail = (conceptId) =>
   api.get(`/api/v1/concepts/${conceptId}`);

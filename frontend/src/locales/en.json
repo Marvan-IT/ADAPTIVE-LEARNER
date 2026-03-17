@@ -148,5 +148,12 @@
   "learning.helpsMasterFirst": "To get the most from this lesson, it helps to master these first:",
   "learning.learnPrereqFirst": "Learn prerequisites first",
   "learning.startAnyway": "Start anyway",
-  "customize.lockedDuringLesson": "Exit the lesson to change settings"
+  "customize.lockedDuringLesson": "Exit the lesson to change settings",
+  "presentation.readyForQuiz": "Finished reading? Let's test your understanding!",
+  "presentation.gettingReady": "Getting ready...",
+  "presentation.startQuiz": "Start Quiz",
+  "learning.difficultyLabel": "Difficulty: {{value}}/{{max}}",
+  "aria.styleOption": "Select {{style}} tutor style",
+  "aria.toggleInterest": "Toggle interest: {{interest}}",
+  "aria.mcqOption": "Option {{label}}"
 }

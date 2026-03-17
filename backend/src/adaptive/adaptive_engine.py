@@ -240,6 +240,16 @@ async def generate_adaptive_lesson(
         learning_profile.recommended_next_step,
     )
 
+    # Derive generate_as mode from analytics profile
+    _speed = getattr(analytics_summary, "speed", "NORMAL").upper()
+    _comp = float(getattr(analytics_summary, "comprehension_score", 0.5))
+    if _speed == "SLOW" or _comp < 0.45:
+        generate_as = "STRUGGLING"
+    elif _speed == "FAST" and _comp >= 0.65:
+        generate_as = "FAST"
+    else:
+        generate_as = "NORMAL"
+
     # ── d) Build GenerationProfile ─────────────────────────────────────────
     gen_profile = build_generation_profile(learning_profile)
     logger.info(
@@ -277,6 +287,7 @@ async def generate_adaptive_lesson(
         gen_profile=gen_profile,
         prereq_detail=prereq_detail,
         language=language,
+        generate_as=generate_as,
     )
 
     # ── h) Call LLM ───────────────────────────────────────────────────────
@@ -568,11 +579,11 @@ def compute_numeric_state_score(speed: str, comprehension: str) -> float:
 def blended_score_to_generate_as(blended_score: float) -> str:
     """Convert a blended numeric state score to a generate_as label.
 
-    < 1.5   -> 'STRUGGLING'
-    1.5-2.4 -> 'NORMAL'
+    < 1.7   -> 'STRUGGLING'
+    1.7-2.4 -> 'NORMAL'
     >= 2.5  -> 'FAST'
     """
-    if blended_score < 1.5:
+    if blended_score < 1.7:
         return "STRUGGLING"
     elif blended_score >= 2.5:
         return "FAST"
@@ -622,7 +633,7 @@ def build_blended_analytics(
 
     blended_wrong = current.wrong_attempts * cw + baseline_wrong * hw
     blended_hints = current.hints_used * cw + baseline_hints * hw
-    expected_time = baseline_time  # personal baseline
+    expected_time = max(baseline_time, 90.0)  # normative 90s floor: fast students compare to 90s, not their own 10s avg
 
     analytics = AnalyticsSummary(
         student_id=student_id,
@@ -840,6 +851,9 @@ async def generate_recovery_card(
     language: str = "en",
     interests: list[str] | None = None,
     style: str = "default",
+    seen_titles: list[str] | None = None,
+    wrong_question: str | None = None,
+    wrong_answer_text: str | None = None,
 ) -> dict | None:
     """
     Generate a recovery TEACH card re-explaining `topic_title` in STRUGGLING mode.
@@ -891,13 +905,28 @@ async def generate_recovery_card(
             + interests_text + style_text + lang_text
         )
 
+        if wrong_question and wrong_answer_text:
+            misconception_context = (
+                f"The student answered the following question INCORRECTLY:\n"
+                f"Question: {wrong_question}\n"
+                f"They chose: {wrong_answer_text}\n\n"
+                f"Re-explain '{topic_title}' specifically to correct this misconception.\n\n"
+            )
+        else:
+            misconception_context = ""
+
         user_prompt = (
+            f"{misconception_context}"
             f"Re-explain this topic in {lang_name}, STRUGGLING mode:\n"
             f"Topic: {topic_title}\n\n"
             f"Source material (use as factual basis):\n"
             f"{concept_detail.get('text', '')[:2000]}\n\n"
             "Return ONLY the JSON object."
         )
+
+        if seen_titles:
+            user_prompt += "\n\nDo NOT cover any of these already-completed topics:\n"
+            user_prompt += "\n".join(f"- {t}" for t in seen_titles[:12])
 
         response = await llm_client.chat.completions.create(
             model=ADAPTIVE_CARD_MODEL,

@@ -23,22 +23,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from adaptive.schemas import GenerationProfile, LearningProfile
 
 # ── Language name map ─────────────────────────────────────────────────────────
-# Maintained locally to avoid cross-module coupling with api/prompts.py.
-_LANGUAGE_NAMES: dict[str, str] = {
-    "en": "English",
-    "ta": "Tamil",
-    "si": "Sinhala",
-    "ml": "Malayalam",
-    "ar": "Arabic",
-    "hi": "Hindi",
-    "fr": "French",
-    "es": "Spanish",
-    "zh": "Chinese (Simplified)",
-    "ja": "Japanese",
-    "de": "German",
-    "ko": "Korean",
-    "pt": "Portuguese",
-}
+# Import the canonical map from api/prompts.py to avoid divergence.
+from api.prompts import LANGUAGE_NAMES as _LANGUAGE_NAMES
 
 # Max chars of concept source text injected into the user prompt.
 _CONCEPT_TEXT_LIMIT = 3000
@@ -51,22 +37,28 @@ _CARD_MODE_DELIVERY: dict[str, str] = {
     "STRUGGLING": """\
 ## DELIVERY MODE: STRUGGLING
 Language: age 8–10. Define every term. Open with real-world analogy FIRST.
-Analogy density: ~80%. Steps: ALWAYS numbered. MCQ: EASY (confidence-building).
-QUESTION hint: MUST use visual method — dot arrays (● ● ●), number line, or labeled diagram.
+Analogy density: ~80%. Numbered steps: ALWAYS — every step on its own numbered line.
+MCQ: EASY (confidence-building). QUESTION hint: MUST use visual method — dot arrays (● ● ●), number line, or labeled diagram.
+MANDATORY: ALL definitions, formulas, and worked example steps MUST appear. Never skip content.
+FUN ENGAGEMENT: Add 1 brief surprising or fun fact (1 sentence) to one card — warm and concept-related.
 Tone: warm, patient, encouraging.""",
 
     "NORMAL": """\
 ## DELIVERY MODE: NORMAL
 Language: high school level. Define terms on first use. Analogy density: ~50%.
-Steps: only for worked examples. MCQ: MEDIUM (real understanding, common-mistake distractors).
+Numbered steps: for all worked examples. MCQ: MEDIUM (real understanding, common-mistake distractors).
+MANDATORY: ALL definitions, formulas, and worked example steps MUST appear on every card.
+FUN ENGAGEMENT: Add 1 real-world application hook to one card where it fits naturally.
 QUESTION hint: concrete approach description (not just 'try it').""",
 
     "FAST": """\
 ## DELIVERY MODE: FAST
 Language: technical terminology freely used. 'Why it works' reasoning included.
-No numbered steps — connected prose. MCQ: HARD (edge cases, traps, reversed questions).
-Analogy density: ~20%. Lead with formula/rule directly.
-NOTE: ALL definitions and formulas MUST appear — reduce scaffolding, NOT substance.""",
+ALL procedural steps MUST appear — written as connected technical prose (no "Step 1/2/3" labels).
+MCQ: HARD (edge cases, traps, reversed questions). Analogy density: ~20%. Lead with formula/rule directly.
+MANDATORY: ALL definitions, formulas, and ALL worked example steps MUST appear — reduce scaffolding, NOT substance.
+FUN ENGAGEMENT: Add 1 intellectually stimulating challenge or 'did you know?' to one card — only content that deepens understanding.
+Never produce a card with only images and no explanatory text.""",
 }
 
 
@@ -257,6 +249,17 @@ def _build_system_prompt(
         "keep mathematical notation ($...$) and proper nouns in their original form"
     )
 
+    # ── Section 3b: Math formatting rule ──────────────────────────────────
+    parts.append(
+        "\n\nMATH FORMATTING RULE — MANDATORY ON EVERY CARD:\n"
+        "Every mathematical expression MUST use LaTeX delimiters:\n"
+        "  Inline: $expression$  e.g. $\\frac{1}{2}$, $x^2 + y^2$, $\\sqrt{9} = 3$\n"
+        "  Block:  $$expression$$ for standalone equations\n"
+        "NEVER write bare LaTeX commands: WRONG: \\frac{1}{2}  CORRECT: $\\frac{1}{2}$\n"
+        "NEVER leave unmatched $ signs.\n"
+        "Applies to ALL card content, titles, examples, MCQ questions and options."
+    )
+
     # ── Section 4: Difficulty ramp ─────────────────────────────────────────
     parts.append(
         "\n\nDIFFICULTY RAMP — mandatory:\n"
@@ -421,7 +424,20 @@ def build_next_card_prompt(
         "MCQ QUALITY RULE: The question MUST test understanding, reasoning, or application "
         "in a NEW scenario — NEVER ask a question whose answer is explicitly written verbatim "
         "in the card content above it. BAD: content says 'total is 215' → asks 'What is the total?'. "
-        "GOOD: 'If you added 3 more tens, what would the new total be?'"
+        "GOOD: 'If you added 3 more tens, what would the new total be?'\n\n"
+        "MCQ LATEX RULE — MANDATORY:\n"
+        "Every mathematical expression in question text and every answer option MUST use $...$.\n"
+        "CORRECT: option text \"$\\frac{1}{2}$\" or \"0, $\\frac{1}{2}$\"\n"
+        "WRONG: option text \"\\\\frac{1}{2}\" — this will not render\n"
+        "Applies to ALL \\\\commands: \\\\frac, \\\\times, \\\\cdot, \\\\sqrt, exponents, Greek letters.\n"
+        "Plain integers (\"24\") do not need $...$.\n\n"
+        "MCQ QUALITY — UNAMBIGUITY RULES (MANDATORY):\n"
+        "- EXACTLY ONE option must be correct. After writing all 4 options, verify no other option is also correct.\n"
+        "- NEVER ask \"Which of the following equals X?\" if multiple equivalent forms of X exist.\n"
+        "- NEVER use commutative equivalents as distractors (e.g., \"3×4\" and \"4×3\" cannot both appear as options).\n"
+        "- Prefer SPECIFIC computation questions: \"What is 3 × 4?\" → only one answer (12) is correct.\n"
+        "- Wrong options must be DEFINITIVELY wrong, not just less common correct forms.\n"
+        "- Each wrong option should represent a realistic student mistake (e.g., added instead of multiplied, sign error)."
     )
 
     # Append single DELIVERY MODE block — only the active mode, not all three (F2)

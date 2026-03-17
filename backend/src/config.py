@@ -36,6 +36,9 @@ EMBEDDING_MODEL = "text-embedding-3-small"
 # ── ChromaDB ───────────────────────────────────────────────────────────
 CHROMA_COLLECTION_NAME = "openstax_concepts"
 
+# ── Default book ──────────────────────────────────────────────────────────────
+DEFAULT_BOOK_SLUG = "prealgebra"
+
 # ── Adaptive Learning Engine ────────────────────────────────────────────────
 ADAPTIVE_ERROR_PENALTY_WEIGHT: float = 0.4   # Weight for error rate in confidence score
 ADAPTIVE_HINT_PENALTY_WEIGHT: float = 0.2    # Weight for hint usage in confidence score
@@ -50,7 +53,7 @@ SOCRATIC_PROGRESS_INTERVAL  = 3   # Show progress summary every N questions
 
 # ── Card session settings ─────────────────────────────────────────────────────
 CARDS_MID_SESSION_CHECK_INTERVAL = 12  # Mood/engagement check-in every N cards
-STARTER_PACK_INITIAL_SECTIONS: int = 3   # Sub-sections generated on first request (fast initial load)
+STARTER_PACK_INITIAL_SECTIONS: int = 2   # Sub-sections generated on first request (fast initial load)
 STARTER_PACK_MAX_SECTIONS: int = 50    # Safety cap — rolling generation won't exceed this total
 
 # ── Adaptive card generation ──────────────────────────────────────────────────
@@ -89,7 +92,7 @@ CARD_HISTORY_MAX_LIMIT: int = 200        # Hard cap — prevents runaway queries
 ADAPTIVE_MIN_HISTORY_CARDS     = 5    # Minimum cards before history is blended in
 ADAPTIVE_ACUTE_HIGH_TIME_RATIO = 2.0  # time_ratio > this → distraction/illness detected
 ADAPTIVE_ACUTE_LOW_TIME_RATIO  = 0.4  # time_ratio < this → recovery/acceleration detected
-ADAPTIVE_ACUTE_WRONG_RATIO     = 3.0  # wrong_ratio > this → acute struggle detected
+ADAPTIVE_ACUTE_WRONG_RATIO     = 1.8  # wrong_ratio > this → acute struggle detected
 ADAPTIVE_ACUTE_CURRENT_WEIGHT  = 0.9  # Current-signal weight in acute deviation mode
 ADAPTIVE_ACUTE_HISTORY_WEIGHT  = 0.1  # History weight in acute deviation mode
 ADAPTIVE_NORMAL_CURRENT_WEIGHT = 0.6  # Current-signal weight in normal variance mode
@@ -389,6 +392,8 @@ BOOK_REGISTRY = {
         "chapter_header_size_min": 17.0,
         "chapter_header_size_max": 17.5,
         "section_pattern": r"^(\d+)\.(\d+)\s+(.+)",
+        # ALG1 PDF TOC uses "Lesson N.N Title" format instead of bare "N.N Title"
+        "toc_section_pattern": r"^Lesson\s+(\d+)\.(\d+)\s+(.+)",
         "front_matter_end_page": 14,
         "exercise_marker_pattern": r"Section\s+\d+\.\d+\s+Exercises",
     },

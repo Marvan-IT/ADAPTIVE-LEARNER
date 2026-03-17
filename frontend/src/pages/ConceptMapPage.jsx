@@ -9,6 +9,7 @@ import ConceptGraph from "../components/conceptmap/ConceptGraph";
 import MapLegend from "../components/conceptmap/MapLegend";
 import { formatConceptTitle } from "../utils/formatConceptTitle";
 import { getReviewDue } from "../api/students";
+import { getAvailableBooks } from "../api/concepts";
 import {
   Loader, Play, CheckCircle, Lock, BookOpen, Trophy, Target,
   Skull, Rocket, Gamepad2, AlertTriangle, Heart, RefreshCw,
@@ -17,7 +18,9 @@ import { SUGGESTED_INTERESTS } from "../utils/constants";
 
 export default function ConceptMapPage() {
   const { t } = useTranslation();
-  const { nodes, edges, nodeStatuses, loading, error } = useConceptMap();
+  const [selectedBook, setSelectedBook] = useState("prealgebra");
+  const [availableBooks, setAvailableBooks] = useState([]);
+  const { nodes, edges, nodeStatuses, loading, error } = useConceptMap(selectedBook);
   const { student, masteredConcepts } = useStudent();
   const { style: globalStyle } = useTheme();
   const [selectedNode, setSelectedNode] = useState(null);
@@ -25,6 +28,17 @@ export default function ConceptMapPage() {
   const [lessonInterests, setLessonInterests] = useState([]);
   const [reviewDueConcepts, setReviewDueConcepts] = useState(new Set());
   const navigate = useNavigate();
+
+  // Fetch available books on mount — non-critical, silent fail
+  useEffect(() => {
+    getAvailableBooks()
+      .then((res) => {
+        if (Array.isArray(res.data) && res.data.length > 0) {
+          setAvailableBooks(res.data);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   // Fetch review-due concepts — non-critical, silent fail
   useEffect(() => {
@@ -165,6 +179,47 @@ export default function ConceptMapPage() {
         overflowY: "auto",
         padding: "1.25rem",
       }}>
+        {availableBooks.length > 0 && (
+          <div style={{ marginBottom: "1rem" }}>
+            <label style={{
+              display: "block",
+              fontSize: "0.75rem",
+              fontWeight: 700,
+              color: "var(--color-text-muted)",
+              textTransform: "uppercase",
+              letterSpacing: "0.05em",
+              marginBottom: "0.35rem",
+            }}>
+              {t("map.book", "Book")}
+            </label>
+            <select
+              value={selectedBook}
+              onChange={(e) => {
+                setSelectedBook(e.target.value);
+                setSelectedNode(null);
+              }}
+              style={{
+                width: "100%",
+                padding: "0.45rem 0.75rem",
+                borderRadius: "8px",
+                border: "1.5px solid var(--color-border)",
+                backgroundColor: "var(--color-bg)",
+                color: "var(--color-text)",
+                fontSize: "0.85rem",
+                fontFamily: "inherit",
+                cursor: "pointer",
+                outline: "none",
+              }}
+            >
+              {availableBooks.map((book) => (
+                <option key={book.slug || book} value={book.slug || book} disabled={book.processed === false}>
+                  {(book.title || book.slug || book)}{book.processed === false ? " (not yet processed)" : ""}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
         <div style={{
           display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0.5rem",
           marginBottom: "1.25rem",
@@ -287,6 +342,7 @@ export default function ConceptMapPage() {
                     <button
                       key={id}
                       onClick={() => setLessonStyle(id)}
+                      aria-label={t("aria.styleOption", { style: label })}
                       style={{
                         display: "flex", alignItems: "center", gap: "0.35rem",
                         padding: "0.4rem 0.6rem",
@@ -327,6 +383,8 @@ export default function ConceptMapPage() {
                       <button
                         key={interest}
                         onClick={() => toggleInterest(interest)}
+                        aria-label={t("aria.toggleInterest", { interest: t("interest." + interest) })}
+                        aria-pressed={selected}
                         style={{
                           padding: "0.25rem 0.55rem",
                           borderRadius: "20px",
@@ -399,6 +457,7 @@ export default function ConceptMapPage() {
                     <button
                       key={id}
                       onClick={() => setLessonStyle(id)}
+                      aria-label={t("aria.styleOption", { style: label })}
                       style={{
                         display: "flex", alignItems: "center", gap: "0.35rem",
                         padding: "0.4rem 0.6rem",
@@ -439,6 +498,8 @@ export default function ConceptMapPage() {
                       <button
                         key={interest}
                         onClick={() => toggleInterest(interest)}
+                        aria-label={t("aria.toggleInterest", { interest: t("interest." + interest) })}
+                        aria-pressed={selected}
                         style={{
                           padding: "0.25rem 0.55rem",
                           borderRadius: "20px",

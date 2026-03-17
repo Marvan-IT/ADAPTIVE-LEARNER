@@ -28,6 +28,7 @@ const initialState = {
   // Card-based learning
   cards: [],
   currentCardIndex: 0,
+  maxReachedIndex: 0,
   cardAnswers: {},
   totalQuestions: 0,
   // AI assistant
@@ -89,17 +90,20 @@ function sessionReducer(state, action) {
         conceptsTotal: action.payload.concepts_total ?? 0,
         conceptsCoveredCount: action.payload.concepts_covered_count ?? 0,
       };
-    case "NEXT_CARD":
+    case "NEXT_CARD": {
+      const nextIndex = Math.min(
+        state.currentCardIndex + 1,
+        Math.max(0, state.cards.length - 1)
+      );
       return {
         ...state,
-        currentCardIndex: Math.min(
-          state.currentCardIndex + 1,
-          Math.max(0, state.cards.length - 1)
-        ),
+        currentCardIndex: nextIndex,
+        maxReachedIndex: Math.max(state.maxReachedIndex, nextIndex),
         idleTriggerCount: 0,
         motivationalNote: null,
         performanceVsBaseline: null,
       };
+    }
     case "PREV_CARD":
       return {
         ...state,
@@ -138,11 +142,13 @@ function sessionReducer(state, action) {
       return { ...state, idleTriggerCount: state.idleTriggerCount + 1 };
     case "ADAPTIVE_CARD_LOADING":
       return { ...state, adaptiveCardLoading: true };
-    case "ADAPTIVE_CARD_LOADED":
+    case "ADAPTIVE_CARD_LOADED": {
+      const newIndex = state.currentCardIndex + 1;
       return {
         ...state,
         cards: [...state.cards, action.payload.card],
-        currentCardIndex: state.currentCardIndex + 1,
+        currentCardIndex: newIndex,
+        maxReachedIndex: Math.max(state.maxReachedIndex, newIndex),
         adaptiveCardLoading: false,
         idleTriggerCount: 0,
         motivationalNote: action.payload.motivational_note ?? null,
@@ -150,6 +156,7 @@ function sessionReducer(state, action) {
         learningProfileSummary: action.payload.learning_profile_summary ?? null,
         adaptationApplied: action.payload.adaptation_applied ?? null,
       };
+    }
     case "ADAPTIVE_CALL_STARTED":
       return { ...state, adaptiveCallInFlight: true };
 
@@ -169,42 +176,22 @@ function sessionReducer(state, action) {
         hasMoreConcepts: action.payload.has_more_concepts,
         conceptsTotal: action.payload.concepts_total,
         conceptsCoveredCount: action.payload.concepts_covered_count,
+        learningProfileSummary: action.payload.learning_profile_summary ?? null,
         rollingCallInFlight: false,
         adaptiveCallInFlight: false,
       };
 
     case "REPLACE_UPCOMING_CARD": {
-      // targetIndex is the card AFTER the current one — pre-prepared while the
-      // student reads the current card
       const targetIndex = state.currentCardIndex + 1;
       const newCards = [...state.cards];
       if (targetIndex < newCards.length) {
-        // Replace the pre-generated placeholder at that slot
         newCards[targetIndex] = { ...action.payload.card, index: targetIndex };
       } else {
-        // Append if no slot exists yet
         newCards.push({ ...action.payload.card, index: newCards.length });
       }
-
-      // Re-sort the upcoming portion (currentCardIndex+1 onwards) by section_index
-      // so an adaptive replacement card lands in the correct pedagogical order.
-      // Cards already seen (0..currentCardIndex) are never reordered.
-      const seen = newCards.slice(0, state.currentCardIndex + 1);
-      const upcoming = newCards.slice(state.currentCardIndex + 1);
-      upcoming.sort((a, b) => {
-        const ai = a.section_index ?? Infinity;
-        const bi = b.section_index ?? Infinity;
-        return ai - bi;
-      });
-      // Re-stamp index fields so they match array position
-      const sortedCards = [
-        ...seen,
-        ...upcoming.map((c, i) => ({ ...c, index: seen.length + i })),
-      ];
-
       return {
         ...state,
-        cards: sortedCards,
+        cards: newCards,
         adaptiveCardLoading: false,
         adaptiveCallInFlight: false,
         motivationalNote: action.payload.motivational_note ?? null,
@@ -222,7 +209,11 @@ function sessionReducer(state, action) {
           ...c, index: insertAt + 1 + i,
         })),
       ];
-      return { ...state, cards: newCards };
+      return {
+        ...state,
+        cards: newCards,
+        maxReachedIndex: Math.max(state.maxReachedIndex, insertAt),
+      };
     }
 
     case "SET_DIFFICULTY_BIAS":
@@ -425,7 +416,10 @@ export function SessionProvider({ children }) {
         dispatch({ type: "ADAPTIVE_CALL_STARTED" });
         try {
           const res = await completeCardAndGetNext(state.session.id, signals);
-          dispatch({ type: "REPLACE_UPCOMING_CARD", payload: res.data });
+          // Only replace if backend returned an adapted card (field is absent in current schema)
+          if (res.data?.card) {
+            dispatch({ type: "REPLACE_UPCOMING_CARD", payload: res.data });
+          }
           if (res.data?.recovery_card) {
             dispatch({ type: "INSERT_RECOVERY_CARD", payload: res.data.recovery_card });
           }
@@ -453,6 +447,9 @@ export function SessionProvider({ children }) {
           idle_triggers: signals?.idleTriggers ?? 0,
         }).then(res => {
           dispatch({ type: "APPEND_CARDS", payload: res.data });
+          if (res.data?.learning_profile_summary) {
+            useAdaptiveStore.getState().updateMode(res.data.learning_profile_summary);
+          }
         }).catch(err => {
           console.error("[rolling] failed to fetch next section:", err);
           dispatch({ type: "ROLLING_CALL_DONE" });
