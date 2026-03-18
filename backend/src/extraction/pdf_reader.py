@@ -8,7 +8,7 @@ from pathlib import Path
 
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from models import PageText, FontSpan
+from extraction.domain_models import PageText, FontSpan
 
 
 def extract_all_pages(pdf_path: Path) -> list[PageText]:

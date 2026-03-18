@@ -13,7 +13,7 @@ from typing import Optional
 
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from models import PageText, SectionBoundary, FontSpan
+from extraction.domain_models import PageText, SectionBoundary, FontSpan
 
 
 def detect_sections(pages: list[PageText], book_config: dict) -> list[SectionBoundary]:

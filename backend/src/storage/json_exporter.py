@@ -7,7 +7,7 @@ from pathlib import Path
 
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from models import PipelineOutput
+from extraction.domain_models import PipelineOutput
 
 
 def export_full_output(output: PipelineOutput, output_path: Path) -> None:

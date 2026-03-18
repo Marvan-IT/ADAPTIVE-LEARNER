@@ -15,7 +15,7 @@ from pathlib import Path
 
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from models import PageText, SectionBoundary, ConceptBlock
+from extraction.domain_models import PageText, SectionBoundary, ConceptBlock
 from config import MATHPIX_DPI, OUTPUT_DIR
 from extraction.text_cleaner import clean_section_text
 from extraction.content_filter import filter_section_content

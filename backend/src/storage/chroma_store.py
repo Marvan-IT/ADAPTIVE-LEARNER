@@ -28,7 +28,7 @@ from config import (
     CHROMA_DIR,
     LATEX_METADATA_SIZE_WARN_THRESHOLD,
 )
-from models import ConceptBlock, DependencyEdge
+from extraction.domain_models import ConceptBlock, DependencyEdge
 
 logger = logging.getLogger(__name__)
 

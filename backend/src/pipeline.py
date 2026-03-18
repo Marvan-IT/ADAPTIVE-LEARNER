@@ -40,7 +40,7 @@ from config import (
     OPENAI_BASE_URL,
     OPENAI_MODEL,
 )
-from models import PipelineOutput
+from extraction.domain_models import PipelineOutput
 
 from extraction.pdf_reader import extract_all_pages
 from extraction.section_detector import detect_sections

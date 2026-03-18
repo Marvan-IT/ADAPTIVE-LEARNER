@@ -13,7 +13,7 @@ import re
 
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from models import ConceptBlock, ValidationResult
+from extraction.domain_models import ConceptBlock, ValidationResult
 from config import BOILERPLATE_PATTERNS, EXERCISE_SECTION_MARKERS
 
 

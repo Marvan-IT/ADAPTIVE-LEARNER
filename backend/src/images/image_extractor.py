@@ -12,7 +12,7 @@ import sys, os
 
 logger = logging.getLogger(__name__)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from models import PageText, SectionBoundary, ImageDecision
+from extraction.domain_models import PageText, SectionBoundary, ImageDecision
 
 
 def extract_image_decisions(

@@ -243,41 +243,35 @@ async def get_student_analytics(
     avg_check_score = round(sum(check_scores) / len(check_scores), 3) if check_scores else None
     total_socratic_sessions = sum(1 for s in all_sessions if s.phase in socratic_phases)
 
-    # ── Query 3: CardInteraction ──────────────────────────────────────────────
-    cards_result = await db.execute(
-        select(CardInteraction)
-        .where(CardInteraction.student_id == student_id)
-        .limit(10000)
+    # ── Query 3: CardInteraction (SQL aggregation — no full-table fetch) ─────
+    card_agg = await db.execute(
+        select(
+            func.count(CardInteraction.id).label("total"),
+            func.coalesce(func.avg(CardInteraction.wrong_attempts), 0).label("avg_wrong"),
+            func.coalesce(func.avg(CardInteraction.hints_used), 0).label("avg_hints"),
+            func.coalesce(func.avg(CardInteraction.time_on_card_sec), 0).label("avg_time"),
+        ).where(CardInteraction.student_id == student_id)
     )
-    card_rows = cards_result.scalars().all()
-    total_cards = len(card_rows)
-
-    if total_cards > 0:
-        avg_wrong_attempts_per_card = round(
-            sum(c.wrong_attempts or 0 for c in card_rows) / total_cards, 3
-        )
-        avg_hints_per_card = round(
-            sum(c.hints_used or 0 for c in card_rows) / total_cards, 3
-        )
-        avg_time_on_card_sec = round(
-            sum(c.time_on_card_sec or 0.0 for c in card_rows) / total_cards, 3
-        )
-    else:
-        avg_wrong_attempts_per_card = 0.0
-        avg_hints_per_card = 0.0
-        avg_time_on_card_sec = 0.0
+    agg_row = card_agg.one()
+    total_cards = int(agg_row.total or 0)
+    avg_wrong_attempts_per_card = round(float(agg_row.avg_wrong), 3)
+    avg_hints_per_card = round(float(agg_row.avg_hints), 3)
+    avg_time_on_card_sec = round(float(agg_row.avg_time), 3)
 
     # Hardest concept: concept_id with highest total wrong_attempts
-    hardest_concept_id: str | None = None
-    hardest_concept_wrong_attempts: int = 0
-    if card_rows:
-        wrong_by_concept: dict[str, int] = {}
-        for c in card_rows:
-            wrong_by_concept[c.concept_id] = (
-                wrong_by_concept.get(c.concept_id, 0) + (c.wrong_attempts or 0)
-            )
-        hardest_concept_id = max(wrong_by_concept, key=lambda k: wrong_by_concept[k])
-        hardest_concept_wrong_attempts = wrong_by_concept[hardest_concept_id]
+    hardest_result = await db.execute(
+        select(
+            CardInteraction.concept_id,
+            func.sum(CardInteraction.wrong_attempts).label("total_wrong"),
+        )
+        .where(CardInteraction.student_id == student_id)
+        .group_by(CardInteraction.concept_id)
+        .order_by(func.sum(CardInteraction.wrong_attempts).desc())
+        .limit(1)
+    )
+    hardest_row = hardest_result.one_or_none()
+    hardest_concept_id: str | None = hardest_row.concept_id if hardest_row else None
+    hardest_concept_wrong_attempts: int = int(hardest_row.total_wrong) if hardest_row else 0
 
     # ── Query 4: SpacedReview ─────────────────────────────────────────────────
     reviews_result = await db.execute(

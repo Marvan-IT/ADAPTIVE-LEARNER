@@ -16,7 +16,7 @@ from typing import Optional
 
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from models import SectionBoundary
+from extraction.domain_models import SectionBoundary
 from config import EXERCISE_SECTION_MARKERS, CONTENT_EXCLUDE_MARKERS
 
 

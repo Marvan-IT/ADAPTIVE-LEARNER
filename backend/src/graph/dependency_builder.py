@@ -17,7 +17,7 @@ from collections import defaultdict
 
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from models import ConceptBlock, DependencyEdge
+from extraction.domain_models import ConceptBlock, DependencyEdge
 
 
 # ═══════════════════════════════════════════════════════════════════════
