@@ -170,12 +170,20 @@ app.add_middleware(
 @app.middleware("http")
 async def api_key_middleware(request: Request, call_next):
     """Reject requests missing a valid X-API-Key header, except for public paths."""
+    from config import ENVIRONMENT
     api_key = os.getenv("API_SECRET_KEY", "")
     if (request.method == "OPTIONS"
             or request.url.path in _SKIP_AUTH
             or request.url.path.startswith("/images/")
-            or request.url.path.startswith("/static/")
-            or not api_key):
+            or request.url.path.startswith("/static/")):
+        return await call_next(request)
+    if not api_key:
+        if ENVIRONMENT == "production":
+            return JSONResponse(
+                {"detail": "Server misconfigured: API_SECRET_KEY not set"},
+                status_code=503,
+            )
+        # dev/test — allow through without key
         return await call_next(request)
     provided = request.headers.get("X-API-Key", "")
     if not secrets.compare_digest(provided, api_key):

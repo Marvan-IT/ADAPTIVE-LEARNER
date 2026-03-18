@@ -9,6 +9,9 @@ const api = axios.create({
 
 api.interceptors.request.use((config) => {
   const key = import.meta.env.VITE_API_SECRET_KEY;
+  if (!key && import.meta.env.PROD) {
+    console.error("[ADA] VITE_API_SECRET_KEY missing — all API calls will be rejected by the server");
+  }
   if (key) {
     config.headers = config.headers || {};
     config.headers["X-API-Key"] = key;

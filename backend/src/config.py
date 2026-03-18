@@ -29,6 +29,7 @@ MATHPIX_APP_KEY = os.getenv("MATHPIX_APP_KEY", "")
 
 # ── Database ──────────────────────────────────────────────────────────
 DATABASE_URL = os.getenv("DATABASE_URL", "")
+ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
 
 # ── Embedding ──────────────────────────────────────────────────────────
 EMBEDDING_MODEL = "text-embedding-3-small"
@@ -433,6 +434,10 @@ _REQUIRED_ENV_VARS = {
     "OPENAI_API_KEY": OPENAI_API_KEY,
     "DATABASE_URL": DATABASE_URL,
 }
+if ENVIRONMENT == "production":
+    _API_SECRET_KEY_VAL = os.getenv("API_SECRET_KEY", "")
+    if not _API_SECRET_KEY_VAL:
+        _REQUIRED_ENV_VARS["API_SECRET_KEY"] = ""
 
 def validate_required_env_vars() -> None:
     """Raise ValueError with a clear message if required env vars are missing."""
