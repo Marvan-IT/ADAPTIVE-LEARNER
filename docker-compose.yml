@@ -1,0 +1,78 @@
+version: "3.9"
+
+# ── ADA — local / production Docker Compose stack ────────────────────────────
+#
+# Services:
+#   db        PostgreSQL 15 — persistent volume; exposed on 5432 for tooling
+#   backend   FastAPI/uvicorn on port 8889; waits for db health check
+#   frontend  nginx serving the Vite build; proxies /api/ to backend
+#
+# Prerequisites:
+#   1. Copy backend/.env.example → backend/.env and fill in real values.
+#   2. Set POSTGRES_PASSWORD in the shell or a root-level .env file:
+#        export POSTGRES_PASSWORD=mysecretpassword
+#      Default falls back to "changeme" for local dev only — never use in prod.
+#
+# Usage:
+#   docker compose up --build       # build all images and start
+#   docker compose up -d            # start in background
+#   docker compose down -v          # stop and remove volumes
+#
+# Migrations (run once after `up`):
+#   docker compose exec backend python -m alembic upgrade head
+
+services:
+  db:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: AdaptiveLearner
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    # backend/.env provides OPENAI_API_KEY, MATHPIX_*, API_SECRET_KEY, etc.
+    # DATABASE_URL is overridden here to point at the "db" service by hostname.
+    env_file:
+      - ./backend/.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-changeme}@db:5432/AdaptiveLearner
+      ENVIRONMENT: production
+    ports:
+      - "8889:8889"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      # Mount pipeline output and data so they are not baked into the image.
+      # These directories can be gigabytes and must never be containerized.
+      - ./backend/output:/app/output
+      - ./backend/data:/app/data
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+    # Named volume so database data survives container restarts.
+    # To fully reset: docker compose down -v
