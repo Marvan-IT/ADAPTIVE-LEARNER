@@ -788,7 +788,7 @@ class TeachingService:
         Returns dict with cards array and metadata.
         """
         # Return cached if available — reject stale sessions with old grouping artifacts
-        _CARDS_CACHE_VERSION = 16  # Force regen: math formatting, image relevance sort, image assignment fix
+        _CARDS_CACHE_VERSION = 17  # Force regen: card_type sort priority, LaTeX sanitizer field fix, image type sort
         if session.presentation_text:
             try:
                 cached = json.loads(session.presentation_text)
@@ -878,7 +878,14 @@ class TeachingService:
                 for kw in _CHECKLIST_KEYWORDS
             )
         ]
-        useful_images = sorted(useful_images, key=lambda img: img.get("relevance", 0) or 0, reverse=True)[:8]
+        _IMAGE_TYPE_PRIORITY = {"DIAGRAM": 0, "CHART": 1, "GRAPH": 1, "TABLE": 2, "PHOTO": 3}
+        useful_images = sorted(
+            useful_images,
+            key=lambda img: (
+                _IMAGE_TYPE_PRIORITY.get((img.get("image_type") or "").upper(), 4),
+                -len(img.get("description") or ""),
+            ),
+        )[:8]
         logger.info(
             "cards concept=%s total_images=%d useful_images=%d",
             session.concept_id, len(images), len(useful_images),
@@ -1140,7 +1147,19 @@ class TeachingService:
         )
         # RC4: Re-sort all_raw_cards to restore curriculum section order after gap-fill append.
         # Uses stable integer _section_index stamps set in generate_for_section().
-        all_raw_cards.sort(key=lambda c: c.get("_section_index", len(sub_sections)))
+        _CARD_TYPE_PRIORITY = {
+            "INTRO": 0, "CONCEPT": 0,
+            "TEACH": 1,
+            "EXAMPLE": 2,
+            "TRY_IT": 3, "TRY IT": 3,
+            "QUESTION": 4, "QUIZ": 4,
+            "FUN": 5,
+            "RECAP": 6,
+        }
+        all_raw_cards.sort(key=lambda c: (
+            c.get("_section_index", len(sub_sections)),
+            _CARD_TYPE_PRIORITY.get((c.get("card_type") or "").upper().replace(" ", "_"), 50),
+        ))
         # Remove cards with empty title or content — prevents blank card renders
         all_raw_cards = [
             c for c in all_raw_cards
@@ -1247,8 +1266,8 @@ class TeachingService:
                 card["content"] = _sanitize_math(card["content"])
             if card.get("question"):
                 q = card["question"]
-                if q.get("question"):
-                    q["question"] = _sanitize_math(q["question"])
+                if q.get("text"):
+                    q["text"] = _sanitize_math(q["text"])
                 if q.get("options"):
                     q["options"] = [_sanitize_math(o) if isinstance(o, str) else o for o in q["options"]]
 

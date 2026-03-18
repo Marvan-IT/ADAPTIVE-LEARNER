@@ -30,6 +30,11 @@ except ImportError:
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from pathlib import Path as _SanitizePath
+import sys as _sanitize_sys
+_sanitize_sys.path.insert(0, str(_SanitizePath(__file__).resolve().parent.parent))
+from api.teaching_service import _sanitize_math as _sanitize_math_fn
+
 from openai import AsyncOpenAI
 from pydantic import ValidationError
 
@@ -949,6 +954,15 @@ async def generate_recovery_card(
         concept_images = concept_detail.get("images", [])[:3]
         card["images"] = concept_images
         card["image_indices"] = list(range(len(concept_images)))
+        # Sanitize math in card content
+        if card.get("content"):
+            card["content"] = _sanitize_math_fn(card["content"])
+        if isinstance(card.get("question"), dict):
+            _q = card["question"]
+            if _q.get("text"):
+                _q["text"] = _sanitize_math_fn(_q["text"])
+            if _q.get("options"):
+                _q["options"] = [_sanitize_math_fn(o) if isinstance(o, str) else o for o in _q["options"]]
         return card
 
     except Exception as exc:

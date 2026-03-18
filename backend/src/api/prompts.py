@@ -994,6 +994,13 @@ MCQ QUALITY — UNAMBIGUITY RULES (MANDATORY):
 - Wrong options must be DEFINITIVELY wrong, not just less common correct forms.
 - Each wrong option should represent a realistic student mistake (e.g., added instead of multiplied, sign error).
 
+MCQ CORRECTNESS VERIFICATION — MANDATORY:
+Before finalizing any MCQ, verify:
+1. EXACTLY ONE option is correct — definitively, not "most correct."
+2. The other 3 options are DEFINITIVELY WRONG — not just incomplete or partially correct.
+3. If the question asks "Which of the following are X?", all sub-parts of the correct answer must be satisfied ONLY by the option at correct_index.
+4. correct_index MUST be an integer (0, 1, 2, or 3) — NEVER a letter ("A") or quoted string ("0").
+
 IMAGE RULE: If you reference an image in content, write [IMAGE:N] at that exact position
 (N = 0-based index from the AVAILABLE IMAGES list). Also add N to image_indices.
 If no image fits, set image_indices to [] and do not write [IMAGE:N].
@@ -1181,9 +1188,13 @@ def build_cards_user_prompt(
                 "position where the image adds value (N = index from list above). "
                 "Also add N to that card's image_indices. "
                 "Distribute images across cards by topic match — one image per card max.\n"
-                "Only assign image_indices if the image description DIRECTLY illustrates this card's content. Leave image_indices as [] if no image clearly matches — empty is ALWAYS better than a wrong image. Never assign an image just to use it up.\n"
-                "Match: number line → counting/addition card. Array → multiplication card.\n"
-                "Formula image → card that introduces that formula."
+                "IMAGE ASSIGNMENT RULE:\n"
+                "- Read each image description carefully. Match each image to the card it DIRECTLY illustrates.\n"
+                "- ASSIGN matching images: use image_indices: [0], [1], [0, 1], etc.\n"
+                "- DO NOT leave image_indices empty by default — images ARE available and SHOULD appear on their matching cards.\n"
+                "- Only use image_indices: [] when no image matches this specific card's content.\n"
+                "- Semantic matching examples: number line → ordering/counting card; dollar bill groups → multiplication card; base-10 blocks → place value card.\n"
+                "- When in doubt: ASSIGN to the closest matching card. A relevant image always helps learning."
             )
         else:
             image_text = "\n\nNo diagrams available."

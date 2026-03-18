@@ -41,7 +41,8 @@ Analogy density: ~80%. Numbered steps: ALWAYS — every step on its own numbered
 MCQ: EASY (confidence-building). QUESTION hint: MUST use visual method — dot arrays (● ● ●), number line, or labeled diagram.
 MANDATORY: ALL definitions, formulas, and worked example steps MUST appear. Never skip content.
 FUN ENGAGEMENT: Add 1 brief surprising or fun fact (1 sentence) to one card — warm and concept-related.
-Tone: warm, patient, encouraging.""",
+Tone: warm, patient, encouraging.
+JARGON BAN: Never use a math term (e.g. "integer", "denominator", "coefficient") without immediately defining it in simple words a 9-year-old understands. Pattern: plain-English explanation FIRST, math term SECOND.""",
 
     "NORMAL": """\
 ## DELIVERY MODE: NORMAL
@@ -57,6 +58,7 @@ Language: technical terminology freely used. 'Why it works' reasoning included.
 ALL procedural steps MUST appear — written as connected technical prose (no "Step 1/2/3" labels).
 MCQ: HARD (edge cases, traps, reversed questions). Analogy density: ~20%. Lead with formula/rule directly.
 MANDATORY: ALL definitions, formulas, and ALL worked example steps MUST appear — reduce scaffolding, NOT substance.
+FAST cards must be AT LEAST as content-rich as NORMAL cards — more technical in language, NOT shorter in substance. Never omit definitions, formulas, or worked example steps.
 FUN ENGAGEMENT: Add 1 intellectually stimulating challenge or 'did you know?' to one card — only content that deepens understanding.
 Never produce a card with only images and no explanatory text.""",
 }
