@@ -13,6 +13,7 @@ import {
   loadRemediationCards as loadRemediationCardsAPI,
   beginRecheck as beginRecheckAPI,
   getNextSectionCards,
+  fetchNextAdaptiveCard,
 } from "../api/sessions";
 import { useStudent } from "./StudentContext";
 import { useTheme } from "./ThemeContext";
@@ -65,6 +66,8 @@ const initialState = {
   conceptsTotal: 0,
   conceptsCoveredCount: 0,
   rollingCallInFlight: false,
+  // Per-card adaptive generation
+  nextCardInFlight: false,
 };
 
 // Valid phases: IDLE, LOADING, CARDS, CHECKING, COMPLETED,
@@ -91,10 +94,12 @@ function sessionReducer(state, action) {
         conceptsCoveredCount: action.payload.concepts_covered_count ?? 0,
       };
     case "NEXT_CARD": {
-      const nextIndex = Math.min(
-        state.currentCardIndex + 1,
-        Math.max(0, state.cards.length - 1)
-      );
+      const rawNext = state.currentCardIndex + 1;
+      // Allow advancing to cards.length (one past the end) only when a per-card
+      // fetch is in flight — the card will arrive and APPEND_NEXT_CARD will land
+      // at exactly that index. Otherwise clamp to the last available card.
+      const upperBound = state.nextCardInFlight ? state.cards.length : Math.max(0, state.cards.length - 1);
+      const nextIndex = Math.min(rawNext, upperBound);
       return {
         ...state,
         currentCardIndex: nextIndex,
@@ -168,6 +173,20 @@ function sessionReducer(state, action) {
 
     case "ROLLING_CALL_DONE":
       return { ...state, rollingCallInFlight: false };
+
+    case "NEXT_CARD_FETCH_STARTED":
+      return { ...state, nextCardInFlight: true };
+
+    case "NEXT_CARD_FETCH_DONE":
+      return { ...state, nextCardInFlight: false };
+
+    case "APPEND_NEXT_CARD":
+      return {
+        ...state,
+        cards: [...state.cards, action.payload.card],
+        hasMoreConcepts: action.payload.has_more_concepts,
+        nextCardInFlight: false,
+      };
 
     case "APPEND_CARDS":
       return {
@@ -410,6 +429,7 @@ export function SessionProvider({ children }) {
       }
 
       const nearEnd = state.currentCardIndex >= state.cards.length - 2;
+      let rollingJustStarted = false;
 
       // CASE A: both MCQs wrong → recovery card via completeCardAndGetNext
       if (signals?.wrongAttempts >= 2 && signals?.reExplainCardTitle) {
@@ -438,6 +458,7 @@ export function SessionProvider({ children }) {
 
       // CASE B: near end of batch AND more sections remain → pre-fetch next sub-section
       if (nearEnd && state.hasMoreConcepts && !state.rollingCallInFlight) {
+        rollingJustStarted = true;
         dispatch({ type: "ROLLING_CALL_STARTED" });
         getNextSectionCards(state.session.id, {
           card_index: state.currentCardIndex,
@@ -463,6 +484,37 @@ export function SessionProvider({ children }) {
       } catch (err) {
         console.error("[card] recordCardInteraction failed:", err);
       }
+
+      // Fire per-card adaptive fetch in background before advancing the index
+      // so the new card lands at exactly currentCardIndex + 1 when it arrives.
+      // Skip if rolling-section fetch was just triggered this invocation (mutually exclusive).
+      if (!state.nextCardInFlight && state.hasMoreConcepts && !state.rollingCallInFlight && !rollingJustStarted) {
+        dispatch({ type: "NEXT_CARD_FETCH_STARTED" });
+        fetchNextAdaptiveCard(state.session.id, {
+          card_index:       state.currentCardIndex,
+          time_on_card_sec: signals?.timeOnCardSec ?? 30,
+          wrong_attempts:   signals?.wrongAttempts ?? 0,
+          hints_used:       signals?.hintsUsed ?? 0,
+          idle_triggers:    signals?.idleTriggers ?? 0,
+        }).then((res) => {
+          if (res.data.card) {
+            dispatch({ type: "APPEND_NEXT_CARD", payload: res.data });
+          } else {
+            // Queue exhausted — no new card, just clear the in-flight flag
+            dispatch({ type: "NEXT_CARD_FETCH_DONE" });
+          }
+          if (!res.data.has_more_concepts) {
+            dispatch({ type: "NEXT_CARD_FETCH_DONE" });
+          }
+          if (res.data?.learning_profile_summary) {
+            useAdaptiveStore.getState().updateMode(res.data.learning_profile_summary);
+          }
+        }).catch((err) => {
+          console.error("[per-card] next-card fetch failed:", err);
+          dispatch({ type: "NEXT_CARD_FETCH_DONE" });
+        });
+      }
+
       dispatch({ type: "NEXT_CARD" });
     },
     [
@@ -472,6 +524,7 @@ export function SessionProvider({ children }) {
       state.adaptiveCallInFlight,
       state.hasMoreConcepts,
       state.rollingCallInFlight,
+      state.nextCardInFlight,
     ]
   );
 

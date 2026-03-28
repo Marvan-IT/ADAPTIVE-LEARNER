@@ -569,36 +569,137 @@ CONCEPT REFERENCE (for your internal use only — NEVER share this with the stud
 # ── Card-Based Learning Prompts ──────────────────────────────
 
 _MODE_DELIVERY: dict[str, str] = {
+
     "STRUGGLING": """\
-## DELIVERY MODE: STRUGGLING
-Language: age 8–10 reading level. Define EVERY term before using it.
-Open with a real-world analogy FIRST — before any formula or definition.
-Analogy density: ~80%. Numbered steps: ALWAYS — every procedural step on its own numbered line.
-MCQ: EASY (confidence-building). EXAMPLE cards: each step on its own line + plain-English 'why' after.
-APPLICATION cards: 6-step scaffold (given/find/draw/set-up/solve/check).
-QUESTION (TRY_IT) hint: MUST use a visual method — dot arrays (● ● ●), number line, or labeled diagram.
-MANDATORY: ALL definitions, formulas, and worked example steps MUST appear — never skip content.
-FUN ENGAGEMENT: Add 1 brief surprising or fun fact (1 sentence) to one card per section — keep it warm and directly related to the concept.
-Tone: warm, patient, encouraging.""",
+## DELIVERY MODE: STRUGGLING (Patient Tutor — Expand & Scaffold)
+
+GOLDEN RULE: You MUST include 100% of the source section content — every definition,
+every formula, every worked-example step, every Try It problem. You are ADDING scaffolding
+around the original content, NEVER removing or summarising it.
+
+BEFORE each concept/formula:
+  - Open with a concrete real-world analogy (1–2 sentences) that a 9-year-old would understand.
+  - Define EVERY math term in plain English before you use it.
+
+FORMULAS & LATEX:
+  - Copy every formula/equation from the source EXACTLY (character-for-character LaTeX).
+  - After the formula, add a plain-English "in other words" sentence.
+
+WORKED EXAMPLES:
+  - Reproduce ALL steps from the source — do NOT skip or merge steps.
+  - After EACH step, add a 1-sentence plain-English "why we did that" explanation.
+  - Put each step on its own line. Number them.
+
+ADDITIONAL CARDS (add these, don't replace anything):
+  - For each major concept section, ADD a warm-up card before it with a relatable scenario.
+  - For each worked example, ADD a parallel practice problem with different numbers (same method).
+
+MCQ: EASY — confidence-building, obvious wrong answers, no tricks.
+QUESTION hint: MUST use a visual method — dot arrays, number line, or labeled diagram description.
+APPLICATION cards: 6-step scaffold (given / find / draw / set-up / solve / check).
+
+TONE: Warm, patient, encouraging. Age 8–10 reading level for explanations.
+FUN: Add 1 brief surprising or fun fact (1 sentence) per section — keep it warm and directly related.
+
+CARD DENSITY: Each major topic section MUST produce AT LEAST 2–3 cards:
+  1. TEACH card — analogy + concept + formula (all from source, with scaffolding)
+  2. EXAMPLE card — full step-by-step worked example (all steps from source + "why" after each)
+  3. QUESTION card — fresh practice problem (different numbers, same concept)
+""",
 
     "NORMAL": """\
-## DELIVERY MODE: NORMAL
-Language: high school level. Define terms on first use. Analogy density: ~50%.
-Numbered steps: for all worked examples. MCQ: MEDIUM — real understanding, common-mistake distractors.
-MANDATORY: ALL definitions, formulas, and worked example steps MUST appear on every card.
-FUN ENGAGEMENT: Add 1 real-world application hook or interesting connection to one card per section where it fits naturally.
-QUESTION hint: concrete approach description (not just 'try it'). Tone: clear, supportive.""",
+## DELIVERY MODE: NORMAL (Good Teacher — Enhance & Clarify)
+
+GOLDEN RULE: You MUST include 100% of the source section content — every definition,
+every formula, every worked-example step, every Try It problem. You are ENHANCING the
+content with better explanations, NEVER removing or summarising it.
+
+CONTENT FIDELITY:
+  - Every definition from the source appears on the card, word-for-word or very close.
+  - Every formula/equation is copied EXACTLY (character-for-character LaTeX).
+  - Every worked-example step is present in order. Do NOT merge or skip steps.
+
+ENHANCEMENTS YOU ADD:
+  - Brief transitional sentences between steps ("Now that we have X, we can find Y").
+  - 1 real-world application hook per major concept ("You'd use this when…").
+  - A "why this works" note after key formulas (1–2 sentences).
+  - Define terms on first use (inline, not a separate card).
+
+MCQ: MEDIUM — test real understanding, include common-mistake distractors.
+QUESTION hint: Concrete approach description (not the answer, but how to start).
+Numbered steps: for all worked examples.
+
+TONE: Clear, supportive. Natural high-school reading level.
+FUN: 1 real-world application hook or interesting connection per section where it fits naturally.
+
+MANDATORY: ALL definitions, formulas, and worked-example steps MUST appear on every card.
+If a source section has 7 steps, the card has 7 steps. No exceptions.
+""",
 
     "FAST": """\
-## DELIVERY MODE: FAST
-Language: technical terminology freely used. Include 'why it works' reasoning.
-ALL procedural steps MUST appear — written as connected technical prose (no numbered step labels).
-MCQ: HARD (edge cases, traps, reversed questions). Analogy density: ~20%. Lead with formula/rule directly.
-MANDATORY: ALL definitions, formulas, and ALL worked example steps MUST appear on every card.
-FUN ENGAGEMENT: Add 1 intellectually stimulating challenge or 'did you know?' depth extension to one card per section — no basic fun hooks, only content that deepens understanding.
-Reduce hand-holding scaffolding only — never reduce content, procedures, or worked examples.
-TRY_IT_BATCH: consecutive Try It exercises merged into one multi-part card (a)(b)(c).""",
+## DELIVERY MODE: FAST (Faithful Reproduction — Preserve Exactly)
+
+GOLDEN RULE: You MUST reproduce the source section content with MAXIMUM FIDELITY.
+The textbook content is already appropriate for a fast learner. Your job is to
+format it cleanly into cards, NOT to rewrite it.
+
+CONTENT FIDELITY — STRICTEST MODE:
+  - Every definition: reproduced verbatim or near-verbatim from the source.
+  - Every formula/equation: copied EXACTLY, character-for-character LaTeX.
+  - Every worked-example step: present in order, using the source's own wording.
+  - Every Try It problem: included exactly as written.
+  - Do NOT add analogies, do NOT add "fun facts", do NOT simplify language.
+  - Do NOT merge steps. Do NOT summarise. Do NOT skip "obvious" steps.
+
+WHAT YOU MAY DO:
+  - Format content cleanly for card layout (headers, spacing, grouping).
+  - Add brief "why it works" technical reasoning where the source implies but doesn't state it.
+  - Use technical terminology freely — the student can handle it.
+  - Write procedural steps as connected technical prose (no numbered labels needed unless source uses them).
+
+MCQ: HARD — edge cases, traps, reversed questions. Test deep understanding.
+TRY_IT_BATCH: Consecutive Try It exercises merged into one multi-part card (a)(b)(c).
+
+TONE: Direct, technical, efficient. No hand-holding.
+FUN: 1 intellectually stimulating challenge or depth extension per section — no basic fun hooks.
+
+MANDATORY: ALL content from the source section MUST appear on the cards.
+If the source has 7 steps, the card has 7 steps. This is the MINIMUM — you cannot go below source content.
+""",
 }
+
+CONTENT_FIDELITY_BLOCK = """\
+═══════════════════════════════════════════════════════════════
+ABSOLUTE RULES — THESE OVERRIDE EVERYTHING ELSE:
+═══════════════════════════════════════════════════════════════
+
+1. ZERO CONTENT LOSS: Every definition, formula, equation, worked-example step,
+   and Try It problem from the source section MUST appear in your cards.
+   Count the steps in the source. Your cards must have AT LEAST that many steps.
+
+2. LATEX FIDELITY: Copy every LaTeX expression EXACTLY as it appears in the source.
+   Do NOT re-type, simplify, or "clean up" any equation. Character-for-character copy.
+   Wrap all LaTeX in $...$ (inline) or $$...$$ (display block).
+   NEVER use \\( \\) or \\[ \\] delimiters — ONLY $ and $$.
+
+3. ORDERING: Cards MUST follow the same concept progression as the source section.
+   Follow the TEXTBOOK order exactly — do NOT rearrange by card type.
+   Never rearrange the pedagogical sequence.
+
+4. COMPLETENESS CHECK: Before returning your JSON, verify:
+   - Every formula from the source appears in at least one card \u2713
+   - Every worked-example step appears in order \u2713
+   - Every Try It problem appears \u2713
+   - No LaTeX was rewritten or simplified \u2713
+
+5. MODE DIFFERENCES: Modes ONLY control what you ADD around the source content.
+   - FAST: Add almost nothing. Faithful reproduction.
+   - NORMAL: Add clarifying transitions and 1 real-world hook per concept.
+   - STRUGGLING: Add analogies, micro-step explanations, visual cues, encouragement.
+   Modes NEVER control what you REMOVE. Nothing is ever removed.
+
+═══════════════════════════════════════════════════════════════
+"""
 
 
 def _build_card_profile_block(learning_profile, history: dict | None) -> str:
@@ -629,16 +730,8 @@ def _build_card_profile_block(learning_profile, history: dict | None) -> str:
             "- Tone: warm, patient, never rushed. Short sentences. No more than 4 sentences before a bullet point."
         )
         parts.append(
-            "\nCARD DENSITY — MANDATORY for this student:\n"
-            "Each major topic section MUST produce AT LEAST 2-3 cards:\n"
-            "  1. TEACH card — explain the concept simply with a real-world analogy first\n"
-            "  2. EXAMPLE card — reproduce the full step-by-step worked example from the section\n"
-            "  3. QUESTION card — a fresh practice problem (different numbers, same concept)\n"
-            "Never merge two different concept sections into one card.\n"
-            "Generating MORE cards = better learning outcome for this student."
-        )
-        parts.append(
-            "MCQ difficulty: EASY. Use numbers already seen. Wrong options clearly wrong."
+            "REMINDER: These instructions adjust TONE only. "
+            "Never skip or reduce content based on student profile."
         )
 
     elif learning_profile.speed == "FAST" and learning_profile.comprehension == "STRONG":
@@ -651,15 +744,8 @@ def _build_card_profile_block(learning_profile, history: dict | None) -> str:
             "- Questions may use academic vocabulary. Distractors should represent common mathematical misconceptions, not guesses."
         )
         parts.append(
-            "\nCARD DENSITY for this student:\n"
-            "1-2 focused cards per major topic section:\n"
-            "  - 1 TEACH card: concept + key property/formula combined (keep it tight)\n"
-            "  - 1 EXAMPLE card only if the section has a worked example\n"
-            "Pack substance into each card. Avoid padding or repetitive scaffolding.\n"
-            "MANDATORY: NEVER skip worked examples. Integrate them into TEACH if only one example exists."
-        )
-        parts.append(
-            "MCQ difficulty: HARD. Combine properties or use trap distractors (carry errors, sign errors)."
+            "REMINDER: These instructions adjust TONE only. "
+            "Never skip or reduce content based on student profile."
         )
 
     else:
@@ -768,7 +854,7 @@ def build_cards_system_prompt(
                 "goes at that exact sentence. Do not move images to the end of the card.\n"
                 "\n"
                 "If no image in the list clearly belongs to this sub-section's content, set\n"
-                "image_indices: [] — leaving an image unassigned is CORRECT if it doesn't belong here.\n"
+                "image_indices: [] — Assign images ONLY to cards whose content directly references or explains what the image shows.\n"
                 "Do NOT force-assign an image just to use it.\n"
                 "\n"
                 "Keep all other image rules:\n"
@@ -895,6 +981,9 @@ Every mathematical expression MUST use LaTeX delimiters:
   Block:  $$expression$$ for standalone equations
 NEVER write bare LaTeX commands: WRONG: \frac{1}{2}  CORRECT: $\frac{1}{2}$
 NEVER leave unmatched $ signs.
+NEVER use \( \) or \[ \] delimiters — ONLY $ and $$ are supported by the renderer.
+LATEX COPY RULE: When source text contains LaTeX, copy it CHARACTER-FOR-CHARACTER.
+  Do NOT re-type, simplify, abbreviate, or reformat any expression from the source.
 Applies to ALL card content, titles, examples, MCQ questions and options.
 - Each card should be self-contained — understandable on its own
 - TEXTBOOK ACCURACY IS NON-NEGOTIABLE: every key definition, formula, theorem, and property
@@ -1047,7 +1136,7 @@ OUTPUT FORMAT — respond with valid JSON only:
     # Append adaptive student profile block (empty string if learning_profile is None)
     profile_block = _build_card_profile_block(learning_profile, history)
     result = base_prompt + profile_block
-
+    result += f"\n\n{CONTENT_FIDELITY_BLOCK}"
 
     # Append remediation instructions when student previously failed specific concepts
     if remediation_weak_concepts:
@@ -1191,10 +1280,9 @@ def build_cards_user_prompt(
                 "IMAGE ASSIGNMENT RULE:\n"
                 "- Read each image description carefully. Match each image to the card it DIRECTLY illustrates.\n"
                 "- ASSIGN matching images: use image_indices: [0], [1], [0, 1], etc.\n"
-                "- DO NOT leave image_indices empty by default — images ARE available and SHOULD appear on their matching cards.\n"
-                "- Only use image_indices: [] when no image matches this specific card's content.\n"
+                "- Assign an image ONLY if the image description directly matches this card's content. Leave image_indices: [] if no image fits.\n"
                 "- Semantic matching examples: number line → ordering/counting card; dollar bill groups → multiplication card; base-10 blocks → place value card.\n"
-                "- When in doubt: ASSIGN to the closest matching card. A relevant image always helps learning."
+                "- When in doubt: leave image_indices: [] rather than force-assigning an image that does not clearly match."
             )
         else:
             image_text = "\n\nNo diagrams available."
@@ -1221,9 +1309,20 @@ Apply DELIVERY MODE: {generate_as} rules from the system prompt strictly.
 {sections_text}
 {latex_text}{image_text}
 
-ORDERING REQUIREMENT: Generate cards in the order of the sections above.
-Section 1 → first card(s). Section 2 → next card(s). Never reorder sections.
-Within each section: TEACH card first, then EXAMPLE, then QUESTION.
+ORDERING REQUIREMENT — MANDATORY:
+Generate cards in EXACTLY the same order as the source content flows.
+  - Section 1 cards MUST all come before Section 2 cards.
+  - Within each section: follow the TEXTBOOK order exactly — do NOT rearrange by card type.
+    If the source presents an example before a definition, your cards do the same.
+  - NEVER reorder, skip, or merge sections.
+
+CONTENT COMPLETENESS — MANDATORY:
+Every piece of source content MUST appear in your cards:
+  - Every definition: word-for-word or near-verbatim.
+  - Every formula: copied EXACTLY, character-for-character LaTeX in $...$ delimiters.
+  - Every worked-example step: all steps, in order, nothing merged or omitted.
+  - Every Try It problem: one QUESTION card per problem (or merged if TRY_IT_BATCH).
+
 Respond with valid JSON only."""
 
     # Build completeness checklist — LLM must explicitly cover every section

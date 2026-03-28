@@ -85,8 +85,10 @@ _LESSON_JSON_SCHEMA = """\
 
 _NEXT_CARD_JSON_SCHEMA = """\
 {
+  "card_type": "<one of: TEACH | VISUAL | EXAMPLE | APPLICATION | QUESTION | FUN | RECAP>",
   "title": "<concise card title>",
   "content": "<markdown-formatted explanation — maximum 6 lines>",
+  "image_indices": [],
   "motivational_note": "<one warm encouraging sentence based on student progress, or null>",
   "questions": [
     {
@@ -404,6 +406,7 @@ def build_next_card_prompt(
     generate_as: str = "NORMAL",
     blended_state_score: float = 2.0,
     engagement_strategy: str | None = None,
+    content_piece_images: list[dict] | None = None,
 ) -> tuple[str, str]:
     """
     Build (system_prompt, user_prompt) for a single adaptive next-card LLM call.
@@ -422,6 +425,8 @@ def build_next_card_prompt(
         + _NEXT_CARD_JSON_SCHEMA
         + "\n\nGenerate EXACTLY 1 card (the JSON object above — NOT wrapped in an array).\n"
         "Do NOT include a 'concept_explanation' key.\n"
+        "\"card_type\": one of TEACH | VISUAL | EXAMPLE | APPLICATION | QUESTION | FUN | RECAP — choose based on the content type\n"
+        "\"image_indices\": list of 0-based indices from the RELEVANT IMAGES block whose description directly matches this card's content ([] if no images apply)\n"
         f"Set difficulty = {max(1, min(5, 1 + math.ceil(4 * card_index / max(card_index + 3, 4))))}\n\n"
         "MCQ QUALITY RULE: The question MUST test understanding, reasoning, or application "
         "in a NEW scenario — NEVER ask a question whose answer is explicitly written verbatim "
@@ -563,5 +568,23 @@ def build_next_card_prompt(
             "Simplify: use step-by-step breakdown, concrete examples, simpler language, "
             "and target a lower difficulty level (1-2)."
         )
+
+    # ── Image injection (Bug 6 fix) ────────────────────────────────────────────
+    if content_piece_images:
+        image_lines = ["", "RELEVANT IMAGES FOR THIS CARD:"]
+        for img in content_piece_images[:3]:   # cap at 3 images per card
+            desc = img.get("description") or img.get("caption") or ""
+            img_type = img.get("image_type", "DIAGRAM")
+            url = img.get("url", "")
+            if desc:
+                image_lines.append(
+                    f"  [{img_type}] {desc}" + (f" — {url}" if url else "")
+                )
+        image_lines += [
+            "",
+            "IMAGE INSTRUCTION: Reference relevant images in your card content using their "
+            "description. Prefer diagrams and formulas over decorative images.",
+        ]
+        user_content += "\n" + "\n".join(image_lines)
 
     return system_prompt, user_content

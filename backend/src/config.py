@@ -61,6 +61,18 @@ STARTER_PACK_MAX_SECTIONS: int = 50    # Safety cap — rolling generation won't
 ADAPTIVE_CARD_MODEL   = OPENAI_MODEL_MINI   # gpt-4o-mini: fast for single-card generation
 # ADAPTIVE_CARD_CEILING removed — card count is determined by content, not a ceiling
 
+# ── Per-card adaptive generation token budget ──────────────────────────────────
+NEXT_CARD_MAX_TOKENS: int = 1200   # Single card: title + content + 1 MCQ + motivational note
+
+# ── Chunk-based card generation token budgets (per-chunk, per-mode) ────────────
+CHUNK_MAX_TOKENS_STRUGGLING = 3000   # ~6 content+MCQ pairs
+CHUNK_MAX_TOKENS_NORMAL     = 2000   # ~4 content+MCQ pairs
+CHUNK_MAX_TOKENS_FAST       = 1200   # ~2 content+MCQ pairs
+CHUNK_MAX_TOKENS_RECOVERY   = 800    # single recovery card+MCQ
+
+# ── Socratic exam pass threshold for chunk-based architecture ─────────────────
+CHUNK_EXAM_PASS_RATE = 0.65          # 65% — student needs ≥65% to master section
+
 # ── Card generation token budgets (profile-adaptive) ──────────────────────────
 # Budget scales with section count × per-section multiplier, clamped to floor/ceiling.
 # SLOW/STRUGGLING learners need 2-3 cards/section with richer explanations.
@@ -108,6 +120,9 @@ ADAPTIVE_PARTIAL_CURRENT_WEIGHT     = 0.65   # section_count == 2
 ADAPTIVE_PARTIAL_HISTORY_WEIGHT     = 0.35
 ADAPTIVE_STATE_BLEND_CURRENT_WEIGHT = 0.60   # section_count >= 3
 ADAPTIVE_STATE_BLEND_HISTORY_WEIGHT = 0.40
+
+# ── Image serving ─────────────────────────────────────────────────────
+IMAGE_BASE_URL = os.getenv("IMAGE_BASE_URL", "http://localhost:8889/images")
 
 # ── Boilerplate patterns to strip (line-level) ─────────────────────────
 BOILERPLATE_PATTERNS = [

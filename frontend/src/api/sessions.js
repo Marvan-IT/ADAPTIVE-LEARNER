@@ -120,6 +120,9 @@ export const regenerateMCQ = (sessionId, body) =>
 export const getNextSectionCards = (sessionId, signals) =>
   api.post(`/api/v2/sessions/${sessionId}/next-section-cards`, signals || {}, { timeout: 45000 });
 
+export const fetchNextAdaptiveCard = (sessionId, payload) =>
+  api.post(`/api/v2/sessions/${sessionId}/next-card`, payload, { timeout: 45000 });
+
 export const getBooks = async () => {
   const res = await api.get("/api/v2/books");
   return res.data;

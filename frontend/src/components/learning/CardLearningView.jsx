@@ -381,6 +381,8 @@ export default function CardLearningView({ remediationMode = false }) {
         const isSecondAttempt = !!cs.replacementMcq; // replacementMcq present = already regenerated once
 
         feedbackTimerRef.current = setTimeout(async () => {
+          if (feedbackTimerRef.current === null) return;   // stale guard — cleared by handleNextCard
+          feedbackTimerRef.current = null;                  // self-clear before any await
           if (isSecondAttempt) {
             // Wrong twice — pass signals so backend switches mode + generates recovery card
             const elapsedSec = cardStartTimeRef.current !== null
@@ -675,7 +677,7 @@ export default function CardLearningView({ remediationMode = false }) {
                 <>
                   {/* Images first — block-level for VISUAL cards */}
                   {card.images?.filter((img) => img.url).map((img, i) => (
-                    <ConceptImage key={i} img={img} maxWidth="560px" />
+                    <ConceptImage key={img.url} img={img} maxWidth="560px" />
                   ))}
                   {/* image_indices fallback — pick from all session card images */}
                   {(!card.images || card.images.length === 0) && card.image_indices?.length > 0 && (
@@ -907,7 +909,7 @@ function renderContentWithInlineImages(content, images) {
       if (imageMatch) {
         const imgIdx = parseInt(imageMatch[1], 10);
         const img = images?.[imgIdx];
-        return img ? <ConceptImage key={i} img={img} maxWidth="500px" /> : null;
+        return img ? <ConceptImage key={`img-${imgIdx}`} img={img} maxWidth="500px" /> : null;
       }
       const mathMatch = part.match(/\[MATH_DIAGRAM:([^\]]+)\]/);
       if (mathMatch) {

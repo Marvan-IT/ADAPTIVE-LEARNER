@@ -16,7 +16,8 @@
 - **compare_type=True**: set in `context.configure()` so column type changes are detected by autogenerate
 - **Migration runbook**: `cd backend && alembic upgrade head` | rollback: `alembic downgrade -1`
 - **connection.py init_db()**: replaced `create_all` with a connectivity ping (`SELECT 1`) — no DDL in app startup
-- **Migration chain**: e3c02cf4c22e → 92b08c7eb40b → 003_add_xp_streak_and_indices → 004_add_socratic_remediation_fields (head)
+- **Migration chain**: 0001 → e3c02cf4c22e → 92b08c7eb40b → 003 → 004 → 005_add_adaptive_history_columns → 006_chunk_architecture (head)
+- **0001 is the baseline**: tables students/teaching_sessions/conversation_messages/student_mastery pre-existed; 0001 uses SELECT 1 no-op + idempotent DO $$ blocks for CHECK constraints
 - See `migrations.md` for detailed migration history
 
 ## Files Created / Owned
@@ -32,6 +33,14 @@
 | `backend/alembic/versions/92b08c7eb40b_*.py` | card_interactions composite index + spaced_reviews unique constraint |
 | `backend/alembic/versions/003_add_xp_streak_and_indices.py` | students.xp, students.streak, three FK indexes |
 | `backend/alembic/versions/004_add_socratic_remediation_fields.py` | TeachingSession remediation columns + 3 new indexes |
+| `backend/alembic/versions/0001_initial_schema.py` | Baseline: SELECT 1 no-op + ck_session_phase + ck_check_score_range CHECK constraints (idempotent) |
+| `backend/alembic/versions/006_chunk_architecture.py` | pgvector extension + concept_chunks (HNSW index) + chunk_images + 5 TeachingSession exam columns |
+| `backend/alembic/__init__.py` | Empty init file for alembic package |
+| `backend/Dockerfile` | Multi-stage: python:3.11-slim, non-root user ada, port 8889 |
+| `frontend/Dockerfile` | Multi-stage: node:20-alpine builder → nginx:alpine, port 80 |
+| `frontend/nginx.conf` | SPA fallback + /api/ /images/ /static/ proxy to backend:8889 |
+| `docker-compose.yml` (project root) | db (pgvector/pgvector:pg16-alpine) + backend + frontend; postgres_data named volume |
+| `.github/workflows/ci.yml` | backend-lint (ruff) + frontend-build jobs; runs on push/PR to main |
 
 ## Rate Limiting Reference
 
@@ -58,9 +67,9 @@ All endpoints in `teaching_router.py` use `@limiter.limit()`. The `adaptive_rout
 | .env.example files | Done — backend/.env.example and frontend/.env.example exist |
 | Bare print() statements in main.py | Done |
 | No rate limit on complete-card endpoint | Done (2026-03-10 health check) |
-| No Dockerfile | Pending |
-| No docker-compose.yml | Pending |
-| No CI/CD pipeline | Pending |
+| No Dockerfile | Done — backend/Dockerfile + frontend/Dockerfile |
+| No docker-compose.yml | Done — docker-compose.yml at project root |
+| No CI/CD pipeline | Done — .github/workflows/ci.yml (lint + build) |
 | No frontend test framework (vitest) | Pending |
 | No startup env validation in config.py | Done — validate_required_env_vars() in config.py; called first in lifespan |
 

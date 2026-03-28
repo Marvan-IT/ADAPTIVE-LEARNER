@@ -1,6 +1,6 @@
 # Solution Architect Agent Memory — ADA Platform
 
-Last updated: 2026-03-17 (pre-deployment-audit-fixes added)
+Last updated: 2026-03-27 (chunk-architecture design added)
 
 ---
 

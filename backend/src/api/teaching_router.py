@@ -45,6 +45,7 @@ from api.teaching_schemas import (
     UpdateSessionInterestsRequest,
     NextSectionCardsRequest, NextSectionCardsResponse,
     CompleteCardRequest, CompleteCardResponse,
+    NextCardRequest, NextCardResponse,
 )
 from api.rate_limiter import limiter
 
@@ -771,6 +772,61 @@ async def next_section_cards(
     )
     await db.commit()
     return NextSectionCardsResponse(**result, session_id=session_id)
+
+
+@router.post(
+    "/sessions/{session_id}/next-card",
+    response_model=NextCardResponse,
+    summary="Generate the next card on demand (per-card adaptive generation)",
+)
+@limiter.limit("30/minute")
+async def get_next_adaptive_card(
+    request: Request,
+    session_id: UUID,
+    req: NextCardRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Generate exactly one card for the next content piece in the session queue.
+
+    Uses live signals from the card just completed to determine presentation mode
+    (STRUGGLING / NORMAL / FAST) for the new card. Returns has_more_concepts=False
+    with card=null when all content pieces have been covered — the frontend should
+    then transition to the Socratic check phase.
+
+    Returns 409 when session.phase is not CARDS.
+    """
+    session = await db.get(TeachingSession, session_id)
+    if not session:
+        raise HTTPException(404, "Session not found")
+    if session.phase != "CARDS":
+        raise HTTPException(
+            409,
+            f"Cannot generate next card: session is in {session.phase} phase (expected CARDS)",
+        )
+
+    student = await db.get(Student, session.student_id)
+    if not student:
+        raise HTTPException(404, "Student not found")
+
+    try:
+        result = await teaching_svc.generate_per_card(db, session, student, req)
+    except ValueError as exc:
+        logger.exception(
+            "[next-card] generation_failed: session_id=%s error=%s",
+            session_id, exc,
+        )
+        raise HTTPException(500, f"Card generation failed: {exc}")
+
+    await db.commit()
+
+    return NextCardResponse(
+        session_id=session.id,
+        card=LessonCard(**result["card"]) if result.get("card") else None,
+        has_more_concepts=result["has_more_concepts"],
+        current_mode=result["current_mode"],
+        concepts_covered_count=result["concepts_covered_count"],
+        concepts_total=result["concepts_total"],
+    )
 
 
 @router.post(

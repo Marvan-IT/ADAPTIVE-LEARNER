@@ -155,26 +155,19 @@ class CardMCQ(BaseModel):
 
 class LessonCard(BaseModel):
     """
-    Unified card schema. Every LLM-generated card has a `question` (MCQ).
-    CHECKIN cards (backend-generated) have no `question` but have a top-level `options` list.
-    Frontend detects CHECKIN by: !card.question && Array.isArray(card.options).
+    Unified card schema for the chunk-based architecture.
+    question=None → content card; question set → MCQ card.
+    chunk_id links this card back to its source ConceptChunk row.
+    is_recovery=True indicates a re-explain card generated after wrong×2.
     """
-    index: int
-    card_type: str | None = Field(
-        default=None,
-        description="TEACH | EXAMPLE | VISUAL | QUESTION | APPLICATION | EXERCISE | RECAP | FUN | CHECKIN"
-    )
-    title: str
-    content: str = Field(..., description="Markdown content, may contain [IMAGE:N] inline markers")
-    image_indices: list[int] = Field(default_factory=list, description="0-based indices into available images")
-    images: list[dict] = Field(default_factory=list, description="Resolved image objects with url, caption, etc.")
-    question: CardMCQ | None = Field(default=None, description="MCQ question; None for CHECKIN cards")
-    question2: CardMCQ | None = Field(
-        default=None,
-        description="Second MCQ shown when first answered wrong — no API call needed",
-    )
-    options: list[str] | None = Field(default=None, description="Present only on CHECKIN cards")
-    difficulty: int = Field(default=3, ge=1, le=5)
+    index:       int
+    title:       str
+    content:     str = Field(..., description="Markdown content for this card")
+    image_url:   str | None = None
+    caption:     str | None = None
+    question:    CardMCQ | None = Field(default=None, description="MCQ question; None for content cards")
+    chunk_id:    str = ""
+    is_recovery: bool = False
 
 
 class CardsResponse(BaseModel):
@@ -370,3 +363,62 @@ class SectionCompleteResponse(BaseModel):
     section_count: int
     avg_state_score: float
     state_distribution: dict
+
+
+# ── Per-Card Adaptive Generation Schemas ──────────────────────────────────────
+
+class NextCardRequest(BaseModel):
+    """Live signals from the card the student just completed — used to adapt the next card."""
+    card_index: int = Field(default=0, ge=0, description="0-based index of the card just completed")
+    time_on_card_sec: float = Field(default=0.0, ge=0.0, description="Seconds spent on the completed card")
+    wrong_attempts: int = Field(default=0, ge=0, description="Wrong MCQ attempts on the completed card")
+    hints_used: int = Field(default=0, ge=0, description="Hints used on the completed card")
+    idle_triggers: int = Field(default=0, ge=0, description="Idle assistant triggers on the completed card")
+
+
+class NextCardResponse(BaseModel):
+    """Response from POST /sessions/{id}/next-card — single per-card adaptive generation."""
+    session_id: UUID
+    card: LessonCard | None = None       # None when has_more_concepts=False
+    has_more_concepts: bool
+    current_mode: str                    # "STRUGGLING" | "NORMAL" | "FAST"
+    concepts_covered_count: int
+    concepts_total: int
+
+
+# ── Chunk-Based Card Generation Schemas ───────────────────────────────────────
+
+class ChunkCardsRequest(BaseModel):
+    chunk_id: str  # UUID of the ConceptChunk to generate cards for
+
+
+class ChunkCardsResponse(BaseModel):
+    cards: list[LessonCard]
+    chunk_id: str
+    chunk_index: int
+    total_chunks: int
+    is_last_chunk: bool
+
+
+class RecoveryCardRequest(BaseModel):
+    chunk_id: str
+    card_index: int = 0         # the card that triggered recovery
+    wrong_answers: list[str] = []  # what the student answered incorrectly
+
+
+class SocraticExamStartRequest(BaseModel):
+    session_id: str   # UUID
+
+
+class SocraticExamAnswer(BaseModel):
+    question_index: int
+    answer: str
+
+
+class SocraticExamResult(BaseModel):
+    score: float          # 0.0 – 1.0
+    passed: bool
+    total_questions: int
+    correct_count: int
+    failed_chunk_ids: list[str]
+    attempt: int

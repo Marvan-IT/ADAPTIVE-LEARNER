@@ -29,10 +29,12 @@
 - STRONG: `quiz >= 0.8` AND `error_rate <= 0.2` AND `hints <= 2` (all inclusive)
 - BORED: `skip_rate > 0.35` (strict >, checked before OVERWHELMED)
 - OVERWHELMED: `hints >= 5` AND `revisits >= 2` (both required)
-- Mastery threshold: 60 (integer, out of 100; `MASTERY_THRESHOLD = 60` in config.py — changed from 70)
+- Mastery threshold: 70 (integer, out of 100; `MASTERY_THRESHOLD = 70` in config.py)
 - Confidence score: `clamp(quiz - error_rate*0.4 - min(hints,10)/10*0.2, 0.0, 1.0)`
 - BORED modifier: fun += 0.3 (cap 1.0), emoji = SPARING, card_count = max(7, count-1)
 - OVERWHELMED modifier: card_count = max(7, count-3), practice = max(3, p-1), step_by_step=True, analogy = min(1.0, a+0.2)
+- `blended_score_to_generate_as(score)`: <1.7 → STRUGGLING, 1.7–2.499 → NORMAL, >=2.5 → FAST
+- `build_blended_analytics(current, history, concept_id, student_id)` → `(AnalyticsSummary, float, str)`; blending: new_student=1.0/0.0, section_count 0→80/20, 1→70/30, 2→65/35, 3+→60/40; acute override=90/10
 
 ### System Prompt Strings to Assert
 - `"GENERATION CONTROLS"` — always present
@@ -115,94 +117,39 @@ This mirrors production logic exactly without requiring services.
 `pip install slowapi Pillow`
 The existing `test_teaching_router.py` is BROKEN due to the circular import — it was not fixed. Only `test_platform_hardening.py` uses the stub pattern.
 
-### TeachingService Test File
-`backend/tests/test_teaching_service.py` — 27 tests across 7 groups (all passing).
-Key facts confirmed by reading teaching_service.py:
-- SOCRATIC_MAX_ATTEMPTS=3; exhaustion fires when `attempt_count >= 3` (NOT `< 3`). Test exhaustion with attempt_count=3, not 2.
-- result dict from handle_student_response has NO "passed" key; use "mastered" instead.
-- generate_cards() imports load_student_history/load_wrong_option_pattern locally inside the method. Patch targets: `"adaptive.adaptive_engine.load_student_history"` and `"adaptive.adaptive_engine.load_wrong_option_pattern"` (not via teaching_service).
-- build_learning_profile: patch as `"adaptive.profile_builder.build_learning_profile"`.
-- generate_remediation_cards(session_id: UUID, db) — first arg is UUID; session fetched internally via db.get.
-- CHECKIN insertion: `(i+1) % INTERVAL == 0 and (i+1) < len(raw_cards)` — needs N+1 cards (13 for interval=12).
-- SpacedReview uses PostgreSQL-specific pg_insert — keep db.execute as generic AsyncMock.
-- begin_recheck: db.get receives cls (not str); mock with `async def _db_get(cls, pk)` pattern.
+### Test File Registry
+See `test-file-registry.md` for per-file test counts, group names, and key implementation facts for all 15+ test files.
 
-### Platform Hardening Test File
-`backend/tests/test_platform_hardening.py` — 32 tests across 5 suites:
-- Suite 1 (6 tests): auth middleware (synthetic app, no real DB)
-- Suite 2 (6 tests): ProgressUpdate Pydantic schema validation
-- Suite 3 (11 tests): _nearest_concept() + Pillow image validation
-- Suite 4 (5 tests): vision annotator with mocked LLM
-- Suite 5 (4 tests): list_students N+1 fix structural inspection
-
-### Card Generation Test File
-`backend/tests/test_card_generation.py` — 74 tests across 12 groups (all passing).
-Key facts:
-- `TeachingService._group_by_major_topic(sections)` — static method; support headings matched by `_SUPPORT_HEADING` regex (EXAMPLE, Solution, TRY IT, HOW TO, Note, TIP, etc.); a leading support section with no preceding group is kept as-is (not dropped)
-- Adaptive max_tokens formula (inline in generate_cards): SLOW/STRUGGLING=`min(16000, max(8000, n*1800))`; FAST+STRONG=`min(8000, max(4000, n*900))`; else=`min(12000, max(6000, n*1200))`; test via a mirrored `_compute()` helper — no mocking needed
-- `_build_card_profile_block(profile, history)` from `api/prompts.py` — imports directly; returns "" when profile is None; SUPPORT mode triggered by SLOW OR STRUGGLING; ACCELERATE mode requires FAST AND STRONG (both)
-- `build_cards_user_prompt()` sub-section dicts MUST have key `"text"` (not `"content"`); old `"content"` key raises KeyError — this is the regression the test guards
-- COMPLETENESS REQUIREMENT phrase and numbered section list always present in user prompt; ORDERING REQUIREMENT phrase must not have been removed (regression guard)
-- `_make_profile()` helper constructs LearningProfile directly (avoids AnalyticsSummary pipeline); `_make_sub_sections(titles)` builds stub section dicts
-- `TeachingService._find_missing_sections(cards, sections)` — @staticmethod; title match is case-insensitive substring search across combined card title+content text
-- `TeachingService._generate_cards_per_section(...)` — async; uses inner closure calling `self._generate_cards_single`; mock with `patch.object(service, "_generate_cards_single", new=AsyncMock(...))`; side_effect values must be `{"cards": [...]}` dicts (not bare lists); failed section returns `[]` not exception
-- `build_cards_user_prompt()` new params: `concept_overview` and `section_position` — preamble with "OVERVIEW:" only injected when BOTH are non-None; missing either → no preamble
-- `build_cards_system_prompt(remediation_weak_concepts=[...])` — appends "REMEDIATION RE-ATTEMPT" block only when list is non-empty; concept names appear verbatim in block
-- `build_socratic_system_prompt()` question count: `base_min = max(8, n_topics)`, `base_max = min(15, n_topics + 4)` — so min >= 8, max <= 15 always; "SPREAD RULE" always present when covered_topics is non-empty; `MAX_SOCRATIC_EXCHANGES = 30` in config
-- `_extract_failed_topics_from_messages(messages, covered_topics)` — @staticmethod; CORRECTION_PHRASES include "not quite", "actually,", "that is incorrect", "good try", etc.; regex `[^.!?]*\?` extracts first question-ending sentence from prior assistant message (stops at `.` in decimals — "3.45?" yields "45?"); deduplication by `last_assistant_msg[:50]` key; ignores student/non-assistant messages
-
-### Playwright E2E Tests (frontend)
-- `frontend/playwright.config.js` + `frontend/e2e/` — 9 spec files + helpers.js (36 tests total)
-- `@playwright/test ^1.48.0` added to devDependencies; `"test:e2e": "playwright test"` script in package.json
-- API key auto-read from `../../backend/.env` via `loadApiKey()` in helpers.js — no env config needed
-- Student isolation: every test creates a unique student via `createStudent()` to prevent state pollution
-- `waitForCards()` watches for `.rounded-full` dots AND absence of "crafting" loading text (90s default)
-- MCQ buttons: `button:has(span:text-is("A"))` — circular letter badge (no data-testid exists in the codebase)
-- WRONG_FEEDBACK_MS = 1800ms in app code — always wait 2200ms+ after a wrong click in tests
-- See `playwright-e2e.md` for full DOM selector reference, helper API, and concept IDs
-
-### Bug Regression Test File
-`backend/tests/test_bug_regressions.py` — 22 tests across 5 groups (21 unit + 1 e2e):
-- `TestLanguageValidation` (6 tests): B-07 — `UpdateLanguageRequest` pattern constraint rejects invalid codes
-- `TestRecoveryCardImages` (5 tests): B-02 — `generate_recovery_card()` populates `card["images"]` from `concept_detail[:3]`
-- `TestCallLlmTimeout` (2 tests): B-03 — `_call_llm()` passes `timeout=30.0` to OpenAI
-- `TestJsonRepairPattern` (2 tests): B-05 — repair uses `json.loads(repair_json(raw))`, NOT `return_objects=True`
-- `TestStyleLockPhaseGuard` (6 unit + 1 e2e tests): B-01 — `switch_style`/`update_session_interests` return 409 when phase != PRESENTING
-- E2E test `test_switch_style_locked_after_cards_e2e` requires `TEST_API_KEY` env var and live backend
+Critical reminders:
+- `_CARDS_CACHE_VERSION` is a local variable (not importable) — always verify via source regex; current value is 21 but changes frequently
+- `STARTER_PACK_INITIAL_SECTIONS = 2` (config.py line ~57)
+- `AnalyticsSummary` needs `quiz_score` + `last_7d_sessions` — use `_make_analytics_summary()` helper everywhere
+- `SOCRATIC_MAX_ATTEMPTS=3`; exhaustion fires at `attempt_count >= 3` (not `< 3`)
+- result dict from handle_student_response has "mastered" key (NOT "passed")
+- SpacedReview uses PostgreSQL-specific pg_insert — keep db.execute as generic AsyncMock
 
 ### Slowapi Router Handler Testing Pattern
-Direct invocation of `@limiter.limit()` decorated handlers fails with:
+Direct invocation of `@limiter.limit()` decorated handlers fails:
 `Exception: parameter 'request' must be an instance of starlette.requests.Request`
-Fix: use a minimal `FastAPI()` + `TestClient` app that replicates the handler logic, or test the phase guard via source code inspection (`inspect.getsource()`).
+Fix: build a real Starlette Request from a scope dict:
+```python
+from starlette.requests import Request
+req = Request({"type":"http","method":"POST","path":"/...","query_string":b"","headers":[(b"host",b"localhost")],"client":("127.0.0.1",0)})
+```
 
-### Stale Constant-Pin Failures in Existing Tests (pre-existing, not regressions)
-`test_adaptive_mode_switching.py` and `test_card_generation.py` have 10 tests asserting old constant values:
-- `_CARDS_CACHE_VERSION = 6` / `= 12` — actual value is now `14` (bumped again 2026-03-16 for FUN/RECAP removal)
-- `STARTER_PACK_INITIAL_SECTIONS = 2` — actual value is now `3` (bumped per CLAUDE.md, 2026-03-15)
-These tests need their expected constants updated to 14 and 3 respectively.
+### Integration Test Patterns (httpx + FastAPI)
+- httpx 0.28+ removed the `app=` shortcut from `AsyncClient`. Use `transport=httpx.ASGITransport(app=...)` instead.
+  ```python
+  async with httpx.AsyncClient(transport=httpx.ASGITransport(app=test_app), base_url="http://test") as client:
+  ```
+- Do NOT use the real `api.main.app` — its lifespan loads ChromaDB + PostgreSQL. Build a synthetic FastAPI app with `dependency_overrides` for DB injection.
+- DB aggregate mocks: `db.execute(...).one()` returns a `MagicMock` by default — its numeric attributes are also `MagicMock`, causing `float()` conversion errors. Use a plain `_FakeAggRow` dataclass/namedtuple with explicit numeric fields (`total=0`, `avg_wrong=0.0`, etc.).
+- `one_or_none()` should return `None` explicitly (not a `MagicMock`) when the test expects "no result found".
+- Service async methods called via `await` in router handlers must be `AsyncMock`, not plain `MagicMock`. Forgetting this produces: `TypeError: object MagicMock can't be used in 'await' expression`.
 
-### Bug Fixes Test File
-`backend/tests/test_bug_fixes.py` — 96 tests across 19 groups (all passing):
-- `TestCardOrdering` (4): Fix 1 — FUN/RECAP reorder block removed; _section_index sort is authoritative
-- `TestImageFilter` (9): Fix 2A — image filter no longer restricts to DIAGRAM/FORMULA; PHOTO/TABLE/FIGURE all pass
-- `TestImageFallback` (4): Fix 2B — file-not-found path retains indexed filename rather than dropping image
-- `TestRecoveryCardInsertion` (4): Fix 3 — REPLACE_UPCOMING_CARD replaces targetIndex slot; appends when at end
-- `TestFastModeDetection` + `TestConservativeCapThreshold` (13): Fix 4A/4B — expected_time floor 90s; cap threshold lowered 5→2
-- `TestPropertyBatching` (10): Fix 5A — _batch_consecutive_properties merges consecutive property CONCEPT sections
-- `TestFixLatexBackslashes` (9): Fix 6 — doubles non-safe-escape backslashes; `\t` IS safe so `\times` is NOT doubled
-- `TestImageUrlIncludesBookSlug` (4): Fix 7 — image URLs include book_slug; uses `object.__new__` bypass
-- `TestBlendedScoreForwarded` (2): Fix 8 — blended_score forwarded not hardcoded; `db.flush = AsyncMock()`
-- `TestListBooksEndpoint` (5): Fix 9 — `/api/v2/books` endpoint; `_install_rate_limiter_stub()` pattern
-- `TestCardBehaviorSignalsImport` (4): Fix 10 — CardBehaviorSignals comes from adaptive.schemas
-- `TestSortCards` (6): Fix 11 — `_sort_cards()`: FUN first, difficulty-ascending middle, RECAP last
-- `TestParseCardImageRef` (4): Fix 12 — strips [CARD:N], returns image at index, out-of-bounds → None
-- `TestImageUrlNoHardcodedPort` (3): Fix 13 — base_url default is `""` not `localhost:8000`
-- `TestAdaptiveModeDerivation` (5): SLOW/low-comp → STRUGGLING; FAST+high-comp → FAST; else NORMAL
-- `TestCacheVersionBump` (1): Fix 14 — `_CARDS_CACHE_VERSION == 15`; read via source regex (local var, not importable)
-- `TestBlankCardFilter` (2): Fix 15 — cards with empty/whitespace title or content are filtered out
-- `TestRecoveryCardWrongAnswer` (3): Fix 16 — `CompleteCardRequest` has optional `wrong_question`/`wrong_answer_text`; `generate_recovery_card` accepts both
-- `TestBookSlugRouting` (2): Fix 17 — `/api/v1/books` in main.py source; `graph_full` has `book_slug` param (AST inspection, no lifespan trigger)
-- `TestRollingModeMapping` (4+4): Fix 18 — SLOW maps to STRUGGLING; `_CARD_MODE_DELIVERY` has no SLOW key
+### _parse_sub_sections Test File
+`backend/tests/test_parse_sub_sections.py` — 22 tests across 7 classes (all passing).
+See `parse-sub-sections-tests.md` for edge-case notes (LaTeX guard, whitespace stripping, false-positive scope).
 
 Key patterns:
 - Method-local constants (not importable): use `pathlib + re.search` on source text

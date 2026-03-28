@@ -23,7 +23,11 @@ export default function ConceptImage({ img, maxWidth = "600px", className = "" }
   const description = img.description || img.caption || null;
 
   if (!img.url) return null;
-  if (status === "error") return null;
+  if (status === "error") return (
+    <div style={{ padding: "0.5rem", color: "var(--color-text-muted)", fontSize: "0.8rem" }}>
+      [image unavailable]
+    </div>
+  );
 
   const src = `${API_BASE_URL}${img.url}`;
 

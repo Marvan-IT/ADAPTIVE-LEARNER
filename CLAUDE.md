@@ -372,6 +372,20 @@ docs/
 | `.env.example` files missing | Created `backend/.env.example` and `frontend/.env.example` | `backend/.env.example`, `frontend/.env.example` |
 | No startup env-var validation | Raise clear `ValueError` on startup if required vars missing | `config.py` |
 
+### ✅ Per-Card Adaptive Generation (2026-03-24)
+
+| Issue / Feature | Fix Applied | Files |
+|---|---|---|
+| Cards generated as static batch — never adapts mid-session | Per-card generation: 3 cards upfront, then each subsequent card generated on demand per content piece in textbook order | `teaching_service.py`, `adaptive_engine.py`, `prompt_builder.py`, `teaching_router.py`, `teaching_schemas.py`, `SessionContext.jsx`, `sessions.js` |
+| `section_count` never incremented — blending weights frozen at 80/20 cold-start forever | `section_count` now incremented in session cache on each `generate_per_card()` call | `teaching_service.py`, `adaptive_engine.py` |
+| `card_index=0` hardcoded in initial `build_blended_analytics()` call | Now uses `history.get("total_cards_completed", 0)` | `teaching_service.py` |
+| `NEXT_CARD` reducer clamped at `cards.length - 1` — student stuck at last pre-generated card | Conditional clamp: allows index to advance past last card when `nextCardInFlight=true` | `SessionContext.jsx` |
+| No race condition guard — rapid taps triggered duplicate next-card fetches | `nextCardInFlight` state flag + `NEXT_CARD_FETCH_STARTED/DONE` reducer cases | `SessionContext.jsx` |
+| `build_next_card_prompt()` had no image injection | Extended with `content_piece_images` parameter; injects up to 3 images per card | `prompt_builder.py` |
+| New endpoint | `POST /api/v2/sessions/{id}/next-card` — generates single adaptive card for next content piece | `teaching_router.py`, `teaching_schemas.py` |
+| Design docs | `docs/per-card-adaptive-generation/` — HLD, DLD, execution-plan | `docs/per-card-adaptive-generation/` |
+| Tests | 20 tests covering all business rules (content order, mode shaping, blending, images, race condition) | `backend/tests/test_per_card_adaptive.py` |
+
 ### ⚠️ Known Technical Debt (Requires devops-engineer)
 
 | Issue | File | Priority |

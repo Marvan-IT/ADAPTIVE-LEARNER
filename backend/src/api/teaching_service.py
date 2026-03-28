@@ -23,7 +23,7 @@ from config import (
     CARDS_MAX_TOKENS_SLOW, CARDS_MAX_TOKENS_SLOW_FLOOR, CARDS_MAX_TOKENS_SLOW_PER_SECTION,
     CARDS_MAX_TOKENS_NORMAL, CARDS_MAX_TOKENS_NORMAL_FLOOR, CARDS_MAX_TOKENS_NORMAL_PER_SECTION,
     CARDS_MAX_TOKENS_FAST, CARDS_MAX_TOKENS_FAST_FLOOR, CARDS_MAX_TOKENS_FAST_PER_SECTION,
-    DEFAULT_BOOK_SLUG,
+    DEFAULT_BOOK_SLUG, NEXT_CARD_MAX_TOKENS,
 )
 from api.knowledge_service import KnowledgeService
 from api.prompts import (
@@ -57,17 +57,16 @@ def _sanitize_math(text: str) -> str:
     return text
 
 
-_JSON_SAFE_ESCAPES: frozenset[str] = frozenset('"\\/nrtu')
+_JSON_SAFE_ESCAPES = frozenset('"\\/u')
+_JSON_WHITESPACE = frozenset('nrt')
 
 
 def _fix_latex_backslashes(raw: str) -> str:
-    """Double-escape backslashes that are LaTeX commands, not valid JSON escapes.
+    """Escape unescaped backslashes in raw LLM JSON output, preserving LaTeX commands.
 
-    json.loads / json_repair treat \\f as form-feed, \\b as backspace.
-    LaTeX: \\frac, \\beta, \\times start with those same letters and get corrupted.
-    This function pre-escapes them so the decoder sees \\\\frac → \\frac in output.
-    Already-doubled backslashes (\\\\frac) pass through unchanged.
-    Preserves \\n, \\r, \\t (valid JSON whitespace escapes).
+    JSON structural escapes (\\", \\/, \\\\, \\uXXXX) and true whitespace escapes
+    (\\n, \\r, \\t not followed by a letter) are left as-is. Every other backslash
+    is doubled so that json.loads keeps it as a literal backslash (LaTeX command).
     """
     out: list[str] = []
     i = 0
@@ -75,17 +74,104 @@ def _fix_latex_backslashes(raw: str) -> str:
         ch = raw[i]
         if ch == '\\' and i + 1 < len(raw):
             nxt = raw[i + 1]
-            if nxt in _JSON_SAFE_ESCAPES:
-                out.append(ch); out.append(nxt); i += 2
+            if nxt == '\\':
+                # Double backslash: LaTeX line-break (\\ &=) OR JSON-escaped single backslash (\\frac)
+                after = raw[i + 2] if i + 2 < len(raw) else ''
+                if after.isalpha():
+                    # \\command → keep as \\ so json.loads gives \command (e.g. \frac, \begin)
+                    out.append(ch)
+                    out.append(nxt)
+                    i += 2
+                else:
+                    # LaTeX line break \\ followed by space/& — quadruple so json.loads gives \\ (LaTeX newline)
+                    out.append('\\\\')
+                    out.append('\\\\')
+                    i += 2
+            elif nxt in _JSON_SAFE_ESCAPES:
+                out.append(ch)
+                out.append(nxt)
+                i += 2
+            elif nxt in _JSON_WHITESPACE and (i + 2 >= len(raw) or not raw[i + 2].isalpha()):
+                # Standalone \n \r \t — true JSON whitespace escape, not a LaTeX command
+                out.append(ch)
+                out.append(nxt)
+                i += 2
             else:
-                out.append('\\\\'); i += 1
+                # LaTeX command backslash (e.g. \text, \times, \nabla) — double-escape
+                out.append('\\\\')
+                i += 1
         else:
-            out.append(ch); i += 1
+            out.append(ch)
+            i += 1
     return ''.join(out)
+
+
+def _clean_salvage(raw: str) -> str | None:
+    """Try to recover a truncated JSON string by closing open brackets/braces.
+
+    Returns the salvaged string, or None if the input is empty or None.
+    Companion to the per-card JSON parse loop in generate_per_card().
+    """
+    if not raw:
+        return None
+    raw = raw.rstrip()
+    open_brackets = raw.count("[") - raw.count("]")
+    open_braces = raw.count("{") - raw.count("}")
+    if open_brackets < 0 or open_braces < 0:
+        return None
+    return raw + "]" * open_brackets + "}" * open_braces
+
+
+def _normalise_per_card(parsed: dict, card_index: int) -> dict:
+    """Normalise a raw per-card LLM dict to the shape expected by LessonCard.
+
+    The LLM returns the single-card schema from _NEXT_CARD_JSON_SCHEMA.
+    This function flattens it into the same dict shape used by generate_cards()
+    and generate_next_section_cards() so the rest of the pipeline is uniform.
+    """
+    # Extract the first MCQ-type question from the 'questions' list, if present.
+    questions = parsed.get("questions") or []
+    question: dict | None = None
+    for q in questions:
+        if isinstance(q, dict) and q.get("type") in ("mcq", "multiple_choice"):
+            question = q
+            break
+
+    card: dict = {
+        "index": card_index,
+        "card_type": parsed.get("card_type") or "TEACH",
+        "title": parsed.get("title", f"Card {card_index + 1}"),
+        "content": parsed.get("content", ""),
+        "images": [],
+        "image_indices": [],
+        "difficulty": int(parsed["difficulty"]) if parsed.get("difficulty") is not None else 3,
+        "options": None,
+        "question": None,
+        "question2": None,
+    }
+
+    if question:
+        card["question"] = {
+            "text": question.get("question", ""),
+            "options": question.get("options", []),
+            "correct_index": int(question.get("correct_index", 0)),
+            "explanation": question.get("explanation", ""),
+            "difficulty": "MEDIUM",
+        }
+
+    return card
 
 
 # Section type classifier — priority order, first match wins
 _SECTION_CLASSIFIER: list[tuple[str, str]] = [
+    (r"^learning outcomes?\b",                                                 "LEARNING_OBJECTIVES"),
+    (r"^section objectives?\b",                                                "LEARNING_OBJECTIVES"),
+    (r"^chapter objectives?\b",                                                "LEARNING_OBJECTIVES"),
+    (r"^section outcomes?\b",                                                  "LEARNING_OBJECTIVES"),
+    (r"^after (?:studying|reading|completing) this (?:section|chapter)",      "LEARNING_OBJECTIVES"),
+    (r"^by the end of this (?:section|chapter)",                              "LEARNING_OBJECTIVES"),
+    (r"^students will be able to\b",                                          "LEARNING_OBJECTIVES"),
+    (r"^objective\s+\d+\b",                                                   "LEARNING_OBJECTIVES"),
     (r"^learning objectives?\b",                                              "LEARNING_OBJECTIVES"),
     (r"^example\s+\d+\.\d+",                                                 "EXAMPLE"),
     (r"^try it\s+\d+\.\d+",                                                  "TRY_IT"),
@@ -97,6 +183,33 @@ _SECTION_CLASSIFIER: list[tuple[str, str]] = [
     (r"^writing exercises\b|^practice makes perfect\b|^mixed practice\b"
      r"|^review exercises\b|^practice test\b|^glossary\b|^key concepts\b",   "END_MATTER"),
 ]
+
+# ALLCAPS section header pattern — matches OpenStax-style headers found in elementary_algebra,
+# intermediate_algebra, algebra_1, and college_algebra books that lack markdown ## markers.
+# Compiled at module level to avoid recompilation on every _parse_sub_sections() call.
+_ALLCAPS_SECTION_RE = re.compile(
+    r'^(EXAMPLE|TRY[\s\-]IT|SOLUTION|HOW\s+TO|LEARNING\s+OBJECTIVES?|LEARNING\s+OUTCOMES?|SECTION\s+OBJECTIVES?|CHAPTER\s+OBJECTIVES?|SECTION\s+OUTCOMES?|OBJECTIVE|'
+    r'BE\s+PREPARED|MEDIA|ACCESS|MANIPULATIVE|LINK\s+TO\s+LITERACY|'
+    r'EVERYDAY\s+MATH|WRITING\s+EXERCISES?|PRACTICE\s+MAKES\s+PERFECT|'
+    r'MIXED\s+PRACTICE|KEY\s+CONCEPTS?|REVIEW\s+EXERCISES?|PRACTICE\s+TEST|'
+    r'GLOSSARY|CHAPTER\s+REVIEW|CHAPTER\s+PRACTICE\s+TEST|HOMEWORK)'
+    r'(?:\s+[\d\.]+)?(?:[\s:].+)?$',
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# Pedagogical card order within each section — secondary sort key after _section_index.
+# Primary sort is always _section_index (textbook section position).
+_CARD_TYPE_ORDER: dict[str, int] = {
+    "FUN": 0,
+    "TEACH": 1,
+    "VISUAL": 2,
+    "EXAMPLE": 3,
+    "APPLICATION": 4,
+    "QUESTION": 5,
+    "EXERCISE": 6,
+    "CHECKIN": 7,
+    "RECAP": 8,
+}
 
 # Math domain classifier for section-type-specific prompt notes
 # Text is normalized (underscores/dots → spaces) before matching, so \b word boundaries work correctly.
@@ -371,6 +484,7 @@ class TeachingService:
                 {"role": "user", "content": user_prompt},
             ],
             max_tokens=2000,
+            model="mini",
         )
 
         # 4. Cache in the session and store messages
@@ -788,7 +902,7 @@ class TeachingService:
         Returns dict with cards array and metadata.
         """
         # Return cached if available — reject stale sessions with old grouping artifacts
-        _CARDS_CACHE_VERSION = 17  # Force regen: card_type sort priority, LaTeX sanitizer field fix, image type sort
+        _CARDS_CACHE_VERSION = 23  # Force regen: pedagogical within-section card ordering (TEACH before EXAMPLE)
         if session.presentation_text:
             try:
                 cached = json.loads(session.presentation_text)
@@ -831,6 +945,37 @@ class TeachingService:
             # that merges SOLUTION into preceding EXAMPLE and TIP into preceding item.
             # Falls back to _group_by_major_topic if the blueprint yields < 2 items.
             classified = self._classify_sections(sub_sections)
+
+            # Ensure Learning Objectives is always first in the blueprint.
+            # Case A: LO exists but is not at index 0 — move it to front.
+            # Case B: No LO found — synthesize from first section's text if possible.
+            lo_indices = [i for i, s in enumerate(classified) if s.get("section_type") == "LEARNING_OBJECTIVES"]
+            if lo_indices and lo_indices[0] != 0:
+                lo_section = classified.pop(lo_indices[0])
+                classified.insert(0, lo_section)
+            elif not lo_indices:
+                # No LO section found — try to synthesize from intro text
+                first = classified[0] if classified else None
+                if first:
+                    lo_match = re.search(
+                        r'((?:by the end of this (?:section|chapter)'
+                        r'|after (?:studying|reading|completing) this (?:section|chapter)'
+                        r'|you will be able to'
+                        r'|students will be able to'
+                        r'|in this section[,\s]+(?:you|we|students)'
+                        r'|upon completion)'
+                        r'.*?)(?=\n\n|\Z)',
+                        first.get("text", ""), re.IGNORECASE | re.DOTALL
+                    )
+                    if lo_match:
+                        lo_text = lo_match.group(1).strip()
+                        first["text"] = first["text"].replace(lo_match.group(0), "").strip()
+                        classified.insert(0, {
+                            "title": "Learning Objectives",
+                            "text": lo_text,
+                            "section_type": "LEARNING_OBJECTIVES",
+                        })
+
             blueprint = self._build_textbook_blueprint(classified)
             if len(blueprint) >= 2:
                 sub_sections = blueprint
@@ -885,7 +1030,7 @@ class TeachingService:
                 _IMAGE_TYPE_PRIORITY.get((img.get("image_type") or "").upper(), 4),
                 -len(img.get("description") or ""),
             ),
-        )[:8]
+        )[:16]
         logger.info(
             "cards concept=%s total_images=%d useful_images=%d",
             session.concept_id, len(images), len(useful_images),
@@ -924,7 +1069,7 @@ class TeachingService:
         # CardBehaviorSignals from historical averages and let build_blended_analytics apply
         # the 60/40 (or 90/10 acute deviation) blend against the historical baseline.
         current_signals = CardBehaviorSignals(
-            card_index=0,
+            card_index=history.get("total_cards_completed", 0),  # Bug 7 fix: use actual position
             time_on_card_sec=history["avg_time_per_card"] or 120.0,
             wrong_attempts=round(history["avg_wrong_attempts"] or 0),
             hints_used=round(history["avg_hints_per_card"] or 0),
@@ -974,13 +1119,8 @@ class TeachingService:
             card_profile.speed, card_profile.comprehension, card_profile.engagement,
         )
 
-        # Compute per-section token floor from profile — used by _generate_cards_per_section
-        if card_profile.speed == "SLOW" or card_profile.comprehension == "STRUGGLING":
-            per_section_floor = CARDS_MAX_TOKENS_SLOW_PER_SECTION    # 6000
-        elif card_profile.speed == "FAST" and card_profile.comprehension == "STRONG":
-            per_section_floor = CARDS_MAX_TOKENS_FAST_PER_SECTION    # 3000
-        else:
-            per_section_floor = CARDS_MAX_TOKENS_NORMAL_PER_SECTION  # 4500
+        # Token budget is content-driven, not mode-driven — all modes reproduce 100% of source content
+        per_section_floor = CARDS_MAX_TOKENS_SLOW_PER_SECTION
 
         logger.info(
             "[cards-adaptive] student_id=%s concept_id=%s history_cards=%d "
@@ -1041,12 +1181,8 @@ class TeachingService:
         # 5. Generate cards — per-section parallel calls so no section is dropped due to truncation.
         # Each section gets its own LLM call; results are merged in section order.
         n_sections = len(sub_sections)
-        if card_profile.speed == "SLOW" or card_profile.comprehension == "STRUGGLING":
-            adaptive_max_tokens = max(CARDS_MAX_TOKENS_SLOW_FLOOR, n_sections * CARDS_MAX_TOKENS_SLOW_PER_SECTION)
-        elif card_profile.speed == "FAST" and card_profile.comprehension == "STRONG":
-            adaptive_max_tokens = max(CARDS_MAX_TOKENS_FAST_FLOOR, n_sections * CARDS_MAX_TOKENS_FAST_PER_SECTION)
-        else:
-            adaptive_max_tokens = max(CARDS_MAX_TOKENS_NORMAL_FLOOR, n_sections * CARDS_MAX_TOKENS_NORMAL_PER_SECTION)
+        # Unified budget: scale with content (section count × per-section floor), not mode
+        adaptive_max_tokens = max(CARDS_MAX_TOKENS_SLOW_FLOOR, n_sections * CARDS_MAX_TOKENS_SLOW_PER_SECTION)
         logger.info(
             "cards token_budget: concept=%s n_sections=%d profile=%s/%s max_tokens=%d",
             session.concept_id, n_sections,
@@ -1146,25 +1282,45 @@ class TeachingService:
             required_sections=None,  # gap-fill pass above already handled re-gen; just repair
         )
         # RC4: Re-sort all_raw_cards to restore curriculum section order after gap-fill append.
-        # Uses stable integer _section_index stamps set in generate_for_section().
-        _CARD_TYPE_PRIORITY = {
-            "INTRO": 0, "CONCEPT": 0,
-            "TEACH": 1,
-            "EXAMPLE": 2,
-            "TRY_IT": 3, "TRY IT": 3,
-            "QUESTION": 4, "QUIZ": 4,
-            "FUN": 5,
-            "RECAP": 6,
-        }
+        # Sort by section index only — preserve textbook order within each section
         all_raw_cards.sort(key=lambda c: (
             c.get("_section_index", len(sub_sections)),
-            _CARD_TYPE_PRIORITY.get((c.get("card_type") or "").upper().replace(" ", "_"), 50),
+            _CARD_TYPE_ORDER.get(c.get("card_type") or "", 5),
         ))
         # Remove cards with empty title or content — prevents blank card renders
         all_raw_cards = [
             c for c in all_raw_cards
             if c.get("title", "").strip() and c.get("content", "").strip()
         ]
+
+        # Missed-image cleanup: attach any unassigned useful_image to the card whose
+        # content has the most word overlap with the image description.
+        # Ensures zero image loss — content-based matching, not random assignment.
+        if useful_images:
+            _assigned_fnames: set[str] = {
+                img.get("filename") or img.get("file", "")
+                for card in all_raw_cards
+                for img in card.get("images", [])
+            }
+            for _img in useful_images:
+                _fname = _img.get("filename") or _img.get("file", "")
+                if _fname in _assigned_fnames or not _fname:
+                    continue
+                _desc_words = set((_img.get("description") or "").lower().split())
+                if not _desc_words:
+                    continue
+                _best_card = None
+                _best_score = 0
+                for _card in all_raw_cards:
+                    _content_words = set(_card.get("content", "").lower().split())
+                    _score = len(_desc_words & _content_words)
+                    if _score > _best_score:
+                        _best_score = _score
+                        _best_card = _card
+                if _best_card is not None and _best_score > 0:
+                    _best_card.setdefault("images", []).append(_img)
+                    _assigned_fnames.add(_fname)
+
         if _still_missing:
             logger.warning(
                 "[card-validate] session=%s sections still uncovered after gap-fill: %s",
@@ -1313,7 +1469,6 @@ class TeachingService:
                     if (
                         isinstance(global_idx, int)
                         and 0 <= global_idx < len(useful_images)
-                        and global_idx not in assigned_global
                     ):
                         img_copy = dict(useful_images[global_idx])
                         img_copy["caption"] = (
@@ -1323,7 +1478,6 @@ class TeachingService:
                         global_to_local[global_idx] = len(card["images"])
                         card["images"].append(img_copy)
                         assigned_global.add(global_idx)
-                        break  # Limit to max 1 image per card
 
                 # Remap [IMAGE:N] markers in content: global index → local card.images index
                 # so frontend lookup card.images[N] returns the correct image object.
@@ -1522,7 +1676,7 @@ class TeachingService:
         # Load image pool from cache (saved during initial generation)
         cached_images = cached.get("_images", [])
         already_assigned = set(cached.get("assigned_image_indices", []))
-        available_images = [img for i, img in enumerate(cached_images) if i not in already_assigned]
+        available_images = cached_images  # full image pool available for every per-card section
 
         # Generate cards for this ONE sub-section
         new_raw_cards = await self._generate_cards_per_section(
@@ -1593,6 +1747,298 @@ class TeachingService:
             "concepts_covered_count": len(concepts_covered),
             "current_mode": _current_mode,
             "learning_profile_summary": _build_learning_profile_summary(blended, _generate_as, _blended_score),
+        }
+
+    async def generate_per_card(
+        self,
+        db: AsyncSession,
+        session: "TeachingSession",
+        student,
+        req,  # NextCardRequest
+    ) -> dict:
+        """Generate exactly one adaptive card for the next content piece in the session queue.
+
+        Uses live signals from the completed card (req) to determine presentation mode
+        (STRUGGLING / NORMAL / FAST) via build_blended_analytics(). Pops one piece from
+        concepts_queue, generates a single card via build_next_card_prompt() + _chat(),
+        appends it to the cache, and returns metadata for NextCardResponse.
+
+        Returns card=None with has_more_concepts=False when the queue is exhausted.
+        """
+        import time as _time
+        from adaptive.adaptive_engine import load_student_history, load_wrong_option_pattern, build_blended_analytics
+        from adaptive.profile_builder import build_learning_profile
+        from adaptive.generation_profile import build_generation_profile
+        from adaptive.schemas import CardBehaviorSignals
+        from adaptive.prompt_builder import build_next_card_prompt
+        from adaptive.adaptive_engine import _clean_card_string_fields
+
+        _t0 = _time.monotonic()
+
+        # ── Step 1: Parse session cache ─────────────────────────────────────────
+        try:
+            _raw_cache = json.loads(session.presentation_text or "{}")
+            cached = _raw_cache if isinstance(_raw_cache, dict) else {}
+        except (json.JSONDecodeError, TypeError):
+            logger.exception(
+                "[per-card] cache_parse_failed: session_id=%s — returning has_more=False",
+                session.id,
+            )
+            return {
+                "session_id": str(session.id),
+                "card": None,
+                "has_more_concepts": False,
+                "current_mode": "NORMAL",
+                "concepts_covered_count": 0,
+                "concepts_total": 1,
+            }
+
+        concepts_queue = list(cached.get("concepts_queue", []))
+        concepts_covered = list(cached.get("concepts_covered", []))
+        all_sections_count = cached.get("concepts_total", 1)
+
+        # ── Step 2: Empty queue guard ────────────────────────────────────────────
+        if not concepts_queue:
+            logger.info(
+                "[per-card] queue_empty: session_id=%s covered=%d total=%d",
+                session.id, len(concepts_covered), all_sections_count,
+            )
+            return {
+                "session_id": str(session.id),
+                "card": None,
+                "has_more_concepts": False,
+                "current_mode": "NORMAL",
+                "concepts_covered_count": len(concepts_covered),
+                "concepts_total": all_sections_count,
+            }
+
+        # ── Step 3: Pop next content piece ───────────────────────────────────────
+        next_piece = concepts_queue.pop(0)
+
+        # ── Step 4: Load history + wrong-option pattern concurrently ─────────────
+        _history_default = {
+            "total_cards_completed": 0,
+            "avg_time_per_card": None,
+            "avg_wrong_attempts": None,
+            "avg_hints_per_card": None,
+            "sessions_last_7d": 0,
+            "section_count": 0,
+            "is_known_weak_concept": False,
+            "failed_concept_attempts": 0,
+            "trend_direction": "STABLE",
+            "trend_wrong_list": [],
+        }
+        wrong_option_pattern = None
+        try:
+            history, wrong_option_pattern = await asyncio.gather(
+                load_student_history(str(session.student_id), session.concept_id, db),
+                load_wrong_option_pattern(str(session.student_id), session.concept_id, db),
+            )
+        except Exception as exc:
+            logger.warning(
+                "[per-card] history_load_failed: student_id=%s — using defaults: %s",
+                session.student_id, exc,
+            )
+            history = _history_default
+
+        # ── Step 5: Fix Bug 4 — increment section_count locally ──────────────────
+        # This lets blend weights graduate within a session without a DB round-trip.
+        history["section_count"] = history.get("section_count", 0) + 1
+
+        # ── Step 6: Build blended analytics from live signals ────────────────────
+        _blended_score: float = 2.0
+        _generate_as: str = "NORMAL"
+        blended = None
+        card_profile = None
+        try:
+            current_signals = CardBehaviorSignals(
+                card_index=req.card_index,
+                time_on_card_sec=req.time_on_card_sec,
+                wrong_attempts=req.wrong_attempts,
+                hints_used=req.hints_used,
+                idle_triggers=getattr(req, "idle_triggers", 0),
+            )
+            blended, _blended_score, _generate_as = build_blended_analytics(
+                current_signals, history,
+                concept_id=session.concept_id,
+                student_id=str(session.student_id),
+            )
+            card_profile = build_learning_profile(blended, has_unmet_prereq=False)
+        except Exception as exc:
+            logger.warning(
+                "[per-card] blended_analytics_failed: student_id=%s — defaulting to NORMAL: %s",
+                session.student_id, exc,
+            )
+
+        if card_profile is None:
+            # Fall back to a minimal profile
+            from adaptive.schemas import AnalyticsSummary
+            card_profile = build_learning_profile(
+                AnalyticsSummary(
+                    student_id=str(session.student_id),
+                    concept_id=session.concept_id,
+                    time_spent_sec=120.0,
+                    expected_time_sec=120.0,
+                    attempts=1,
+                    wrong_attempts=0,
+                    hints_used=0,
+                    revisits=0,
+                    recent_dropoffs=0,
+                    skip_rate=0.0,
+                ),
+                has_unmet_prereq=False,
+            )
+
+        # ── Step 7: Resolve available images ─────────────────────────────────────
+        cached_images = cached.get("_images", [])
+        already_assigned = set(cached.get("assigned_image_indices", []))
+        available_images_with_idx = [
+            (i, img) for i, img in enumerate(cached_images) if i not in already_assigned
+        ]
+        available_images = [img for _, img in available_images_with_idx]
+        content_piece_images = available_images[:3]   # cap at 3 images per card
+        # Map: position in content_piece_images → original index in cached_images
+        _cp_to_cached_idx = {
+            pos: orig_idx
+            for pos, (orig_idx, _) in enumerate(available_images_with_idx[:3])
+        }
+
+        # ── Step 8: Build generation profile ─────────────────────────────────────
+        gen_profile = build_generation_profile(card_profile)
+
+        # ── Step 9: Build piece-scoped concept_detail ────────────────────────────
+        concept_detail_base = self._get_ksvc(session).get_concept_detail(session.concept_id) or {}
+        piece_concept_detail = {
+            **concept_detail_base,
+            "text": next_piece.get("text", ""),
+            "concept_title": next_piece.get("title", concept_detail_base.get("concept_title", "")),
+        }
+
+        # ── Step 10: Build prompts (Bug 6 fix — pass content_piece_images) ───────
+        language = getattr(student, "preferred_language", "en") or "en"
+        system_prompt, user_prompt = build_next_card_prompt(
+            concept_detail=piece_concept_detail,
+            learning_profile=card_profile,
+            gen_profile=gen_profile,
+            card_index=req.card_index,
+            history=history,
+            language=language,
+            wrong_option_pattern=wrong_option_pattern,
+            difficulty_bias=None,
+            generate_as=_generate_as,
+            blended_state_score=_blended_score,
+            content_piece_images=content_piece_images if content_piece_images else None,
+        )
+
+        # ── Step 11: Call LLM ──────────────────────────────────────────────────
+        raw = await self._chat(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            max_tokens=NEXT_CARD_MAX_TOKENS,
+            model="mini",
+            timeout=30.0,
+        )
+
+        # ── Step 12: Parse + validate card ────────────────────────────────────
+        cleaned = self._extract_json_block(raw)
+        cleaned = _fix_latex_backslashes(cleaned)
+
+        parsed: dict | None = None
+        for attempt_raw in (cleaned, _clean_salvage(cleaned)):
+            if attempt_raw is None:
+                continue
+            try:
+                result = json.loads(attempt_raw)
+                if isinstance(result, dict):
+                    parsed = result
+                    break
+            except json.JSONDecodeError:
+                pass
+
+        if parsed is None:
+            # Last resort: json_repair
+            try:
+                from json_repair import repair_json
+                parsed = json.loads(repair_json(cleaned))
+            except Exception:
+                pass
+
+        if parsed is None or not isinstance(parsed, dict):
+            raise ValueError(
+                f"[per-card] LLM output could not be parsed. Raw (first 300): {raw[:300]}"
+            )
+
+        parsed = _clean_card_string_fields(parsed)
+
+        # Normalise to LessonCard shape
+        card_position = len(cached.get("cards", []))
+        card_dict = _normalise_per_card(parsed, card_index=card_position)
+
+        # ── Step 13: Resolve image_indices from per-card LLM response ────────
+        new_assigned: set[int] = set()
+        image_indices = parsed.get("image_indices") or []
+        resolved_images = []
+        for idx in image_indices:
+            if 0 <= idx < len(content_piece_images):
+                img = dict(content_piece_images[idx])
+                img.setdefault("caption", img.get("description", ""))
+                resolved_images.append(img)
+                # Track the original cached_images index so it is not re-assigned
+                orig_idx = _cp_to_cached_idx.get(idx)
+                if orig_idx is not None:
+                    new_assigned.add(orig_idx)
+                break  # max 1 image per card
+        card_dict["images"] = resolved_images
+
+        # ── Step 14: Update cache and flush ──────────────────────────────────
+        cached["concepts_queue"] = concepts_queue
+        cached["concepts_covered"] = concepts_covered + [next_piece.get("title", "")]
+        cached_cards = list(cached.get("cards", []))
+        cached_cards.append(card_dict)
+        cached["cards"] = cached_cards
+        cached["assigned_image_indices"] = list(already_assigned | new_assigned)
+        session.presentation_text = json.dumps(cached)
+        await db.flush()
+
+        # ── Step 15: Optional — persist section_count increment to DB ────────
+        try:
+            from sqlalchemy import update as _sa_update
+            from db.models import Student as _Student
+            await db.execute(
+                _sa_update(_Student)
+                .where(_Student.id == session.student_id)
+                .values(section_count=_Student.section_count + 1)
+            )
+        except Exception:
+            logger.warning(
+                "[per-card] section_count_persist_failed: student_id=%s",
+                session.student_id,
+            )
+
+        # ── Step 16: Build and return result ─────────────────────────────────
+        current_mode = {
+            "STRUGGLING": "SLOW",
+            "NORMAL": "NORMAL",
+            "FAST": "FAST",
+        }.get(_generate_as, "NORMAL")
+
+        duration_ms = int((_time.monotonic() - _t0) * 1000)
+        logger.info(
+            "[per-card] generated: session_id=%s student_id=%s concept_id=%s "
+            "section_count=%d generate_as=%s duration_ms=%d remaining_queue=%d",
+            session.id, session.student_id, session.concept_id,
+            history.get("section_count", 0), _generate_as, duration_ms, len(concepts_queue),
+        )
+
+        return {
+            "session_id": str(session.id),
+            "card": card_dict,
+            "has_more_concepts": len(concepts_queue) > 0,
+            "current_mode": current_mode,
+            "concepts_covered_count": len(concepts_covered) + 1,
+            "concepts_total": all_sections_count,
         }
 
     async def complete_card_interaction(
@@ -1762,7 +2208,7 @@ class TeachingService:
                     system_prompt, section_user_prompt, max_tokens=text_driven_budget
                 )
                 generated_cards = data.get("cards", [])
-                # Stamp stable integer section index so sort is O(n) and text-free
+                # Stamp stable integer section index so sort is O(n) and text-free.
                 for card in generated_cards:
                     card["_section_index"] = idx
                 # Collect image filenames used in returned cards for tracking
@@ -1787,6 +2233,11 @@ class TeachingService:
         all_cards: list[dict] = []
         for _, cards in sorted(results, key=lambda x: x[0]):
             all_cards.extend(cards)
+        # Secondary sort: within the same section index, enforce pedagogical card order
+        all_cards.sort(key=lambda c: (
+            c.get("_section_index", len(sections)),
+            _CARD_TYPE_ORDER.get(c.get("card_type") or "", 5),
+        ))
         return all_cards
 
     @staticmethod
@@ -2133,7 +2584,32 @@ class TeachingService:
 
     @staticmethod
     def _parse_sub_sections(text: str) -> list[dict]:
-        """Split concept text by ## headers into sub-sections."""
+        """Split concept text by ## headers into sub-sections.
+
+        Normalisation passes run before the ## split loop to handle the three
+        header formats found across the supported OpenStax books:
+          - prealgebra:           ## Title  (already markdown — no transform needed)
+          - college_algebra:      \\section*{Title}  →  ## Title  (Pass 1)
+          - elementary_algebra,
+            intermediate_algebra,
+            algebra_1:            EXAMPLE 1.5 / TRY IT / SOLUTION  →  ## …  (Pass 2)
+        """
+        # Pass 1 — LaTeX \section / \subsection  →  ## Title
+        # Guard avoids regex cost on books that never contain backslash-section.
+        if r'\section' in text:
+            text = re.sub(r'\\(?:sub)?section\*?\{([^}]+)\}', r'## \1', text)
+
+        # Pass 2 — bare ALLCAPS headers (OpenStax elementary/intermediate/algebra_1)
+        lines = text.split('\n')
+        normalised = []
+        for line in lines:
+            stripped = line.strip()
+            if _ALLCAPS_SECTION_RE.fullmatch(stripped) and not stripped.startswith('## '):
+                normalised.append(f'## {stripped}')
+            else:
+                normalised.append(line)
+        text = '\n'.join(normalised)
+
         sections = []
         current_title = ""
         current_lines = []
@@ -2160,6 +2636,44 @@ class TeachingService:
 
         # Filter out empty sections
         sections = [s for s in sections if s["text"]]
+
+        # Pass 3 — Paragraph-level split for large non-example sections.
+        # Threshold: 800 chars. EXAMPLE / SOLUTION / TRY_IT stay intact (worked examples
+        # must not be broken across cards). All others are split at blank-line boundaries
+        # so each sub-section fits within NEXT_CARD_MAX_TOKENS without truncation.
+        _SPLIT_CHAR_THRESHOLD = 800
+        _NO_SPLIT_TYPES = {"EXAMPLE", "SOLUTION", "TRY_IT"}
+        expanded: list[dict] = []
+        for sec in sections:
+            stype = (sec.get("section_type") or "").upper()
+            if stype in _NO_SPLIT_TYPES or len(sec["text"]) <= _SPLIT_CHAR_THRESHOLD:
+                expanded.append(sec)
+                continue
+            paragraphs = [p.strip() for p in re.split(r'\n{2,}', sec["text"]) if p.strip()]
+            if len(paragraphs) < 2:
+                expanded.append(sec)
+                continue
+            # Pack paragraphs into budget-sized chunks
+            chunks: list[list[str]] = []
+            current: list[str] = []
+            current_len = 0
+            for para in paragraphs:
+                if current_len + len(para) > _SPLIT_CHAR_THRESHOLD and current:
+                    chunks.append(current)
+                    current = []
+                    current_len = 0
+                current.append(para)
+                current_len += len(para)
+            if current:
+                chunks.append(current)
+            for k, chunk in enumerate(chunks):
+                label = sec["title"] if k == 0 else f"{sec['title']} (Part {k + 1})"
+                expanded.append({
+                    "title": label,
+                    "text": "\n\n".join(chunk),
+                    "section_type": sec.get("section_type"),
+                })
+        sections = expanded
 
         return sections
 
