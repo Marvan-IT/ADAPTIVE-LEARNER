@@ -5,7 +5,6 @@ import rehypeKatex from "rehype-katex";
 import { useSession } from "../../context/SessionContext";
 import AssistantPanel from "./AssistantPanel";
 import AdaptiveSignalTracker from "./AdaptiveSignalTracker";
-import ConceptImage from "./ConceptImage";
 import { useTranslation } from "react-i18next";
 import { trackEvent } from "../../utils/analytics";
 import { CardSkeleton } from "../ui/Skeleton";
@@ -20,8 +19,7 @@ import {
 } from "lucide-react";
 import { useAdaptiveStore } from "../../store/adaptiveStore";
 import { updateStudentProgress } from "../../api/students";
-import { regenerateMCQ } from "../../api/sessions";
-import MathDiagram from "./MathDiagram";
+import { regenerateMCQ, submitExam } from "../../api/sessions";
 import { useStudent } from "../../context/StudentContext";
 import XPBurst from "../game/XPBurst";
 import StreakMeter from "../game/StreakMeter";
@@ -43,43 +41,6 @@ function DifficultyBadge({ difficulty }) {
         </span>
       ))}
     </div>
-  );
-}
-
-/* ─── Card type → visual metadata ─── */
-const CARD_TYPE_META = {
-  TEACH:       { badge: null,            headerAccent: null },
-  EXAMPLE:     { badge: "Example",       headerAccent: null,      badgeColor: "#f59e0b", badgeBg: "rgba(245,158,11,0.12)" },
-  VISUAL:      { badge: "Visual",        headerAccent: null,      badgeColor: "#06b6d4", badgeBg: "rgba(6,182,212,0.12)" },
-  QUESTION:    { badge: null,            headerAccent: null },
-  APPLICATION: { badge: "Application",  headerAccent: "#16a34a", badgeColor: "#16a34a", badgeBg: "rgba(22,163,74,0.12)" },
-  EXERCISE:    { badge: "Practice",      headerAccent: "#7c3aed", badgeColor: "#7c3aed", badgeBg: "rgba(124,58,237,0.12)" },
-  RECAP:       { badge: "Recap",         headerAccent: "#0d9488", badgeColor: "#0d9488", badgeBg: "rgba(13,148,136,0.12)" },
-  FUN:         { badge: "Fun Fact",      headerAccent: "#7c3aed", badgeColor: "#7c3aed", badgeBg: "rgba(124,58,237,0.12)" },
-  CHECKIN:     { badge: "Check-In",      headerAccent: null,      badgeColor: "#6366f1", badgeBg: "rgba(99,102,241,0.12)" },
-};
-
-/* ─── Card type badge pill ─── */
-function CardTypeBadge({ cardType }) {
-  const meta = CARD_TYPE_META[cardType];
-  if (!meta || !meta.badge) return null;
-  const emojiMap = { Example: "📝", Visual: "🖼️", Recap: "📋", "Fun Fact": "🌟", "Check-In": "💬", Application: "🌍", Practice: "✏️" };
-  return (
-    <span style={{
-      display: "inline-flex",
-      alignItems: "center",
-      gap: "0.25rem",
-      padding: "0.2rem 0.6rem",
-      borderRadius: "9999px",
-      fontSize: "0.72rem",
-      fontWeight: 700,
-      color: meta.badgeColor || "var(--color-primary)",
-      backgroundColor: meta.badgeBg || "var(--color-primary-light)",
-      border: `1px solid ${meta.badgeColor || "var(--color-primary)"}`,
-      flexShrink: 0,
-    }}>
-      {emojiMap[meta.badge] || ""} {meta.badge}
-    </span>
   );
 }
 
@@ -166,11 +127,31 @@ export default function CardLearningView({ remediationMode = false }) {
     performanceVsBaseline,
     learningProfileSummary,
     adaptationApplied,
-    difficultyBias,
-    setDifficultyBias,
     hasMoreConcepts,
     conceptsTotal,
     conceptsCoveredCount,
+    currentChunkIndex,
+    totalChunks,
+    nextCardInFlight,
+    // Chunk navigation
+    chunkList,
+    chunkIndex,
+    nextChunkInFlight,
+    nextChunkCards,
+    goToNextChunk,
+    startExamFlow,
+    submitExamAnswers,
+    retryExamFlow,
+    // Exam state
+    examPhase,
+    examQuestions,
+    examAttempt,
+    examScores,
+    // Chunk completion
+    completeChunkAction,
+    currentChunkMode,
+    modeJustChanged,
+    dispatch,
   } = useSession();
 
   const { student } = useStudent();
@@ -181,16 +162,18 @@ export default function CardLearningView({ remediationMode = false }) {
   const updateMode = useAdaptiveStore((s) => s.updateMode);
 
   const card = cards[currentCardIndex];
-  // New schema has no card_type — default to "TEACH". CHECKIN detected by card_type OR by having options[] without a question.
-  const isCheckinCard = card?.card_type === "CHECKIN" || (!card?.question && !card?.quick_check && Array.isArray(card?.options));
-  const cardType = isCheckinCard ? "CHECKIN" : (card?.card_type || "TEACH");
-  const typeMeta = CARD_TYPE_META[cardType] || CARD_TYPE_META.TEACH;
+  // New schema: cards are discriminated by whether they have a question, not by card_type.
+  const hasQuestion = !!(card?.question || card?.quick_check || card?.questions?.length);
+  const cardType = hasQuestion ? "TEACH" : "VISUAL";
 
-  const MIN_CARDS_BEFORE_FINISH = 4;
   const allSectionsDone = !hasMoreConcepts;
-  const isLastCard = currentCardIndex === cards.length - 1
-    && currentCardIndex >= MIN_CARDS_BEFORE_FINISH - 1
-    && allSectionsDone;
+  const isLastChunk = chunkList.length === 0 || chunkIndex >= chunkList.length - 1;
+  const isLastCard = currentCardIndex === cards.length - 1 && allSectionsDone && isLastChunk;
+  const isLastCardOfNonFinalChunk = currentCardIndex === cards.length - 1 && chunkList.length > 1 && !isLastChunk;
+
+  // Chunk MCQ tracking — correct/total counts for completeChunk call
+  const [chunkCorrect, setChunkCorrect] = React.useState(0);
+  const [chunkTotal, setChunkTotal] = React.useState(0);
 
   // Per-card question state: { mcqIdx, mcqCorrect, mcqFeedback, quickCheckDone, checkinDone }
   const [cardStates, setCardStates] = useState({});
@@ -198,6 +181,39 @@ export default function CardLearningView({ remediationMode = false }) {
 
   // Assistant panel reveal: hidden until first answer submitted
   const [showAssistant, setShowAssistant] = useState(false);
+
+  // Exam local state
+  const [examAnswers, setExamAnswers] = useState([]);
+  const [currentExamQ, setCurrentExamQ] = useState(0);
+
+  const updateExamAnswer = useCallback((idx, value) => {
+    setExamAnswers((prev) => {
+      const next = [...prev];
+      next[idx] = value;
+      return next;
+    });
+  }, []);
+
+  const handleExamNext = useCallback(async () => {
+    if (currentExamQ < examQuestions.length - 1) {
+      setCurrentExamQ((q) => q + 1);
+    } else {
+      // Last question — submit all answers
+      const answers = examQuestions.map((q, i) => ({
+        question_index: q.question_index,
+        answer_text: examAnswers[i] || "",
+      }));
+      await submitExamAnswers(answers);
+    }
+  }, [currentExamQ, examQuestions, examAnswers, submitExamAnswers]);
+
+  const handleRetry = useCallback(async (retryType) => {
+    const failedChunkIds = examScores?.failed_chunks?.map((c) => c.chunk_id) ?? [];
+    await retryExamFlow(retryType, failedChunkIds);
+    // After retry setup, reset exam local state for a fresh attempt
+    setExamAnswers([]);
+    setCurrentExamQ(0);
+  }, [examScores, retryExamFlow]);
 
   // Per-card signal tracking state (for AdaptiveSignalTracker display)
   const [wrongAttemptsDisplay, setWrongAttemptsDisplay] = useState(0);
@@ -252,10 +268,10 @@ export default function CardLearningView({ remediationMode = false }) {
   const cs = getCardState(currentCardIndex);
 
   // Unified question source: prefer replacementMcq (generated after wrong answer),
-  // then new schema card.question, then old card.quick_check.
+  // then new schema card.question.
   // Normalize to a consistent shape: { question, options, correct_index, explanation }
   const mcq = (() => {
-    const raw = cs.replacementMcq || card?.question || card?.quick_check || null;
+    const raw = cs.replacementMcq || card?.question || null;
     if (!raw) return null;
     // New schema uses "text" field; old schema uses "question" field
     return raw.text ? { ...raw, question: raw.text } : raw;
@@ -277,7 +293,7 @@ export default function CardLearningView({ remediationMode = false }) {
     for (let i = 0; i < seenCount; i++) {
       const c = cards[i];
       if (!c) continue;
-      if (c.question || c.quick_check || c.questions?.length > 0) {
+      if (c.question) {
         withMCQ++;
         const csi = cardStates[i] || {};
         if (csi.quickCheckDone || csi.mcqCorrect) correct++;
@@ -286,40 +302,21 @@ export default function CardLearningView({ remediationMode = false }) {
     return { withMCQ, correct, score: withMCQ > 0 ? correct / withMCQ : 0 };
   }, [cards, cardStates, currentCardIndex]);
 
-  // canProceed logic varies by card type
+  // canProceed: content-only cards auto-proceed; question cards require a correct answer
   const canProceed = useMemo(() => {
     if (!card) return false;
-    switch (cardType) {
-      case "VISUAL":
-        // No questions — always ready to proceed
-        return true;
-      case "FUN":
-        // Requires only a "Got it" tap (tracked via checkinDone)
-        return cs.checkinDone;
-      case "CHECKIN":
-        // Any mood selection enables Next
-        return cs.checkinDone;
-      case "TEACH":
-      case "EXAMPLE": {
-        // New schema: card.question must be answered; old schema: card.quick_check
-        const qcDone = !mcq || cs.quickCheckDone;
-        // Old schema may also have questions[] pool
-        const mcqDone = mcqPool.length === 0 || cs.mcqCorrect;
-        return qcDone && mcqDone;
-      }
-      default:
-        // QUESTION, RECAP, etc. — new schema: card.question must be answered; old: mcqPool
-        if (mcq && mcqPool.length === 0) return cs.quickCheckDone;
-        return mcqPool.length === 0 || cs.mcqCorrect;
-    }
-  }, [card, cardType, cs, mcqPool.length, mcq]);
+    if (!hasQuestion) return true; // content card — no question to answer, auto-proceed
+    // MCQ card — requires answer
+    const qcDone = !mcq || cs.quickCheckDone;
+    const mcqDone = mcqPool.length === 0 || cs.mcqCorrect;
+    return qcDone && mcqDone;
+  }, [card, hasQuestion, mcq, mcqPool.length, cs]);
 
   // Track card viewed on card change
   useEffect(() => {
     if (card) {
       trackEvent("card_viewed", {
         card_index: currentCardIndex,
-        card_type: card.card_type,
         card_title: card.title,
         concept_id: session?.concept_id,
         concept_title: conceptTitle,
@@ -333,6 +330,13 @@ export default function CardLearningView({ remediationMode = false }) {
       if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
     };
   }, []);
+
+  // Mode change acknowledgment — clear the flag after noting the change
+  useEffect(() => {
+    if (modeJustChanged && dispatch) {
+      dispatch({ type: "MODE_CHANGE_ACKNOWLEDGED" });
+    }
+  }, [modeJustChanged, dispatch]);
 
   const updateCardState = useCallback(
     (idx, updates) => {
@@ -351,6 +355,10 @@ export default function CardLearningView({ remediationMode = false }) {
       if (!mcq) return;
       const correct = optionIndex === mcq.correct_index;
       trackEvent("question_answered", { question_type: "mcq", correct, card_index: currentCardIndex, concept_id: session?.concept_id, concept_title: conceptTitle });
+
+      // Track for chunk completion scoring
+      setChunkTotal((n) => n + 1);
+      if (correct) setChunkCorrect((n) => n + 1);
 
       if (correct) {
         awardXP(10);
@@ -395,7 +403,6 @@ export default function CardLearningView({ remediationMode = false }) {
               selectedWrongOption: selectedWrongOptionRef.current ?? null,
               hintsUsed:           hintsUsedRef.current,
               idleTriggers:        idleTriggerCount,
-              difficultyBias:      null,
               // Anti-loop: don't request recovery for a recovery card
               reExplainCardTitle:  !card?.is_recovery ? (card?.title ?? null) : null,
               wrongQuestion:       mcq?.question || null,
@@ -403,19 +410,7 @@ export default function CardLearningView({ remediationMode = false }) {
             });
             return;
           }
-          // First wrong — use pre-generated question2 if available (no API call)
-          if (card.question2) {
-            setCardStates((prev) => ({
-              ...prev,
-              [currentCardIndex]: {
-                ...(prev[currentCardIndex] || getCardState(currentCardIndex)),
-                mcqFeedback: null,
-                replacementMcq: card.question2,
-              },
-            }));
-            return;
-          }
-          // Fallback for older cached cards without question2 — call regenerate API
+          // First wrong — call regenerate API for a new question
           try {
             const { data } = await regenerateMCQ(session.id, {
               card_content: card.content,
@@ -511,6 +506,18 @@ export default function CardLearningView({ remediationMode = false }) {
       clearTimeout(feedbackTimerRef.current);
       feedbackTimerRef.current = null;
     }
+
+    // Last card of a chunk — record chunk completion before advancing
+    const isLastCardOfChunk = currentCardIndex === cards.length - 1 && chunkList.length > 0;
+    if (isLastCardOfChunk) {
+      const chunkId = cards[currentCardIndex]?.chunk_id;
+      if (chunkId && completeChunkAction) {
+        completeChunkAction(chunkId, chunkCorrect, chunkTotal, currentChunkMode || "NORMAL");
+        setChunkCorrect(0);
+        setChunkTotal(0);
+      }
+    }
+
     await goToNextCard({
       cardIndex:           currentCardIndex,
       timeOnCardSec:       cardStartTimeRef.current !== null ? (performance.now() - cardStartTimeRef.current) / 1000 : 0,
@@ -518,11 +525,9 @@ export default function CardLearningView({ remediationMode = false }) {
       selectedWrongOption: selectedWrongOptionRef.current,
       hintsUsed:           hintsUsedRef.current,
       idleTriggers:        idleTriggerCount,
-      difficultyBias:      difficultyBias ?? null,
     });
-    setDifficultyBias(null);
     setShowAssistant(false);
-  }, [currentCardIndex, idleTriggerCount, goToNextCard, difficultyBias, setDifficultyBias]);
+  }, [currentCardIndex, cards, chunkList, chunkCorrect, chunkTotal, currentChunkMode, completeChunkAction, idleTriggerCount, goToNextCard]);
 
   // Handle finish button — in remediation mode, go to recheck instead of finishCards
   const handleFinish = useCallback(() => {
@@ -566,6 +571,174 @@ export default function CardLearningView({ remediationMode = false }) {
     );
   }
 
+  // ── Exam phase: render exam UI instead of cards ──────────────────────────────
+  if (examPhase === "exam" && examQuestions.length > 0) {
+    const currentQ = examQuestions[currentExamQ];
+    return (
+      <div style={{ maxWidth: 700, margin: "0 auto", padding: "2rem" }}>
+        <div style={{ marginBottom: "0.5rem", color: "var(--text-secondary, var(--color-text-muted))", fontSize: "0.85rem" }}>
+          {t("exam.question")} {currentExamQ + 1} / {examQuestions.length}
+        </div>
+        {currentQ?.chunk_heading && (
+          <h3 style={{ margin: "0 0 0.75rem", fontSize: "1rem", fontWeight: 700, color: "var(--color-text)" }}>
+            {currentQ.chunk_heading}
+          </h3>
+        )}
+        <p style={{ fontSize: "1.05rem", lineHeight: 1.6, color: "var(--color-text)", marginBottom: "1rem" }}>
+          {currentQ?.question_text}
+        </p>
+        <label
+          htmlFor={`exam-answer-${currentExamQ}`}
+          style={{ display: "block", fontWeight: 600, fontSize: "0.9rem", marginBottom: "0.4rem", color: "var(--color-text)" }}
+        >
+          {t("exam.yourAnswer")}
+        </label>
+        <textarea
+          id={`exam-answer-${currentExamQ}`}
+          value={examAnswers[currentExamQ] || ""}
+          onChange={(e) => updateExamAnswer(currentExamQ, e.target.value)}
+          placeholder={t("exam.yourAnswer")}
+          rows={4}
+          style={{
+            width: "100%",
+            borderRadius: 8,
+            padding: "0.75rem",
+            fontSize: "1rem",
+            border: "2px solid var(--color-border)",
+            backgroundColor: "var(--color-surface)",
+            color: "var(--color-text)",
+            fontFamily: "inherit",
+            boxSizing: "border-box",
+            resize: "vertical",
+          }}
+        />
+        <div style={{ marginTop: "1rem", display: "flex", justifyContent: "flex-end" }}>
+          <button
+            onClick={handleExamNext}
+            disabled={!examAnswers[currentExamQ]?.trim()}
+            style={{
+              padding: "0.7rem 1.5rem",
+              borderRadius: 12,
+              border: "none",
+              backgroundColor: examAnswers[currentExamQ]?.trim() ? "var(--color-primary)" : "var(--color-border)",
+              color: examAnswers[currentExamQ]?.trim() ? "#fff" : "var(--color-text-muted)",
+              fontWeight: 700,
+              fontSize: "0.95rem",
+              cursor: examAnswers[currentExamQ]?.trim() ? "pointer" : "not-allowed",
+              fontFamily: "inherit",
+            }}
+          >
+            {currentExamQ < examQuestions.length - 1 ? t("exam.next") : t("exam.submit")}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (examPhase === "submitted" && examScores) {
+    return (
+      <div style={{ maxWidth: 700, margin: "0 auto", padding: "2rem", textAlign: "center" }}>
+        <div style={{ fontSize: "2.5rem", color: examScores.passed ? "#16a34a" : "#dc2626", marginBottom: "0.5rem" }}>
+          {examScores.passed ? "✓" : "✗"}
+        </div>
+        <h2 style={{ fontSize: "1.5rem", fontWeight: 800, color: "var(--color-text)", margin: "0 0 0.5rem" }}>
+          {examScores.passed ? t("exam.passed") : t("exam.failed")}
+        </h2>
+        <p style={{ color: "var(--color-text-muted)", fontSize: "1rem", marginBottom: "1.5rem" }}>
+          {t("exam.score")}: {examScores.total_correct}/{examScores.total_questions} ({Math.round(examScores.score * 100)}%)
+        </p>
+
+        {!examScores.passed && (
+          <>
+            {examScores.failed_chunks?.length > 0 && (
+              <>
+                <h4 style={{ fontWeight: 700, color: "var(--color-text)", marginBottom: "0.5rem" }}>
+                  {t("exam.failedSections")}
+                </h4>
+                <ul style={{ listStyle: "none", padding: 0, marginBottom: "1.5rem" }}>
+                  {examScores.failed_chunks.map((c) => (
+                    <li key={c.chunk_id} style={{
+                      padding: "0.4rem 0.75rem",
+                      marginBottom: "0.35rem",
+                      borderRadius: 8,
+                      backgroundColor: "rgba(239,68,68,0.07)",
+                      border: "1px solid rgba(239,68,68,0.2)",
+                      color: "var(--color-text)",
+                      fontSize: "0.9rem",
+                    }}>
+                      {c.heading}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+            <div style={{ display: "flex", gap: "1rem", justifyContent: "center", marginTop: "1rem", flexWrap: "wrap" }}>
+              <button
+                onClick={() => handleRetry("targeted")}
+                disabled={examAttempt >= 3}
+                style={{
+                  padding: "0.7rem 1.4rem",
+                  borderRadius: 12,
+                  border: "none",
+                  backgroundColor: examAttempt >= 3 ? "var(--color-border)" : "var(--color-primary)",
+                  color: examAttempt >= 3 ? "var(--color-text-muted)" : "#fff",
+                  fontWeight: 700,
+                  fontSize: "0.9rem",
+                  cursor: examAttempt >= 3 ? "not-allowed" : "pointer",
+                  fontFamily: "inherit",
+                }}
+              >
+                {t("exam.reviewFailed")}
+              </button>
+              <button
+                onClick={() => handleRetry("full_redo")}
+                style={{
+                  padding: "0.7rem 1.4rem",
+                  borderRadius: 12,
+                  border: "2px solid var(--color-border)",
+                  backgroundColor: "var(--color-surface)",
+                  color: "var(--color-text)",
+                  fontWeight: 700,
+                  fontSize: "0.9rem",
+                  cursor: "pointer",
+                  fontFamily: "inherit",
+                }}
+              >
+                {t("exam.startOver")}
+              </button>
+            </div>
+            {examAttempt >= 3 && (
+              <p style={{ color: "var(--color-text-muted)", fontSize: "0.85rem", marginTop: "1rem" }}>
+                {t("exam.maxAttemptsReached")}
+              </p>
+            )}
+          </>
+        )}
+
+        {examScores.passed && (
+          <button
+            onClick={() => finishCards(null)}
+            style={{
+              padding: "0.7rem 1.8rem",
+              borderRadius: 12,
+              border: "none",
+              backgroundColor: "var(--color-success)",
+              color: "#fff",
+              fontWeight: 700,
+              fontSize: "1rem",
+              cursor: "pointer",
+              fontFamily: "inherit",
+              boxShadow: "0 4px 12px rgba(34,197,94,0.3)",
+              marginTop: "0.5rem",
+            }}
+          >
+            {t("exam.continue")}
+          </button>
+        )}
+      </div>
+    );
+  }
+
   if (!card) {
     if (cards.length === 0) {
       return (
@@ -578,7 +751,7 @@ export default function CardLearningView({ remediationMode = false }) {
           gap: "1rem",
         }}>
           <p style={{ color: "var(--color-text-muted)", fontSize: "1rem" }}>
-            {loading ? t("learning.generatingCards") : t("learning.noCardsError")}
+            {(loading || nextCardInFlight) ? t("learning.generatingCards") : t("learning.noCardsError")}
           </p>
         </div>
       );
@@ -587,11 +760,8 @@ export default function CardLearningView({ remediationMode = false }) {
     return null;
   }
 
-  // Build header gradient — override accent color for certain card types
-  const headerAccent = typeMeta.headerAccent;
-  const headerGradient = headerAccent
-    ? `linear-gradient(135deg, ${headerAccent}, ${headerAccent}cc)`
-    : "linear-gradient(135deg, var(--color-primary), var(--color-accent))";
+  // Build header gradient — always use the primary/accent gradient in the new schema
+  const headerGradient = "linear-gradient(135deg, var(--color-primary), var(--color-accent))";
 
   return (
     <div className="flex gap-6 items-start">
@@ -599,6 +769,33 @@ export default function CardLearningView({ remediationMode = false }) {
       <div className="flex-1 min-w-0 transition-all duration-500">
         {/* Segmented progress bar */}
         <ProgressDots cards={cards} cardStates={cardStates} currentCardIndex={currentCardIndex} />
+
+        {/* Chunk (section) progress indicator — new chunk flow */}
+        {chunkList.length > 1 && (
+          <div style={{ textAlign: "center", fontSize: "0.75rem", color: "var(--color-text-muted, #6b7280)", marginBottom: "0.5rem" }}>
+            {t("chunk.progress", { current: chunkIndex + 1, total: chunkList.length })}
+          </div>
+        )}
+
+        {/* Legacy chunk progress bar — old totalChunks field */}
+        {totalChunks > 0 && chunkList.length === 0 && (
+          <div style={{ marginBottom: "12px" }}>
+            <div style={{ fontSize: "0.75rem", color: "#888", marginBottom: "4px" }}>
+              {t("chunk.progress", { current: currentChunkIndex + 1, total: totalChunks })}
+            </div>
+            <div style={{ height: "4px", background: "#e5e7eb", borderRadius: "2px" }}>
+              <div
+                style={{
+                  height: "100%",
+                  background: "#6366f1",
+                  borderRadius: "2px",
+                  width: `${((currentChunkIndex + 1) / totalChunks) * 100}%`,
+                  transition: "width 0.3s ease",
+                }}
+              />
+            </div>
+          </div>
+        )}
 
         {/* Remediation mode banner */}
         {remediationMode && <RemediationBanner />}
@@ -658,9 +855,8 @@ export default function CardLearningView({ remediationMode = false }) {
                 {conceptTitle} — Card {currentCardIndex + 1}
               </div>
             </div>
-            {/* Card type badge + game HUD */}
+            {/* Game HUD */}
             <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", flexShrink: 0 }}>
-              <CardTypeBadge cardType={cardType} />
               <StreakMeter compact />
               <AdaptiveModeIndicator compact />
               {card.difficulty != null && (
@@ -671,42 +867,35 @@ export default function CardLearningView({ remediationMode = false }) {
 
           {/* Card Body */}
           <div style={{ padding: "1.5rem 1.75rem" }}>
-            {/* VISUAL card: show images prominently at top, content as caption */}
-            {cardType === "VISUAL" ? (
-              (card?.images?.filter(img => img?.url)?.length > 0 || card?.image_indices?.length > 0) ? (
-                <>
-                  {/* Images first — block-level for VISUAL cards */}
-                  {card.images?.filter((img) => img.url).map((img, i) => (
-                    <ConceptImage key={img.url} img={img} maxWidth="560px" />
-                  ))}
-                  {/* image_indices fallback — pick from all session card images */}
-                  {(!card.images || card.images.length === 0) && card.image_indices?.length > 0 && (
-                    <SessionImagesByIndex indices={card.image_indices} cards={cards} />
-                  )}
-                  {/* Content as caption */}
-                  <div className="markdown-content" style={{
-                    marginTop: "0.75rem",
-                    padding: "0.75rem 1rem",
-                    borderRadius: "var(--radius-md)",
-                    backgroundColor: "var(--color-bg)",
-                    border: "1px solid var(--color-border)",
-                    fontSize: "0.9rem",
-                    color: "var(--color-text-muted)",
-                  }}>
-                    {renderContentWithInlineImages(card.content, card.images)}
-                  </div>
-                </>
-              ) : (
-                // No images available — render as standard text card
-                <div className="markdown-content" style={{ padding: '16px' }}>
-                  {renderContentWithInlineImages(card.content, card.images)}
-                </div>
-              )
-            ) : (
-              <>
-                {/* Content with inline [IMAGE:N] markers rendered as ConceptImage */}
+            {/* Recovery card indicator */}
+            {card?.is_recovery && (
+              <div style={{ fontSize: "0.8rem", color: "#f59e0b", marginBottom: "8px", fontWeight: 600 }}>
+                &#8635; Let's approach this differently
+              </div>
+            )}
+
+            {/* Direct image_url rendering — new schema */}
+            {card?.image_url && (
+              <div style={{ margin: "16px 0", textAlign: "center" }}>
+                <img
+                  src={card.image_url}
+                  alt={card.caption || "Diagram"}
+                  style={{ maxWidth: "100%", maxHeight: "400px", borderRadius: "8px", objectFit: "contain" }}
+                />
+                {card.caption && (
+                  <p style={{ fontSize: "0.85rem", color: "#666", marginTop: "6px", fontStyle: "italic" }}>
+                    {card.caption}
+                  </p>
+                )}
+              </div>
+            )}
+
+            <>
+                {/* Card content — markdown with math support */}
                 <div className="markdown-content">
-                  {renderContentWithInlineImages(card.content, card.images)}
+                  <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]} skipHtml={true}>
+                    {card.content}
+                  </ReactMarkdown>
                 </div>
 
                 {/* Unified MCQ block — new schema: card.question; old schema: card.quick_check fallback */}
@@ -776,7 +965,6 @@ export default function CardLearningView({ remediationMode = false }) {
                   </div>
                 )}
               </>
-            )}
           </div>
         </div>
 
@@ -821,54 +1009,19 @@ export default function CardLearningView({ remediationMode = false }) {
           </div>
         )}
 
-        {/* Too Easy / Too Hard difficulty bias buttons */}
-        {currentCardIndex > 0 && (
-          <div className="flex gap-2 mt-3">
-            <button
-              onClick={() => setDifficultyBias(difficultyBias === "TOO_EASY" ? null : "TOO_EASY")}
-              style={{
-                padding: "0.375rem 0.75rem",
-                fontSize: "0.75rem",
-                borderRadius: "var(--radius-full)",
-                border: `1.5px solid ${difficultyBias === "TOO_EASY" ? "var(--color-primary)" : "var(--color-border)"}`,
-                backgroundColor: difficultyBias === "TOO_EASY" ? "var(--color-primary)" : "transparent",
-                color: difficultyBias === "TOO_EASY" ? "#fff" : "var(--color-text-muted)",
-                cursor: "pointer",
-                fontFamily: "inherit",
-                fontWeight: 600,
-                transition: "all var(--motion-fast)",
-              }}
-            >
-              {t("learning.tooEasy")}
-            </button>
-            <button
-              onClick={() => setDifficultyBias(difficultyBias === "TOO_HARD" ? null : "TOO_HARD")}
-              style={{
-                padding: "0.375rem 0.75rem",
-                fontSize: "0.75rem",
-                borderRadius: "var(--radius-full)",
-                border: `1.5px solid ${difficultyBias === "TOO_HARD" ? "#ef4444" : "var(--color-border)"}`,
-                backgroundColor: difficultyBias === "TOO_HARD" ? "#ef4444" : "transparent",
-                color: difficultyBias === "TOO_HARD" ? "#fff" : "var(--color-text-muted)",
-                cursor: "pointer",
-                fontFamily: "inherit",
-                fontWeight: 600,
-                transition: "all var(--motion-fast)",
-              }}
-            >
-              {t("learning.tooHard")}
-            </button>
-          </div>
-        )}
-
         <NavButtons
           currentCardIndex={currentCardIndex}
           maxReachedIndex={maxReachedIndex}
           isLastCard={isLastCard}
+          isLastCardOfNonFinalChunk={isLastCardOfNonFinalChunk}
           canProceed={canProceed}
           loading={loading}
+          nextChunkInFlight={nextChunkInFlight}
+          nextChunkCards={nextChunkCards}
           onPrev={goToPrevCard}
           onNext={handleNextCard}
+          onNextChunk={goToNextChunk}
+          onStartExam={startExamFlow}
           onFinish={handleFinish}
           remediationMode={remediationMode}
           t={t}
@@ -898,32 +1051,6 @@ export default function CardLearningView({ remediationMode = false }) {
   );
 }
 
-/* ─── Inline [IMAGE:N] and [MATH_DIAGRAM:spec] renderer ─── */
-function renderContentWithInlineImages(content, images) {
-  if (!content) return null;
-  // Split on both marker types; captures land at odd indices
-  const parts = content.split(/(\[IMAGE:\d+\]|\[MATH_DIAGRAM:[^\]]+\])/);
-  return parts.map((part, i) => {
-    if (i % 2 === 1) {
-      const imageMatch = part.match(/\[IMAGE:(\d+)\]/);
-      if (imageMatch) {
-        const imgIdx = parseInt(imageMatch[1], 10);
-        const img = images?.[imgIdx];
-        return img ? <ConceptImage key={`img-${imgIdx}`} img={img} maxWidth="500px" /> : null;
-      }
-      const mathMatch = part.match(/\[MATH_DIAGRAM:([^\]]+)\]/);
-      if (mathMatch) {
-        return <MathDiagram key={i} spec={mathMatch[1]} />;
-      }
-      return null;
-    }
-    return part ? (
-      <ReactMarkdown key={i} remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]} skipHtml={true}>
-        {part}
-      </ReactMarkdown>
-    ) : null;
-  });
-}
 
 /* ─── Segmented progress bar (extracted for reuse) ─── */
 function ProgressDots({ cards, cardStates, currentCardIndex }) {
@@ -989,7 +1116,17 @@ function RemediationBanner() {
 }
 
 /* ─── Nav buttons (extracted to avoid duplication between card types) ─── */
-function NavButtons({ currentCardIndex, maxReachedIndex, isLastCard, canProceed, loading, onPrev, onNext, onFinish, remediationMode, t }) {
+function NavButtons({
+  currentCardIndex, maxReachedIndex, isLastCard, isLastCardOfNonFinalChunk,
+  canProceed, loading, nextChunkInFlight, nextChunkCards,
+  onPrev, onNext, onNextChunk, onStartExam, onFinish, remediationMode, t,
+}) {
+  // Determine which primary action to show on the right side
+  const showNextSection = isLastCardOfNonFinalChunk && canProceed;
+  const showStartExam = isLastCard && canProceed && !remediationMode;
+  const showFinish = isLastCard && canProceed && remediationMode;
+  const showNextCard = !showNextSection && !showStartExam && !showFinish;
+
   return (
     <div style={{
       display: "flex", justifyContent: "space-between", alignItems: "center",
@@ -1013,7 +1150,62 @@ function NavButtons({ currentCardIndex, maxReachedIndex, isLastCard, canProceed,
         <ChevronLeft size={18} /> {t("learning.previous")}
       </button>
 
-      {isLastCard && canProceed ? (
+      {showNextSection && (
+        <button
+          onClick={onNextChunk}
+          disabled={nextChunkInFlight && !nextChunkCards}
+          style={{
+            display: "flex", alignItems: "center", gap: "0.4rem",
+            padding: "0.7rem 1.4rem", borderRadius: "12px", border: "none",
+            backgroundColor: (nextChunkInFlight && !nextChunkCards) ? "var(--color-border)" : "var(--color-primary)",
+            color: (nextChunkInFlight && !nextChunkCards) ? "var(--color-text-muted)" : "#fff",
+            fontWeight: 700, fontSize: "0.95rem",
+            cursor: (nextChunkInFlight && !nextChunkCards) ? "not-allowed" : "pointer",
+            fontFamily: "inherit",
+          }}
+        >
+          {nextChunkInFlight && !nextChunkCards ? (
+            <>
+              <Loader size={18} style={{ animation: "spin 1s linear infinite" }} />
+              {t("chunk.loadingNext")}
+            </>
+          ) : (
+            <>
+              {t("learning.nextSection")} <ChevronRight size={18} />
+            </>
+          )}
+        </button>
+      )}
+
+      {showStartExam && (
+        <button
+          onClick={onStartExam}
+          disabled={loading}
+          style={{
+            display: "flex", alignItems: "center", gap: "0.4rem",
+            padding: "0.7rem 1.5rem", borderRadius: "12px", border: "none",
+            backgroundColor: loading ? "var(--color-border)" : "var(--color-success)",
+            color: "#fff", fontWeight: 700, fontSize: "0.95rem",
+            cursor: loading ? "not-allowed" : "pointer",
+            fontFamily: "inherit",
+            boxShadow: loading ? "none" : "0 4px 12px rgba(34,197,94,0.3)",
+          }}
+        >
+          {loading ? (
+            <>
+              <Loader size={18} style={{ animation: "spin 1s linear infinite" }} />
+              {t("learning.startingChat")}
+            </>
+          ) : (
+            <>
+              <Flag size={18} />
+              {t("learning.startExam")}
+            </>
+          )}
+        </button>
+      )}
+
+      {showFinish && (
         <button
           onClick={onFinish}
           disabled={loading}
@@ -1030,16 +1222,18 @@ function NavButtons({ currentCardIndex, maxReachedIndex, isLastCard, canProceed,
           {loading ? (
             <>
               <Loader size={18} style={{ animation: "spin 1s linear infinite" }} />
-              {remediationMode ? "Starting re-check..." : t("learning.startingChat")}
+              {t("learning.startingChat")}
             </>
           ) : (
             <>
               <Flag size={18} />
-              {remediationMode ? "Check My Understanding" : t("learning.finishCards")}
+              {t("learning.finishCards")}
             </>
           )}
         </button>
-      ) : (
+      )}
+
+      {showNextCard && (
         <button
           onClick={onNext}
           disabled={currentCardIndex < maxReachedIndex ? false : (!canProceed || isLastCard)}
@@ -1060,28 +1254,6 @@ function NavButtons({ currentCardIndex, maxReachedIndex, isLastCard, canProceed,
   );
 }
 
-/* ─── Render images by index from all session cards ─── */
-function SessionImagesByIndex({ indices, cards }) {
-  const allImages = useMemo(() => {
-    const pool = [];
-    (cards || []).forEach((c) => {
-      (c.images || []).forEach((img) => {
-        if (img.url) pool.push(img);
-      });
-    });
-    return pool;
-  }, [cards]);
-
-  return (
-    <>
-      {(indices || []).map((idx) => {
-        const img = allImages[idx];
-        if (!img) return null;
-        return <ConceptImage key={idx} img={img} maxWidth="560px" />;
-      })}
-    </>
-  );
-}
 
 /* ─── MCQ Question Block (pill-shaped buttons) ─── */
 function MCQBlock({ question, index, feedback, isCorrect, onAnswer }) {

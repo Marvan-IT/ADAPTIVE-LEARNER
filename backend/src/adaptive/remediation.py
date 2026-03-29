@@ -20,7 +20,8 @@ logger = logging.getLogger(__name__)
 
 def find_remediation_prereq(
     concept_id: str,
-    knowledge_svc,          # KnowledgeService — typed as Any to avoid circular import
+    chunk_ksvc,             # ChunkKnowledgeService — typed as Any to avoid circular import
+    book_slug: str,
     mastery_store: dict[str, bool],
 ) -> str | None:
     """
@@ -30,8 +31,9 @@ def find_remediation_prereq(
 
     Args:
         concept_id:    The concept currently being taught.
-        knowledge_svc: KnowledgeService instance; used to access
-                       knowledge_svc.graph (NetworkX DiGraph).
+        chunk_ksvc:    ChunkKnowledgeService instance; used to access graph via
+                       chunk_ksvc.get_predecessors(book_slug, concept_id).
+        book_slug:     The book the concept belongs to.
         mastery_store: Mapping of concept_id → True for every concept the
                        student has mastered.  Missing keys are treated as
                        unmastered.
@@ -40,11 +42,11 @@ def find_remediation_prereq(
         A concept_id string, or None.
     """
     try:
-        direct_prereqs = list(knowledge_svc.graph.predecessors(concept_id))
+        direct_prereqs = chunk_ksvc.get_predecessors(book_slug, concept_id)
     except Exception as exc:
-        # Unknown node: predecessors() raises NetworkXError for nodes not in graph
+        # Unknown node: get_predecessors returns [] for nodes not in graph
         logger.warning(
-            "graph.predecessors() failed for concept_id=%s: %s — skipping remediation",
+            "get_predecessors() failed for concept_id=%s: %s — skipping remediation",
             concept_id,
             exc,
         )
@@ -64,7 +66,8 @@ def find_remediation_prereq(
 
 def has_unmet_prereq(
     concept_id: str,
-    knowledge_svc,
+    chunk_ksvc,
+    book_slug: str,
     mastery_store: dict[str, bool],
 ) -> bool:
     """
@@ -72,7 +75,7 @@ def has_unmet_prereq(
 
     Convenience wrapper around find_remediation_prereq.
     """
-    return find_remediation_prereq(concept_id, knowledge_svc, mastery_store) is not None
+    return find_remediation_prereq(concept_id, chunk_ksvc, book_slug, mastery_store) is not None
 
 
 def build_remediation_cards(

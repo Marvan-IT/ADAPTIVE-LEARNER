@@ -24,6 +24,7 @@ from uuid import UUID
 from adaptive.schemas import AdaptiveLessonRequest, AdaptiveLesson, NextCardRequest, NextCardResponse
 from adaptive.adaptive_engine import generate_adaptive_lesson, generate_recovery_card
 from api.rate_limiter import limiter
+from api.chunk_knowledge_service import ChunkKnowledgeService
 from db.connection import get_db
 from db.models import Student, StudentMastery
 from config import ADAPTIVE_CARD_MODEL, DEFAULT_BOOK_SLUG
@@ -38,19 +39,8 @@ cards_router = APIRouter(tags=["adaptive-cards"])
 
 # ── Service references — injected by main.py lifespan ─────────────────────────
 # Set to None here; main.py assigns real instances after startup.
-# adaptive_knowledge_services holds the full book dict (slug → KnowledgeService).
-adaptive_knowledge_services: dict = {}   # book_slug → KnowledgeService (injected by main.py)
-adaptive_knowledge_svc = None            # kept for backward compatibility; points to default book
+adaptive_chunk_ksvc = None               # ChunkKnowledgeService (injected by main.py)
 adaptive_llm_client: AsyncOpenAI | None = None
-
-
-def _get_adaptive_ksvc(book_slug: str | None = None):
-    """Resolve a KnowledgeService from the injected dict, with fallback to default book."""
-    slug = book_slug or DEFAULT_BOOK_SLUG
-    svc = adaptive_knowledge_services.get(slug)
-    if svc is None:
-        svc = adaptive_knowledge_services.get(DEFAULT_BOOK_SLUG) or adaptive_knowledge_svc
-    return svc
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -111,14 +101,16 @@ async def generate_lesson(
         len(mastery_store),
     )
 
-    # 3. Delegate to the engine — resolve the correct book's KnowledgeService
-    ksvc = _get_adaptive_ksvc(getattr(req, "book_slug", None))
+    # 3. Delegate to the engine
+    book_slug = getattr(req, "book_slug", None) or DEFAULT_BOOK_SLUG
     try:
         lesson = await generate_adaptive_lesson(
             student_id=str(req.student_id),
             concept_id=req.concept_id,
             analytics_summary=req.analytics_summary,
-            knowledge_svc=ksvc,
+            chunk_ksvc=adaptive_chunk_ksvc,
+            book_slug=book_slug,
+            db=db,
             mastery_store=mastery_store,
             llm_client=adaptive_llm_client,
             language=language,
@@ -257,15 +249,17 @@ async def complete_card(
         getattr(student, "preferred_style", "default") or "default"
     )
 
-    # Resolve the correct KnowledgeService for this session's book
-    session_ksvc = _get_adaptive_ksvc(getattr(session, "book_slug", None))
+    # Resolve book_slug for this session
+    session_book_slug = getattr(session, "book_slug", None) or DEFAULT_BOOK_SLUG
 
     async def _maybe_recovery():
         if need_recovery:
             return await generate_recovery_card(
                 topic_title=req.re_explain_card_title,
                 concept_id=session.concept_id,
-                knowledge_svc=session_ksvc,
+                chunk_ksvc=adaptive_chunk_ksvc,
+                book_slug=session_book_slug,
+                db=db,
                 llm_client=adaptive_llm_client,
                 language=language,
                 interests=effective_interests,
@@ -281,11 +275,13 @@ async def complete_card(
                 signals=req,
                 card_index=len(existing_cards),
                 history=history,
-                knowledge_svc=session_ksvc,
+                chunk_ksvc=adaptive_chunk_ksvc,
+                book_slug=session_book_slug,
                 mastery_store=mastery_store,
                 llm_client=adaptive_llm_client,
                 model=ADAPTIVE_CARD_MODEL,
                 language=language,
+                db=db,
             ),
             _maybe_recovery(),
             return_exceptions=True,

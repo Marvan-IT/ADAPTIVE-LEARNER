@@ -805,7 +805,7 @@ def build_cards_system_prompt(
 ) -> str:
     """Build the system prompt for unified card-based lesson generation.
 
-    Every card uses the same schema: title, content, image_indices, question (MCQ).
+    Every card uses the same schema: title, content, image_url, caption, question (MCQ).
     No card_type, no quick_check, no questions[], no True/False anywhere.
     """
 
@@ -854,12 +854,12 @@ def build_cards_system_prompt(
                 "goes at that exact sentence. Do not move images to the end of the card.\n"
                 "\n"
                 "If no image in the list clearly belongs to this sub-section's content, set\n"
-                "image_indices: [] — Assign images ONLY to cards whose content directly references or explains what the image shows.\n"
+                "image_url: null — Assign images ONLY to cards whose content directly references or explains what the image shows.\n"
                 "Do NOT force-assign an image just to use it.\n"
                 "\n"
                 "Keep all other image rules:\n"
                 "- Each image appears on EXACTLY ONE card — never share the same image between cards.\n"
-                "- Assign MAXIMUM ONE image per card (image_indices must have 0 or 1 entry, never 2+).\n"
+                "- Assign MAXIMUM ONE image per card (image_url must be a single URL string or null, never an array).\n"
             )
 
     _DOMAIN_NOTES = {
@@ -997,10 +997,10 @@ Applies to ALL card content, titles, examples, MCQ questions and options.
 CARD SCHEMA — every card must have exactly these fields:
 
 {{
-  "card_type": "TEACH|EXAMPLE|APPLICATION|QUESTION|VISUAL|RECAP|FUN|EXERCISE",
   "title": "Exact original label for EXAMPLE/TRY_IT; descriptive otherwise",
   "content": "Markdown. Embed [IMAGE:N] exactly where the image is contextually relevant.",
-  "image_indices": [],
+  "image_url": null,
+  "caption": null,
   "question": {{
     "text": "Question using DIFFERENT numbers from card content",
     "options": ["a", "b", "c", "d"],
@@ -1091,8 +1091,8 @@ Before finalizing any MCQ, verify:
 4. correct_index MUST be an integer (0, 1, 2, or 3) — NEVER a letter ("A") or quoted string ("0").
 
 IMAGE RULE: If you reference an image in content, write [IMAGE:N] at that exact position
-(N = 0-based index from the AVAILABLE IMAGES list). Also add N to image_indices.
-If no image fits, set image_indices to [] and do not write [IMAGE:N].
+(N = 0-based index from the AVAILABLE IMAGES list). Set image_url to the matching URL and caption to its description.
+If no image fits, set image_url to null and caption to null, and do not write [IMAGE:N].
 Do NOT put all images on card 1 — distribute based on topic.
 
 MATH DIAGRAM RULE (when NO images are available):
@@ -1111,10 +1111,10 @@ OUTPUT FORMAT — respond with valid JSON only:
 {{
   "cards": [
     {{
-      "card_type": "TEACH",
       "title": "Short descriptive heading",
       "content": "Explanation text. [IMAGE:0] appears inline where the image is relevant.",
-      "image_indices": [0],
+      "image_url": "http://example.com/images/figure1.jpg",
+      "caption": "Description of the image",
       "question": {{
         "text": "What does X mean?",
         "options": ["Option A", "Option B", "Option C", "Option D"],
@@ -1275,14 +1275,14 @@ def build_cards_user_prompt(
                 + "\n".join(desc_lines)
                 + "\n\nReference images naturally in your content with [IMAGE:N] at the exact "
                 "position where the image adds value (N = index from list above). "
-                "Also add N to that card's image_indices. "
+                "Set image_url to the image's URL and caption to its description for that card. "
                 "Distribute images across cards by topic match — one image per card max.\n"
                 "IMAGE ASSIGNMENT RULE:\n"
                 "- Read each image description carefully. Match each image to the card it DIRECTLY illustrates.\n"
-                "- ASSIGN matching images: use image_indices: [0], [1], [0, 1], etc.\n"
-                "- Assign an image ONLY if the image description directly matches this card's content. Leave image_indices: [] if no image fits.\n"
+                "- ASSIGN matching images: set image_url and caption for the matching card.\n"
+                "- Assign an image ONLY if the image description directly matches this card's content. Set image_url: null if no image fits.\n"
                 "- Semantic matching examples: number line → ordering/counting card; dollar bill groups → multiplication card; base-10 blocks → place value card.\n"
-                "- When in doubt: leave image_indices: [] rather than force-assigning an image that does not clearly match."
+                "- When in doubt: set image_url: null rather than force-assigning an image that does not clearly match."
             )
         else:
             image_text = "\n\nNo diagrams available."
@@ -1385,8 +1385,8 @@ def build_mid_session_checkin_card() -> dict:
         "card_type": "CHECKIN",
         "title": "Quick Check-In",
         "content": "How are you feeling about the material so far?",
-        "image_indices": [],
-        "images": [],
+        "image_url": None,
+        "caption": None,
         "options": [
             "I'm getting it!",
             "It's a bit tricky",

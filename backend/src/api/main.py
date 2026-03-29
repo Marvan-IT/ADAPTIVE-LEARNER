@@ -33,7 +33,7 @@ from api.schemas import (
     ConceptDetailResponse, ConceptImage,
     GraphInfoResponse, GraphNodeInfo,
 )
-from api.knowledge_service import KnowledgeService
+from api.chunk_knowledge_service import ChunkKnowledgeService
 from api.teaching_router import router as teaching_router
 from api.teaching_service import TeachingService
 import api.teaching_router as teaching_router_module
@@ -41,16 +41,6 @@ from adaptive.adaptive_router import router as adaptive_router, cards_router as 
 import adaptive.adaptive_router as adaptive_router_module
 from db.connection import init_db, close_db
 from config import OUTPUT_DIR, OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, OPENAI_MODEL_MINI, validate_required_env_vars, DEFAULT_BOOK_SLUG
-
-
-def _discover_processed_books() -> list[str]:
-    """Scan OUTPUT_DIR for subdirectories that contain a chroma_db/ folder."""
-    slugs = []
-    if OUTPUT_DIR.exists():
-        for subdir in sorted(OUTPUT_DIR.iterdir()):
-            if subdir.is_dir() and (subdir / "chroma_db").exists():
-                slugs.append(subdir.name)
-    return slugs
 from api.prompts import LANGUAGE_NAMES
 
 
@@ -66,8 +56,7 @@ _SKIP_AUTH = {"/health", "/docs", "/openapi.json", "/redoc"}
 
 # ── Lifespan: load services once at startup ────────────────────────
 
-knowledge_svc: KnowledgeService = None          # default (prealgebra) — used by v1 endpoints
-knowledge_services: dict[str, KnowledgeService] = {}  # all loaded books keyed by slug
+_chunk_knowledge_svc: ChunkKnowledgeService = None  # chunk-based service (PostgreSQL + graph)
 _openai_client: AsyncOpenAI = None
 _cache_write_lock: asyncio.Lock | None = None
 
@@ -105,42 +94,41 @@ def _save_translation_cache() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     validate_required_env_vars()
-    global knowledge_svc, knowledge_services, _openai_client, _cache_write_lock
+    global _chunk_knowledge_svc, _openai_client, _cache_write_lock
     _cache_write_lock = asyncio.Lock()
-    slugs = _discover_processed_books()
-    if not slugs:
-        logger.warning("No processed books found in %s — falling back to %s.", OUTPUT_DIR, DEFAULT_BOOK_SLUG)
-        slugs = [DEFAULT_BOOK_SLUG]
-    logger.info("Loading KnowledgeService for books: %s", slugs)
-    for slug in slugs:
-        try:
-            knowledge_services[slug] = KnowledgeService(book_slug=slug)
-            logger.info("  Loaded book: %s", slug)
-        except Exception:
-            logger.exception("  Failed to load book: %s — skipping.", slug)
-    # Default service for v1 endpoints (default book, or first available)
-    knowledge_svc = knowledge_services.get(DEFAULT_BOOK_SLUG) or next(iter(knowledge_services.values()), None)
     logger.info("Initializing PostgreSQL...")
     await init_db()
-    teaching_router_module.teaching_svc = TeachingService(knowledge_services)
-    teaching_router_module._knowledge_services = knowledge_services
-    adaptive_router_module.adaptive_knowledge_svc = knowledge_svc
-    adaptive_router_module.adaptive_knowledge_services = knowledge_services
+    # Chunk-based knowledge service (PostgreSQL + graph.json — no ChromaDB)
+    _chunk_knowledge_svc = ChunkKnowledgeService()
+    try:
+        _chunk_knowledge_svc.preload_graph(DEFAULT_BOOK_SLUG)
+        logger.info("Graph preloaded for book: %s", DEFAULT_BOOK_SLUG)
+    except Exception:
+        logger.exception("Failed to preload graph for %s — graph endpoints will error on demand.", DEFAULT_BOOK_SLUG)
+    app.state.chunk_knowledge_svc = _chunk_knowledge_svc
+    teaching_router_module.teaching_svc = TeachingService()
+    teaching_router_module.chunk_ksvc = _chunk_knowledge_svc
+    adaptive_router_module.adaptive_chunk_ksvc = _chunk_knowledge_svc
     adaptive_router_module.adaptive_llm_client = AsyncOpenAI(
         api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL
     )
     _openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
     _load_translation_cache()
-    # Mount per-book image directories so frontend can resolve /images/{book_slug}/...
-    for _bslug in slugs:
-        _img_dir = OUTPUT_DIR / _bslug / "images"
-        if _img_dir.exists():
-            app.mount(
-                f"/images/{_bslug}",
-                StaticFiles(directory=str(_img_dir)),
-                name=f"images_{_bslug}",
-            )
-    logger.info("Services loaded. Loaded %d book(s): %s. API ready.", len(knowledge_services), list(knowledge_services))
+    # Mount per-book output directories so frontend can resolve /images/{book_slug}/...
+    # DB image URLs are like: http://localhost:8889/images/prealgebra/images_downloaded/{hash}.jpg
+    for _bslug in [DEFAULT_BOOK_SLUG]:
+        _book_out_dir = OUTPUT_DIR / _bslug
+        if _book_out_dir.exists():
+            try:
+                app.mount(
+                    f"/images/{_bslug}",
+                    StaticFiles(directory=str(_book_out_dir)),
+                    name=f"images_{_bslug}",
+                )
+                logger.info("Mounted /images/%s → %s", _bslug, _book_out_dir)
+            except Exception:
+                logger.exception("Failed to mount image dir for %s", _bslug)
+    logger.info("Services loaded. API ready.")
     yield
     _save_translation_cache()
     await close_db()
@@ -210,12 +198,28 @@ app.mount("/static/output", StaticFiles(directory=str(OUTPUT_DIR)), name="static
 
 @app.get("/health")
 async def health():
+    from db.connection import get_db
+    chunk_count = 0
+    graph_nodes = 0
+    graph_edges = 0
+    try:
+        async for _db in get_db():
+            chunk_count = await _chunk_knowledge_svc.get_chunk_count(_db) if _chunk_knowledge_svc else 0
+            break
+    except Exception as exc:
+        logger.warning("[health] chunk_count query failed: %s", exc)
+    try:
+        if _chunk_knowledge_svc:
+            graph_info = _chunk_knowledge_svc.get_graph_info(DEFAULT_BOOK_SLUG)
+            graph_nodes = graph_info["num_nodes"]
+            graph_edges = graph_info["num_edges"]
+    except Exception as exc:
+        logger.warning("[health] graph_info failed: %s", exc)
     return {
         "status": "ok",
-        "loaded_books": list(knowledge_services.keys()),
-        "collection_count": knowledge_svc.collection.count() if knowledge_svc else 0,
-        "graph_nodes": knowledge_svc.graph.number_of_nodes() if knowledge_svc else 0,
-        "graph_edges": knowledge_svc.graph.number_of_edges() if knowledge_svc else 0,
+        "chunk_count": chunk_count,
+        "graph_nodes": graph_nodes,
+        "graph_edges": graph_edges,
     }
 
 
@@ -225,35 +229,55 @@ async def health():
 
 @app.post("/api/v1/concepts/query", response_model=ConceptQueryResponse)
 @limiter.limit("60/minute")
-async def query_concepts(request: Request, req: ConceptQuery):
+async def query_concepts(request: Request, req: ConceptQuery, book_slug: str = DEFAULT_BOOK_SLUG):
     """
-    THE Week 1 deliverable:
-    "Get me the concept of 'Variables' knowing the child has mastered 'Integers'."
-
-    Combines ChromaDB semantic search (RAG) with NetworkX prerequisite checking (Graph).
+    Semantic search using pgvector similarity.
+    Combines PostgreSQL vector search (RAG) with NetworkX prerequisite checking (Graph).
     """
-    results = knowledge_svc.query_concept_with_prerequisites(
-        query_text=req.query,
-        mastered_concepts=req.mastered_concepts,
-        n_results=req.n_results,
-    )
-
-    concept_results = [
-        ConceptResult(
-            concept_id=r["concept_id"],
-            concept_title=r["concept_title"],
-            chapter=r["chapter"],
-            section=r["section"],
-            text=r["text"],
-            latex=r["latex"],
-            images=[ConceptImage(**img) for img in r.get("images", [])],
-            distance=r["distance"],
-            prerequisites=[PrerequisiteStatus(**p) for p in r["prerequisites"]],
-            all_prerequisites_met=r["all_prerequisites_met"],
-            ready_to_learn=r["ready_to_learn"],
+    from db.connection import get_db as _get_db
+    # Generate embedding for the query
+    try:
+        embed_response = await _openai_client.embeddings.create(
+            model="text-embedding-3-small",
+            input=req.query,
         )
-        for r in results
-    ]
+        query_embedding = embed_response.data[0].embedding
+    except Exception as exc:
+        logger.error("[query_concepts] embedding generation failed: %s", exc)
+        raise HTTPException(status_code=502, detail="Failed to generate query embedding")
+
+    mastered_set = set(req.mastered_concepts or [])
+    async for _db in _get_db():
+        raw_results = await _chunk_knowledge_svc.query_similar_chunks(
+            _db, book_slug, query_embedding, n=req.n_results
+        )
+        break
+
+    concept_results = []
+    for r in raw_results:
+        prereqs = r.get("prerequisites", [])
+        all_met = all(p in mastered_set for p in prereqs)
+        prereq_statuses = [
+            PrerequisiteStatus(
+                concept_id=p,
+                concept_title=p,
+                mastered=p in mastered_set,
+            )
+            for p in prereqs
+        ]
+        concept_results.append(ConceptResult(
+            concept_id=r["concept_id"],
+            concept_title=r.get("section", r["concept_id"]),
+            chapter=r["concept_id"].split("_")[-1].split(".")[0] if "_" in r["concept_id"] else "",
+            section=r["concept_id"].split("_")[-1] if "_" in r["concept_id"] else r["concept_id"],
+            text=r["text"],
+            latex=[],
+            images=[],
+            distance=1.0 - r.get("score", 0.0),
+            prerequisites=prereq_statuses,
+            all_prerequisites_met=all_met,
+            ready_to_learn=all_met,
+        ))
 
     return ConceptQueryResponse(
         query=req.query,
@@ -266,9 +290,8 @@ async def query_concepts(request: Request, req: ConceptQuery):
 @limiter.limit("60/minute")
 async def next_concepts(request: Request, req: NextConceptsRequest, book_slug: str = DEFAULT_BOOK_SLUG):
     """Given mastered concepts, return all concepts now ready to learn and locked ones."""
-    svc = knowledge_services.get(book_slug, knowledge_svc)
-    ready = svc.get_next_concepts(req.mastered_concepts)
-    locked = svc.get_locked_concepts(req.mastered_concepts)
+    ready = _chunk_knowledge_svc.get_next_concepts(book_slug, req.mastered_concepts)
+    locked = _chunk_knowledge_svc.get_locked_concepts(book_slug, req.mastered_concepts)
     return NextConceptsResponse(
         mastered_concepts=req.mastered_concepts,
         ready_to_learn=ready,
@@ -277,18 +300,21 @@ async def next_concepts(request: Request, req: NextConceptsRequest, book_slug: s
 
 
 @app.get("/api/v1/concepts/{concept_id}", response_model=ConceptDetailResponse)
-async def get_concept(concept_id: str):
+async def get_concept(concept_id: str, book_slug: str = DEFAULT_BOOK_SLUG):
     """Full detail for a single concept including prerequisites and dependents."""
-    detail = knowledge_svc.get_concept_detail(concept_id)
+    from db.connection import get_db as _get_db
+    async for _db in _get_db():
+        detail = await _chunk_knowledge_svc.get_concept_detail(_db, concept_id, book_slug)
+        break
     if not detail:
         raise HTTPException(status_code=404, detail=f"Concept not found: {concept_id}")
     return ConceptDetailResponse(**detail)
 
 
 @app.get("/api/v1/concepts/{concept_id}/prerequisites")
-async def get_prerequisites(concept_id: str):
+async def get_prerequisites(concept_id: str, book_slug: str = DEFAULT_BOOK_SLUG):
     """All transitive prerequisites for a concept."""
-    all_prereqs = knowledge_svc.get_all_prerequisites(concept_id)
+    all_prereqs = _chunk_knowledge_svc.get_all_prerequisites(book_slug, concept_id)
     return {
         "concept_id": concept_id,
         "prerequisites": all_prereqs,
@@ -301,9 +327,13 @@ async def get_prerequisites(concept_id: str):
 # ═══════════════════════════════════════════════════════════════════
 
 @app.get("/api/v1/concepts/{concept_id}/images")
-async def get_concept_images(concept_id: str):
+async def get_concept_images(concept_id: str, book_slug: str = DEFAULT_BOOK_SLUG):
     """List all extracted images for a concept."""
-    images = knowledge_svc.get_concept_images(concept_id)
+    from db.connection import get_db as _get_db
+    async for _db in _get_db():
+        detail = await _chunk_knowledge_svc.get_concept_detail(_db, concept_id, book_slug)
+        break
+    images = detail.get("images", []) if detail else []
     return {"concept_id": concept_id, "images": images, "count": len(images)}
 
 
@@ -311,11 +341,18 @@ async def get_concept_images(concept_id: str):
 # GRAPH
 # ═══════════════════════════════════════════════════════════════════
 
+def _require_book(book_slug: str) -> None:
+    """Raise 404 if graph.json does not exist for the given book_slug."""
+    graph_path = OUTPUT_DIR / book_slug / "graph.json"
+    if not graph_path.exists():
+        raise HTTPException(status_code=404, detail=f"Book '{book_slug}' not found or not yet processed")
+
+
 @app.get("/api/v1/graph/info", response_model=GraphInfoResponse)
 async def graph_info(book_slug: str = DEFAULT_BOOK_SLUG):
     """Dependency graph statistics."""
-    svc = knowledge_services.get(book_slug, knowledge_svc)
-    info = svc.get_graph_info()
+    _require_book(book_slug)
+    info = _chunk_knowledge_svc.get_graph_info(book_slug)
     return GraphInfoResponse(
         num_nodes=info["num_nodes"],
         num_edges=info["num_edges"],
@@ -328,8 +365,8 @@ async def graph_info(book_slug: str = DEFAULT_BOOK_SLUG):
 @app.get("/api/v1/graph/nodes")
 async def graph_nodes(book_slug: str = DEFAULT_BOOK_SLUG):
     """List all concept nodes with graph properties."""
-    svc = knowledge_services.get(book_slug, knowledge_svc)
-    nodes = svc.get_all_nodes()
+    _require_book(book_slug)
+    nodes = _chunk_knowledge_svc.get_all_nodes(book_slug)
     return {"nodes": nodes, "count": len(nodes)}
 
 
@@ -337,8 +374,8 @@ async def graph_nodes(book_slug: str = DEFAULT_BOOK_SLUG):
 @limiter.limit("60/minute")
 async def learning_path(request: Request, req: LearningPathRequest, book_slug: str = DEFAULT_BOOK_SLUG):
     """Compute the optimal learning path to reach a target concept."""
-    svc = knowledge_services.get(book_slug, knowledge_svc)
-    result = svc.get_learning_path(req.target_concept_id, req.mastered_concepts)
+    _require_book(book_slug)
+    result = _chunk_knowledge_svc.get_learning_path(book_slug, req.target_concept_id, req.mastered_concepts)
     return LearningPathResponse(
         target=result["target"],
         path=[LearningPathStep(**step) for step in result["path"]],
@@ -349,33 +386,38 @@ async def learning_path(request: Request, req: LearningPathRequest, book_slug: s
 @app.get("/api/v1/graph/full")
 async def graph_full(book_slug: str = DEFAULT_BOOK_SLUG):
     """Full graph with nodes and edges for frontend visualization."""
-    svc = knowledge_services.get(book_slug, knowledge_svc)
-    nodes = svc.get_all_nodes()
-    edges = [
-        {"source": u, "target": v}
-        for u, v in svc.graph.edges()
-    ]
+    _require_book(book_slug)
+    nodes = _chunk_knowledge_svc.get_all_nodes(book_slug)
+    edges = _chunk_knowledge_svc.get_all_edges(book_slug)
     return {"nodes": nodes, "edges": edges}
 
 
 @app.get("/api/v1/graph/topological-order")
 async def topological_order(book_slug: str = DEFAULT_BOOK_SLUG):
     """Return all concepts in a valid learning sequence."""
-    svc = knowledge_services.get(book_slug, knowledge_svc)
-    order = svc.get_topological_order()
+    _require_book(book_slug)
+    order = _chunk_knowledge_svc.get_topological_order(book_slug)
     return {"order": order, "count": len(order)}
 
 
 @app.get("/api/v1/books")
 async def list_books_v1():
     from config import BOOK_REGISTRY
+    from db.connection import get_db as _get_db
     _slug_to_title = {cfg["book_slug"]: cfg.get("title", cfg["book_slug"]) for cfg in BOOK_REGISTRY.values()}
     all_slugs = sorted(_slug_to_title.keys())
+    active_books: set[str] = set()
+    try:
+        async for _db in _get_db():
+            active_books = await _chunk_knowledge_svc.get_active_books(_db)
+            break
+    except Exception as exc:
+        logger.warning("[list_books_v1] get_active_books failed: %s", exc)
     return [
         {
             "slug": s,
             "title": _slug_to_title.get(s, s),
-            "processed": s in knowledge_services,
+            "processed": s in active_books,
         }
         for s in all_slugs
     ]

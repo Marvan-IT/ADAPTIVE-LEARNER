@@ -191,7 +191,9 @@ async def generate_adaptive_lesson(
     student_id: str,
     concept_id: str,
     analytics_summary: AnalyticsSummary,
-    knowledge_svc,                    # KnowledgeService — typed as Any to avoid circular import
+    chunk_ksvc,                       # ChunkKnowledgeService
+    book_slug: str,
+    db,                               # AsyncSession
     mastery_store: dict[str, bool],   # concept_id → True for every mastered concept
     llm_client: AsyncOpenAI,
     model: str = OPENAI_MODEL,
@@ -204,7 +206,9 @@ async def generate_adaptive_lesson(
         student_id:        UUID string of the student.
         concept_id:        The concept to teach.
         analytics_summary: Behavioral signals from the client.
-        knowledge_svc:     KnowledgeService; provides get_concept_detail() and .graph.
+        chunk_ksvc:        ChunkKnowledgeService; provides get_concept_detail() and graph methods.
+        book_slug:         The book slug for graph and concept lookups.
+        db:                AsyncSession for DB queries.
         mastery_store:     Pre-built mastery dict (caller's responsibility to query DB).
         llm_client:        Initialised AsyncOpenAI client.
         model:             OpenAI model identifier (defaults to OPENAI_MODEL from config).
@@ -220,12 +224,12 @@ async def generate_adaptive_lesson(
 
     # ── a) Fetch concept ───────────────────────────────────────────────────
     logger.info("Fetching concept detail: concept_id=%s", concept_id)
-    concept_detail = knowledge_svc.get_concept_detail(concept_id)
+    concept_detail = await chunk_ksvc.get_concept_detail(db, concept_id, book_slug)
     if concept_detail is None:
         raise ValueError(f"Concept not found in knowledge base: {concept_id}")
 
     # ── b) Determine remediation prerequisite (one-hop graph traversal) ───
-    prereq_id = find_remediation_prereq(concept_id, knowledge_svc, mastery_store)
+    prereq_id = find_remediation_prereq(concept_id, chunk_ksvc, book_slug, mastery_store)
     logger.info(
         "Remediation prereq for concept_id=%s: %s",
         concept_id,
@@ -267,7 +271,7 @@ async def generate_adaptive_lesson(
     # ── e) Fetch prerequisite detail if remediation is needed ─────────────
     prereq_detail: dict | None = None
     if prereq_id:
-        prereq_detail = knowledge_svc.get_concept_detail(prereq_id)
+        prereq_detail = await chunk_ksvc.get_concept_detail(db, prereq_id, book_slug)
         if prereq_detail is None:
             logger.warning(
                 "Prereq concept %s not found in knowledge base; skipping remediation",
@@ -698,7 +702,8 @@ async def generate_next_card(
     signals: "CardBehaviorSignals",
     card_index: int,
     history: dict,
-    knowledge_svc,
+    chunk_ksvc,
+    book_slug: str,
     mastery_store: dict[str, bool],
     llm_client: AsyncOpenAI,
     model: str,
@@ -717,7 +722,7 @@ async def generate_next_card(
     from adaptive.prompt_builder import build_next_card_prompt
 
     analytics, blended_score, generate_as = build_blended_analytics(signals, history, concept_id, student_id)
-    has_prereq = find_remediation_prereq(concept_id, knowledge_svc, mastery_store) is not None
+    has_prereq = find_remediation_prereq(concept_id, chunk_ksvc, book_slug, mastery_store) is not None
     profile = build_learning_profile(analytics, has_unmet_prereq=has_prereq)
     gen_profile = build_generation_profile(profile)
 
@@ -751,7 +756,7 @@ async def generate_next_card(
                 "wrong_option_pattern_query_failed: error=%s (skipping)", exc
             )
 
-    concept_detail = knowledge_svc.get_concept_detail(concept_id)
+    concept_detail = await chunk_ksvc.get_concept_detail(db, concept_id, book_slug)
     if concept_detail is None:
         raise ValueError(f"Concept not found: {concept_id}")
 
@@ -851,7 +856,9 @@ _RECOVERY_STYLE_MODIFIERS: dict[str, str] = {
 async def generate_recovery_card(
     topic_title: str,
     concept_id: str,
-    knowledge_svc,
+    chunk_ksvc,
+    book_slug: str,
+    db,
     llm_client,
     language: str = "en",
     interests: list[str] | None = None,
@@ -871,7 +878,7 @@ async def generate_recovery_card(
         return None
 
     try:
-        concept_detail = knowledge_svc.get_concept_detail(concept_id)
+        concept_detail = await chunk_ksvc.get_concept_detail(db, concept_id, book_slug)
         if not concept_detail:
             return None
 
@@ -895,7 +902,6 @@ async def generate_recovery_card(
             "You are an expert adaptive math tutor. Generate ONE recovery TEACH card.\n"
             "The student just struggled with this topic twice. Re-explain in the SIMPLEST way.\n"
             "MANDATORY RULES:\n"
-            "- card_type must be 'TEACH'\n"
             "- Title MUST start exactly with: Let's Try Again — \n"
             "- Language: age 8-10 reading level. Define every term.\n"
             "- Open with a real-world analogy BEFORE any formula or definition.\n"
@@ -904,8 +910,8 @@ async def generate_recovery_card(
             "- End with ONE easy MCQ — confidence-building, clearly correct answer.\n"
             "- Return ONLY valid JSON. No markdown fences.\n"
             "OUTPUT JSON SCHEMA (match exactly):\n"
-            '{"card_type":"TEACH","title":"Let\'s Try Again — <topic>","content":"<markdown>",'
-            '"image_indices":[],"question":{"text":"<question>","options":["A","B","C","D"],'
+            '{"title":"Let\'s Try Again — <topic>","content":"<markdown>",'
+            '"image_url":null,"caption":null,"question":{"text":"<question>","options":["A","B","C","D"],'
             '"correct_index":0,"explanation":"<why>","difficulty":"EASY"}}'
             + interests_text + style_text + lang_text
         )
@@ -951,9 +957,18 @@ async def generate_recovery_card(
 
         card.setdefault("index", -1)
         card["is_recovery"] = True
-        concept_images = concept_detail.get("images", [])[:3]
-        card["images"] = concept_images
-        card["image_indices"] = list(range(len(concept_images)))
+        # New LessonCard schema: image_url + caption instead of image_indices/images
+        concept_images = concept_detail.get("images", [])
+        if concept_images:
+            first_img = concept_images[0]
+            card["image_url"] = first_img.get("url") or first_img.get("image_url")
+            card["caption"] = first_img.get("caption") or first_img.get("description")
+        else:
+            card["image_url"] = None
+            card["caption"] = None
+        # Remove legacy fields if the LLM included them
+        card.pop("images", None)
+        card.pop("image_indices", None)
         # Sanitize math in card content
         if card.get("content"):
             card["content"] = _sanitize_math_fn(card["content"])

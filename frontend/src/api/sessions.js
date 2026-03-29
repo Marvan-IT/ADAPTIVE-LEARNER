@@ -23,7 +23,12 @@ const BOOK_CODE_TO_SLUG = {
 };
 
 export const getBookSlugFromConceptId = (conceptId) => {
-  const code = conceptId?.split(".")?.[0];
+  if (!conceptId) return "prealgebra";
+  // New format: "prealgebra_1.1" — slug is everything before the trailing _<digits>.<digits>
+  const newFormatMatch = conceptId.match(/^(.+)_\d+\.\d+$/);
+  if (newFormatMatch) return newFormatMatch[1];
+  // Old format: "PREALG.C1.S1..." — look up by first segment
+  const code = conceptId.split(".")?.[0];
   return BOOK_CODE_TO_SLUG[code] ?? "prealgebra";
 };
 
@@ -61,10 +66,6 @@ export const switchStyle = (sessionId, style) =>
 export const getSession = (sessionId) =>
   api.get(`/api/v2/sessions/${sessionId}`);
 
-// Card-based learning (longest timeout — AI generates multiple cards + questions)
-export const getCards = (sessionId) =>
-  api.post(`/api/v2/sessions/${sessionId}/cards`, {}, { timeout: CARDS_TIMEOUT });
-
 export const assistStudent = (sessionId, cardIndex, message, trigger = "user") =>
   api.post(`/api/v2/sessions/${sessionId}/assist`, {
     card_index: cardIndex,
@@ -97,7 +98,6 @@ export const completeCardAndGetNext = (sessionId, signals) =>
       selected_wrong_option:   signals.selectedWrongOption ?? null,
       hints_used:              signals.hintsUsed,
       idle_triggers:           signals.idleTriggers,
-      difficulty_bias:         signals.difficultyBias ?? null,
       re_explain_card_title:   signals.reExplainCardTitle ?? null,
       wrong_question:          signals.wrongQuestion ?? null,
       wrong_answer_text:       signals.wrongAnswerText ?? null,
@@ -117,11 +117,40 @@ export const beginRecheck = (sessionId) =>
 export const regenerateMCQ = (sessionId, body) =>
   api.post(`/api/v2/sessions/${sessionId}/regenerate-mcq`, body, { timeout: LLM_TIMEOUT });
 
-export const getNextSectionCards = (sessionId, signals) =>
-  api.post(`/api/v2/sessions/${sessionId}/next-section-cards`, signals || {}, { timeout: 45000 });
+// Generate all cards for a chunk
+export async function generateChunkCards(sessionId, chunkId) {
+  const { data } = await api.post(
+    `/api/v2/sessions/${sessionId}/chunk-cards`,
+    { chunk_id: chunkId },
+    { timeout: CARDS_TIMEOUT }
+  );
+  return data; // ChunkCardsResponse: { cards, chunk_id, chunk_index, total_chunks, is_last_chunk }
+}
 
-export const fetchNextAdaptiveCard = (sessionId, payload) =>
-  api.post(`/api/v2/sessions/${sessionId}/next-card`, payload, { timeout: 45000 });
+// Get recovery card after 2 MCQ failures
+export async function generateChunkRecoveryCard(sessionId, chunkId, cardIndex, wrongAnswers = []) {
+  const { data } = await api.post(
+    `/api/v2/sessions/${sessionId}/chunk-recovery-card`,
+    { chunk_id: chunkId, card_index: cardIndex, wrong_answers: wrongAnswers },
+    { timeout: LLM_TIMEOUT }
+  );
+  return data; // LessonCard
+}
+
+export const getChunkList = (sessionId) =>
+  api.get(`/api/v2/sessions/${sessionId}/chunks`);
+
+export const completeChunk = (sessionId, payload) =>
+  api.post(`/api/v2/sessions/${sessionId}/complete-chunk`, payload);
+
+export const startExam = (sessionId, data) =>
+  api.post(`/api/v2/sessions/${sessionId}/exam/start`, data, { timeout: 60000 });
+
+export const submitExam = (sessionId, data) =>
+  api.post(`/api/v2/sessions/${sessionId}/exam/submit`, data, { timeout: 120000 });
+
+export const retryExam = (sessionId, data) =>
+  api.post(`/api/v2/sessions/${sessionId}/exam/retry`, data, { timeout: 30000 });
 
 export const getBooks = async () => {
   const res = await api.get("/api/v2/books");

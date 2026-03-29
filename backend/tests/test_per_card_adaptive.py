@@ -222,7 +222,7 @@ def _build_teaching_service(llm_response: str = None, concept_detail: dict = Non
         "latex_expressions": [],
     }
 
-    svc = TeachingService(knowledge_services={"prealgebra": mock_ksvc})
+    svc = TeachingService()
 
     # Replace the OpenAI client on the instance with a mock
     mock_llm = MagicMock()
@@ -655,8 +655,8 @@ class TestImageAssignment:
     @pytest.mark.asyncio
     async def test_images_assigned_from_pool(self):
         """Business rule: Images in '_images' that are not in 'assigned_image_indices'
-        are available for the new card. The service assigns the first available image
-        to the card dict and records its index in 'assigned_image_indices'."""
+        are available for the new card. The LLM selects one via image_indices; the service
+        records its original index in 'assigned_image_indices' and sets image_url on the card."""
         image_pool = [
             {"url": "/images/fig1.png", "description": "Number line diagram",
              "image_type": "DIAGRAM", "relevance": 0.9},
@@ -673,7 +673,27 @@ class TestImageAssignment:
         session = _make_session(presentation_text=cache)
         student = _make_student()
 
-        svc, mock_db, _ = _build_teaching_service()
+        # LLM response includes image_indices: [0] — selects first content-piece image
+        # (which maps to original pool index 1, i.e. fig2.png)
+        llm_response = json.dumps({
+            "card_type": "TEACH",
+            "title": "Number Line",
+            "content": "A number line shows integers.",
+            "difficulty": 2,
+            "motivational_note": None,
+            "image_indices": [0],
+            "questions": [
+                {
+                    "type": "mcq",
+                    "question": "What does a number line show?",
+                    "options": ["Integers", "Fractions", "Letters", "Colors"],
+                    "correct_index": 0,
+                    "explanation": "A number line shows integers.",
+                }
+            ],
+        })
+
+        svc, mock_db, _ = _build_teaching_service(llm_response=llm_response)
 
         with patch(
             "adaptive.adaptive_engine.load_student_history",
@@ -697,12 +717,10 @@ class TestImageAssignment:
             "Image at index 1 (the first available image) must be added to assigned_image_indices"
         )
 
-        # The card itself must carry the image
-        assert len(card.get("images", [])) >= 1, (
-            "The generated card must have at least one image assigned from the pool"
-        )
-        assert card["images"][0]["url"] == "/images/fig2.png", (
-            "The assigned image must be the first *available* image (index 1, not index 0)"
+        # The card itself must carry image_url (new schema: image_url + caption, not images[])
+        assert card.get("image_url") == "/images/fig2.png", (
+            "The assigned image must be the first *available* image (index 1, not index 0). "
+            "New schema uses card['image_url'] not card['images'][0]['url']"
         )
 
     @pytest.mark.asyncio
@@ -982,20 +1000,18 @@ class TestNextCardRequestSchema:
 # ---------------------------------------------------------------------------
 
 class TestBug7CardIndexFix:
-    """TC-15: Bug 7 fix — the CardBehaviorSignals passed to build_blended_analytics()
-    in generate_cards() must use history['total_cards_completed'], not hardcoded 0."""
+    """TC-15: Bug 7 fix — generate_cards() is now a deprecated stub; the fix lives in
+    generate_per_card() which uses history['total_cards_completed'] in its default dict."""
 
     def test_card_index_uses_total_cards_completed(self):
-        """Business rule: The initial call to build_blended_analytics() in generate_cards()
-        must set card_index from history to accurately reflect the student's card history,
-        not always assume the student is on card 0.
-
-        We inspect the source code of generate_cards() to confirm the fix is present."""
+        """generate_per_card() must reference total_cards_completed in its history default,
+        confirming that card history is tracked across sessions (Bug 7 fix migrated to
+        per-card path after generate_cards() was deprecated as a stub)."""
         from api.teaching_service import TeachingService
 
-        source = inspect.getsource(TeachingService.generate_cards)
+        source = inspect.getsource(TeachingService.generate_per_card)
 
         assert "total_cards_completed" in source, (
-            "generate_cards() must use history['total_cards_completed'] for card_index "
+            "generate_per_card() must track history['total_cards_completed'] "
             "(Bug 7 fix) — hardcoded card_index=0 is no longer acceptable"
         )

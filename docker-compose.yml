@@ -3,7 +3,7 @@ version: "3.9"
 # ── ADA — local / production Docker Compose stack ────────────────────────────
 #
 # Services:
-#   db        PostgreSQL 15 — persistent volume; exposed on 5432 for tooling
+#   db        PostgreSQL 16 + pgvector — persistent volume; exposed on 5432 for tooling
 #   backend   FastAPI/uvicorn on port 8889; waits for db health check
 #   frontend  nginx serving the Vite build; proxies /api/ to backend
 #
@@ -23,7 +23,7 @@ version: "3.9"
 
 services:
   db:
-    image: postgres:15-alpine
+    image: pgvector/pgvector:pg16-alpine
     restart: unless-stopped
     environment:
       POSTGRES_DB: AdaptiveLearner

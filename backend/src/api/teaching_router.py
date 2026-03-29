@@ -15,6 +15,9 @@ from sqlalchemy.orm import selectinload
 
 import logging
 
+import asyncio
+import json
+
 from config import (
     CARD_HISTORY_DEFAULT_LIMIT,
     CARD_HISTORY_MAX_LIMIT,
@@ -23,9 +26,15 @@ from config import (
     XP_MASTERY_BONUS_THRESHOLD,
     XP_CONSOLATION,
     DEFAULT_BOOK_SLUG,
+    CHUNK_EXAM_PASS_RATE,
+    CHUNK_EXAM_QUESTIONS_PER_CHUNK,
+    CHUNK_MAX_TOKENS_EXAM_Q,
+    CHUNK_MAX_TOKENS_EXAM_EVAL,
+    OPENAI_MODEL_MINI,
 )
 from db.connection import get_db
 from db.models import Student, TeachingSession, ConversationMessage, StudentMastery, SpacedReview, CardInteraction
+from db.models import ConceptChunk, ChunkImage
 from api.teaching_schemas import (
     CreateStudentRequest, StudentResponse,
     StartSessionRequest, SessionResponse,
@@ -46,15 +55,35 @@ from api.teaching_schemas import (
     NextSectionCardsRequest, NextSectionCardsResponse,
     CompleteCardRequest, CompleteCardResponse,
     NextCardRequest, NextCardResponse,
+    ChunkCardsRequest, ChunkCardsResponse,
+    RecoveryCardRequest,
+    CompleteChunkRequest, CompleteChunkResponse,
+    ChunkSummary, ChunkListResponse,
+    ExamStartRequest, ExamStartResponse, ExamQuestion,
+    ExamSubmitRequest, ExamSubmitResponse, PerChunkScore,
+    ExamRetryRequest, ExamRetryResponse,
 )
 from api.rate_limiter import limiter
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/v2", tags=["teaching"])
 
-# Injected at startup by main.py
-_knowledge_services: dict = {}   # book_slug → KnowledgeService
+def _get_chunk_type(heading: str) -> str:
+    """Classify a chunk heading for SubsectionNav display and exam logic."""
+    h = heading.lower()
+    # "SECTION X.X EXERCISES" must be checked BEFORE the "(exercises)" suffix check
+    if re.match(r"^section\s+\d+\.\d+", h):
+        return "exercise_gate"
+    if "(exercises)" not in h:
+        return "teaching"
+    if "everyday math" in h or "writing exercises" in h:
+        return "practice"
+    if "practice makes perfect" in h:
+        return "exercise_gate"
+    return "exam_question_source"
+
+
+router = APIRouter(prefix="/api/v2", tags=["teaching"])
 
 
 # ── Request / response schemas for new endpoints ──────────────────────────────
@@ -103,6 +132,7 @@ async def _award_xp(
 
 # Set during app startup in main.py lifespan
 teaching_svc = None
+chunk_ksvc = None  # ChunkKnowledgeService — injected by main.py lifespan
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -332,23 +362,21 @@ async def get_concept_readiness(
     )
     mastered_ids = {row for row in mastery_result.scalars().all()}
 
-    _ksvc = (
-        teaching_svc.knowledge_services.get(DEFAULT_BOOK_SLUG)
-        or next(iter(teaching_svc.knowledge_services.values()))
-    )
-    graph = _ksvc.graph
-
-    if concept_id not in graph:
+    if not chunk_ksvc:
         return ConceptReadinessResponse(
             concept_id=concept_id,
             all_prerequisites_met=True,
             unmet_prerequisites=[],
         )
 
+    book_slug = DEFAULT_BOOK_SLUG
+    direct_prereqs = chunk_ksvc.get_predecessors(book_slug, concept_id)
+
     unmet = []
-    for prereq_id in graph.predecessors(concept_id):
+    for prereq_id in direct_prereqs:
         if prereq_id not in mastered_ids:
-            title = graph.nodes[prereq_id].get("title", prereq_id)
+            node = chunk_ksvc.get_concept_node(book_slug, prereq_id)
+            title = node["title"] if node else prereq_id
             unmet.append({"concept_id": prereq_id, "concept_title": title})
 
     logger.info(
@@ -413,12 +441,11 @@ async def start_session(request: Request, req: StartSessionRequest, db: AsyncSes
     student = await db.get(Student, req.student_id)
     if not student:
         raise HTTPException(404, "Student not found")
-    if req.book_slug not in _knowledge_services:
-        available = list(_knowledge_services.keys())
-        raise HTTPException(400, f"Book '{req.book_slug}' not loaded. Available: {available}")
+    active_books = await chunk_ksvc.get_active_books(db)
+    if req.book_slug not in active_books:
+        raise HTTPException(400, f"Book '{req.book_slug}' not loaded. Available: {sorted(active_books)}")
 
-    ksvc = _knowledge_services[req.book_slug]
-    concept_detail = ksvc.get_concept_detail(req.concept_id)
+    concept_detail = await chunk_ksvc.get_concept_detail(db, req.concept_id, req.book_slug)
     if not concept_detail:
         raise HTTPException(
             status_code=400,
@@ -446,8 +473,7 @@ async def get_presentation(request: Request, session_id: UUID, db: AsyncSession 
     student = await db.get(Student, session.student_id)
     presentation = await teaching_svc.generate_presentation(db, session, student)
 
-    _ksvc2 = teaching_svc.knowledge_services.get(session.book_slug or "prealgebra") or next(iter(teaching_svc.knowledge_services.values()))
-    concept = _ksvc2.get_concept_detail(session.concept_id)
+    concept = await chunk_ksvc.get_concept_detail(db, session.concept_id, session.book_slug or DEFAULT_BOOK_SLUG)
 
     # Filter images: only DIAGRAM-type with reasonable dimensions
     raw_images = concept.get("images", []) if concept else []
@@ -798,10 +824,10 @@ async def get_next_adaptive_card(
     session = await db.get(TeachingSession, session_id)
     if not session:
         raise HTTPException(404, "Session not found")
-    if session.phase != "CARDS":
+    if session.phase not in ("CARDS", "PRESENTING"):
         raise HTTPException(
             409,
-            f"Cannot generate next card: session is in {session.phase} phase (expected CARDS)",
+            f"Cannot generate next card: session is in {session.phase} phase (expected CARDS or PRESENTING)",
         )
 
     student = await db.get(Student, session.student_id)
@@ -826,6 +852,671 @@ async def get_next_adaptive_card(
         current_mode=result["current_mode"],
         concepts_covered_count=result["concepts_covered_count"],
         concepts_total=result["concepts_total"],
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════
+# CHUNK-BASED CARD GENERATION (Phase 3)
+# ═══════════════════════════════════════════════════════════════════
+
+@router.post(
+    "/sessions/{session_id}/chunk-cards",
+    response_model=ChunkCardsResponse,
+    summary="Generate all cards for a single ConceptChunk",
+)
+@limiter.limit("20/minute")
+async def generate_chunk_cards(
+    request: Request,
+    session_id: UUID,
+    req: ChunkCardsRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Generate all cards for a single chunk. Called when student enters a new chunk.
+
+    Returns interleaved content+MCQ cards for the given chunk_id, along with
+    position metadata (chunk_index, total_chunks, is_last_chunk).
+    """
+    session = await db.get(TeachingSession, session_id)
+    if not session:
+        raise HTTPException(404, "Session not found")
+
+    try:
+        cards_dicts = await teaching_svc.generate_per_chunk(session, db, req.chunk_id)
+        cards = []
+        for _c in cards_dicts:
+            try:
+                cards.append(LessonCard(**_c))
+            except Exception as _val_err:
+                logger.warning("[chunk-cards] skipping invalid card dict: %s", _val_err)
+        _chunks = await chunk_ksvc.get_chunks_for_concept(db, session.book_slug or DEFAULT_BOOK_SLUG, session.concept_id)
+        chunk_index = next((i for i, c in enumerate(_chunks) if c["id"] == req.chunk_id), 0)
+        await db.commit()
+        return ChunkCardsResponse(
+            cards=cards,
+            chunk_id=req.chunk_id,
+            chunk_index=chunk_index,
+            total_chunks=len(_chunks),
+            is_last_chunk=chunk_index == len(_chunks) - 1,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception(
+            "[chunk-cards] unhandled error: session_id=%s chunk_id=%s",
+            session_id, req.chunk_id,
+        )
+        raise HTTPException(500, f"Chunk card generation failed: {exc}")
+
+
+@router.post(
+    "/sessions/{session_id}/chunk-recovery-card",
+    response_model=LessonCard,
+    summary="Generate a recovery card when student fails an MCQ twice",
+)
+@limiter.limit("20/minute")
+async def generate_chunk_recovery_card(
+    request: Request,
+    session_id: UUID,
+    req: RecoveryCardRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Generate a recovery TEACH card re-explaining the chunk in STRUGGLING mode.
+
+    Called when student fails the same MCQ twice in a row.
+    Returns a single LessonCard with is_recovery=True.
+    """
+    session = await db.get(TeachingSession, session_id)
+    if not session:
+        raise HTTPException(404, "Session not found")
+
+    chunk = await chunk_ksvc.get_chunk(db, req.chunk_id)
+    if not chunk:
+        raise HTTPException(404, f"Chunk not found: {req.chunk_id}")
+
+    images = await chunk_ksvc.get_chunk_images(db, req.chunk_id)
+
+    recovery = await teaching_svc.generate_recovery_card_for_chunk(
+        session=session,
+        chunk=chunk,
+        chunk_images=images,
+        card_index=req.card_index,
+        wrong_answers=req.wrong_answers,
+    )
+
+    if not recovery:
+        raise HTTPException(500, "Recovery card generation failed")
+
+    await db.commit()
+    return LessonCard(**recovery)
+
+
+@router.post(
+    "/sessions/{session_id}/complete-chunk",
+    response_model=CompleteChunkResponse,
+    summary="Record completion of a study chunk and determine mode for the next chunk",
+)
+@limiter.limit("60/minute")
+async def complete_chunk(
+    request: Request,
+    session_id: UUID,
+    req: CompleteChunkRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Record completion of a study chunk and determine mode for the next chunk."""
+    from api.teaching_service import EXERCISE_HEADING_PATTERNS, _mode_from_chunk_score
+    from datetime import datetime
+
+    session = await db.get(TeachingSession, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    score = round((req.correct / req.total) * 100) if req.total > 0 else 0
+
+    # Record progress — full dict reassignment required for JSONB change detection
+    existing_progress = dict(session.chunk_progress or {})
+    existing_progress[req.chunk_id] = {
+        "mode": req.mode_used,
+        "score": score,
+        "correct": req.correct,
+        "total": req.total,
+        "completed_at": datetime.utcnow().isoformat(),
+    }
+    session.chunk_progress = existing_progress
+
+    # Determine mode for next chunk
+    next_mode = _mode_from_chunk_score(score)
+
+    # Update presentation_text cache with next mode
+    if session.presentation_text:
+        try:
+            cache = json.loads(session.presentation_text)
+            cache["current_mode"] = next_mode
+            session.presentation_text = json.dumps(cache)
+        except Exception:
+            pass
+
+    # Get all chunks for this concept
+    all_chunks = await chunk_ksvc.get_chunks_for_concept(
+        db, session.book_slug, session.concept_id
+    )
+    all_sorted = sorted(all_chunks, key=lambda c: c["order_index"])
+
+    # Find current chunk position
+    current_chunk = next(
+        (c for c in all_sorted if str(c["id"]) == req.chunk_id), None
+    )
+    current_order = current_chunk["order_index"] if current_chunk else 0
+
+    # Next teaching chunk after current
+    next_teaching = next(
+        (c for c in all_sorted
+         if c["order_index"] > current_order
+         and _get_chunk_type(c.get("heading", "")) == "teaching"),
+        None,
+    )
+
+    # all_study_complete: all teaching chunks are in chunk_progress
+    completed_ids = set(existing_progress.keys())
+    teaching_ids = {
+        str(c["id"]) for c in all_sorted
+        if _get_chunk_type(c.get("heading", "")) == "teaching"
+    }
+    all_study_complete = bool(teaching_ids) and teaching_ids.issubset(completed_ids)
+
+    await db.commit()
+    return CompleteChunkResponse(
+        chunk_id=req.chunk_id,
+        score=score,
+        next_mode=next_mode,
+        next_chunk_id=str(next_teaching["id"]) if next_teaching else None,
+        all_study_complete=all_study_complete,
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════
+# CHUNK LIST (B1)
+# ═══════════════════════════════════════════════════════════════════
+
+# Heading patterns that never produce an MCQ card (Appendix C of DLD).
+_NO_MCQ_HEADING_PATTERNS = (
+    "learning objectives",
+    "key terms",
+    "key concepts",
+    "summary",
+    "chapter review",
+    "review exercises",
+    "practice test",
+)
+
+
+def _heading_has_mcq(heading: str) -> bool:
+    """Return False for non-teaching headings that the DLD marks as MCQ-free."""
+    lower = heading.lower()
+    return not any(pattern in lower for pattern in _NO_MCQ_HEADING_PATTERNS)
+
+
+@router.get(
+    "/sessions/{session_id}/chunks",
+    response_model=ChunkListResponse,
+    summary="List ordered chunks for the session's concept",
+)
+@limiter.limit("60/minute")
+async def list_chunks(
+    request: Request,
+    session_id: UUID,
+    db: AsyncSession = Depends(get_db),
+):
+    """Return ordered ConceptChunk summaries for the concept in this session.
+
+    An empty chunks list signals a ChromaDB-path session — the frontend must
+    fall back to the legacy POST /sessions/{id}/cards flow.
+    """
+    session = await db.get(TeachingSession, session_id)
+    if not session:
+        raise HTTPException(404, "Session not found")
+
+    book_slug = session.book_slug or DEFAULT_BOOK_SLUG
+    concept_id = session.concept_id
+
+    # Fetch all chunks in textbook order
+    result = await db.execute(
+        select(ConceptChunk)
+        .where(ConceptChunk.book_slug == book_slug, ConceptChunk.concept_id == concept_id)
+        .order_by(ConceptChunk.order_index)
+    )
+    chunks = result.scalars().all()
+
+    if not chunks:
+        # ChromaDB-path signal: return empty list
+        logger.info(
+            "[chunks] no chunks found — ChromaDB path: session_id=%s concept_id=%s",
+            session_id, concept_id,
+        )
+        return ChunkListResponse(
+            concept_id=concept_id,
+            section_title="",
+            chunks=[],
+            current_chunk_index=session.chunk_index or 0,
+        )
+
+    # Check image existence per chunk in a single batch query
+    chunk_ids = [c.id for c in chunks]
+    img_result = await db.execute(
+        select(ChunkImage.chunk_id)
+        .where(ChunkImage.chunk_id.in_(chunk_ids))
+        .distinct()
+    )
+    chunks_with_images: set = {row[0] for row in img_result.fetchall()}
+
+    progress = session.chunk_progress or {}
+
+    summaries = [
+        ChunkSummary(
+            chunk_id=str(c.id),
+            order_index=c.order_index,
+            heading=c.heading,
+            has_images=c.id in chunks_with_images,
+            has_mcq=_heading_has_mcq(c.heading),
+            chunk_type=_get_chunk_type(c.heading),
+            completed=str(c.id) in progress,
+            score=progress.get(str(c.id), {}).get("score"),
+            mode_used=progress.get(str(c.id), {}).get("mode"),
+        )
+        for c in chunks
+    ]
+
+    section_title = chunks[0].section if chunks else ""
+
+    logger.info(
+        "[chunks] session_id=%s concept_id=%s total=%d current_index=%d",
+        session_id, concept_id, len(summaries), session.chunk_index or 0,
+    )
+
+    return ChunkListResponse(
+        concept_id=concept_id,
+        section_title=section_title,
+        chunks=summaries,
+        current_chunk_index=session.chunk_index or 0,
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════
+# SOCRATIC EXAM (B2)
+# ═══════════════════════════════════════════════════════════════════
+
+async def _call_llm_json(
+    client,
+    system_prompt: str,
+    user_prompt: str,
+    max_tokens: int,
+) -> dict:
+    """Call LLM with a JSON-output system prompt; parse and return the dict.
+
+    Retries up to 3 times with exponential back-off. Raises ValueError on
+    persistent failure or invalid JSON.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(1, 4):
+        try:
+            resp = await client.chat.completions.create(
+                model=OPENAI_MODEL_MINI,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user",   "content": user_prompt},
+                ],
+                max_tokens=max_tokens,
+                temperature=0.3,
+                timeout=30.0,
+            )
+            raw = (resp.choices[0].message.content or "").strip()
+            # Strip optional markdown code fences
+            if raw.startswith("```"):
+                raw = re.sub(r"^```(?:json)?\s*", "", raw)
+                raw = re.sub(r"\s*```$", "", raw)
+            return json.loads(raw)
+        except Exception as exc:
+            last_exc = exc
+            logger.warning(
+                "[exam-llm] attempt=%d failed: %s", attempt, exc
+            )
+        if attempt < 3:
+            await asyncio.sleep(2 * attempt)
+    raise ValueError(f"LLM call failed after 3 attempts: {last_exc}")
+
+
+@router.post(
+    "/sessions/{session_id}/exam/start",
+    response_model=ExamStartResponse,
+    summary="Generate typed-answer exam questions for all chunks",
+)
+@limiter.limit("10/minute")
+async def start_exam(
+    request: Request,
+    session_id: UUID,
+    req: ExamStartRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Generate one open-ended question per teaching chunk.
+
+    Questions are stored in session.exam_scores JSONB so submit can evaluate
+    them without re-generating. Sets exam_phase = 'exam'.
+    """
+    session = await db.get(TeachingSession, session_id)
+    if not session:
+        raise HTTPException(404, "Session not found")
+
+    book_slug = session.book_slug or DEFAULT_BOOK_SLUG
+    chunks = await chunk_ksvc.get_chunks_for_concept(db, book_slug, req.concept_id)
+
+    if not chunks:
+        raise HTTPException(404, f"No chunks found for concept '{req.concept_id}'")
+
+    # Filter to exam_question_source chunks only
+    exam_source_chunks = [
+        c for c in chunks
+        if _get_chunk_type(c["heading"]) == "exam_question_source"
+    ]
+    if not exam_source_chunks:
+        raise HTTPException(
+            409, "No exam question source chunks available for exam"
+        )
+
+    llm = teaching_svc.openai
+
+    q_system = (
+        "You are an educational assessor. Generate one open-ended question that tests "
+        "deep understanding of the subsection below. The question must require a "
+        "sentence answer (not a single word or number). "
+        'Return JSON only: {"question": "..."}'
+    )
+
+    questions_data: list[dict] = []
+    exam_questions: list[ExamQuestion] = []
+    global_idx = 0
+
+    for chunk in exam_source_chunks:
+        for _ in range(CHUNK_EXAM_QUESTIONS_PER_CHUNK):
+            user_prompt = f"Heading: {chunk['heading']}\n\n{chunk['text'][:500]}"
+            try:
+                parsed = await _call_llm_json(llm, q_system, user_prompt, CHUNK_MAX_TOKENS_EXAM_Q)
+                question_text = parsed.get("question", "").strip()
+                if not question_text:
+                    raise ValueError("empty question returned")
+            except Exception as exc:
+                logger.error(
+                    "[exam-start] question_gen_failed: session_id=%s chunk_id=%s error=%s",
+                    session_id, chunk["id"], exc,
+                )
+                raise HTTPException(500, f"Question generation failed for chunk '{chunk['heading']}'")
+
+            questions_data.append({
+                "question_index": global_idx,
+                "chunk_id": chunk["id"],
+                "chunk_heading": chunk["heading"],
+                "question_text": question_text,
+            })
+            exam_questions.append(ExamQuestion(
+                question_index=global_idx,
+                chunk_id=chunk["id"],
+                chunk_heading=chunk["heading"],
+                question_text=question_text,
+            ))
+            global_idx += 1
+
+    # Persist questions in session; answers will be filled on submit
+    session.exam_phase = "exam"
+    session.exam_scores = {"questions": questions_data, "answers": {}}
+    await db.commit()
+
+    logger.info(
+        "[exam-start] session_id=%s total_questions=%d",
+        session_id, len(questions_data),
+    )
+
+    return ExamStartResponse(
+        exam_id=str(session_id),
+        questions=exam_questions,
+        total_questions=len(exam_questions),
+        pass_threshold=CHUNK_EXAM_PASS_RATE,
+    )
+
+
+@router.post(
+    "/sessions/{session_id}/exam/submit",
+    response_model=ExamSubmitResponse,
+    summary="Submit typed answers for LLM evaluation",
+)
+@limiter.limit("10/minute")
+async def submit_exam(
+    request: Request,
+    session_id: UUID,
+    req: ExamSubmitRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Evaluate student answers via LLM; compute per-chunk and overall scores.
+
+    On pass: inserts StudentMastery row (with race-condition guard).
+    Increments exam_attempt; stores failed_chunk_ids for retry routing.
+    """
+    session = await db.get(TeachingSession, session_id)
+    if not session:
+        raise HTTPException(404, "Session not found")
+
+    stored = session.exam_scores or {}
+    questions_data: list[dict] = stored.get("questions", [])
+
+    if not questions_data:
+        raise HTTPException(400, "No exam questions found — call exam/start first")
+    if len(req.answers) != len(questions_data):
+        raise HTTPException(
+            400,
+            f"Expected {len(questions_data)} answers, received {len(req.answers)}",
+        )
+
+    llm = teaching_svc.openai
+
+    eval_system = (
+        "You are a math educator evaluating a student answer. "
+        "Mark it correct if it demonstrates understanding of the key concept — "
+        "exact wording is not required. "
+        'Return JSON only: {"correct": true or false, "feedback": "one sentence"}'
+    )
+
+    # Build answer lookup by question_index
+    answer_map: dict[int, str] = {a.question_index: a.answer_text for a in req.answers}
+
+    # Per-chunk bookkeeping: each teaching chunk has exactly one question
+    chunk_correct: dict[str, int] = {}   # chunk_id -> 1 (correct) or 0 (wrong)
+    chunk_headings: dict[str, str] = {}  # chunk_id -> heading
+
+    for qdata in questions_data:
+        qidx = qdata["question_index"]
+        chunk_id = qdata["chunk_id"]
+        chunk_heading = qdata["chunk_heading"]
+        chunk_headings[chunk_id] = chunk_heading
+
+        answer_text = answer_map.get(qidx, "").strip()
+
+        user_prompt = (
+            f"Question: {qdata['question_text']}\n"
+            f"Student answer: {answer_text}\n"
+            "Correct if the answer demonstrates understanding of the key concept."
+        )
+        try:
+            parsed = await _call_llm_json(
+                llm, eval_system, user_prompt, CHUNK_MAX_TOKENS_EXAM_EVAL
+            )
+            is_correct = bool(parsed.get("correct", False))
+        except Exception as exc:
+            logger.error(
+                "[exam-submit] eval_failed: session_id=%s q_index=%d error=%s",
+                session_id, qidx, exc,
+            )
+            # Treat evaluation failure as incorrect to avoid inflating scores
+            is_correct = False
+
+        chunk_correct[chunk_id] = 1 if is_correct else 0
+
+    total_questions = len(questions_data)
+    total_correct = sum(chunk_correct.values())
+    score = total_correct / total_questions if total_questions else 0.0
+    passed = score >= CHUNK_EXAM_PASS_RATE
+
+    # Per-chunk score fractions (one question per chunk → binary 0.0 or 1.0)
+    per_chunk_scores: dict[str, float] = {
+        cid: float(correct) for cid, correct in chunk_correct.items()
+    }
+
+    failed_chunks = [
+        PerChunkScore(
+            chunk_id=cid,
+            heading=chunk_headings.get(cid, ""),
+            score=per_chunk_scores[cid],
+        )
+        for cid, sc in per_chunk_scores.items()
+        if sc < 1.0
+    ]
+
+    failed_chunk_id_list = [fc.chunk_id for fc in failed_chunks]
+
+    # Update session
+    new_attempt = (session.exam_attempt or 0) + 1
+    session.exam_attempt = new_attempt
+    session.failed_chunk_ids = failed_chunk_id_list
+
+    # Merge answers into stored state for audit
+    updated_scores = dict(stored)
+    updated_scores["answers"] = answer_map
+    updated_scores["per_chunk_scores"] = per_chunk_scores
+    session.exam_scores = updated_scores
+
+    if passed:
+        session.exam_phase = None
+        session.concept_mastered = True
+        session.phase = "COMPLETED"
+        session.completed_at = datetime.now(timezone.utc)
+
+        # Insert StudentMastery with race-condition guard
+        existing = await db.execute(
+            select(StudentMastery).where(
+                StudentMastery.student_id == session.student_id,
+                StudentMastery.concept_id == session.concept_id,
+            )
+        )
+        existing_mastery = existing.scalar_one_or_none()
+        if existing_mastery:
+            existing_mastery.session_id = session.id
+            existing_mastery.mastered_at = datetime.now(timezone.utc)
+        else:
+            db.add(StudentMastery(
+                student_id=session.student_id,
+                concept_id=session.concept_id,
+                session_id=session.id,
+            ))
+        logger.info(
+            "[exam-submit] PASSED: session_id=%s score=%.2f attempt=%d",
+            session_id, score, new_attempt,
+        )
+    else:
+        logger.info(
+            "[exam-submit] FAILED: session_id=%s score=%.2f attempt=%d failed_chunks=%d",
+            session_id, score, new_attempt, len(failed_chunks),
+        )
+
+    await db.commit()
+
+    # retry_options: targeted is only available if attempt < 3
+    retry_options = ["targeted", "full_redo"] if new_attempt < 3 else ["full_redo"]
+
+    return ExamSubmitResponse(
+        score=round(score, 4),
+        passed=passed,
+        total_correct=total_correct,
+        total_questions=total_questions,
+        per_chunk_scores=per_chunk_scores,
+        failed_chunks=failed_chunks,
+        exam_attempt=new_attempt,
+        retry_options=retry_options,
+    )
+
+
+@router.post(
+    "/sessions/{session_id}/exam/retry",
+    response_model=ExamRetryResponse,
+    summary="Initiate targeted or full-redo retry after a failed exam",
+)
+@limiter.limit("10/minute")
+async def retry_exam(
+    request: Request,
+    session_id: UUID,
+    req: ExamRetryRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Set exam_phase to 'retry_study' and return the chunks to re-study.
+
+    targeted: returns only the chunks where the student scored 0.
+    full_redo: returns all chunks for the concept.
+    Targeted retry is blocked after 3 attempts (HTTP 409).
+    """
+    session = await db.get(TeachingSession, session_id)
+    if not session:
+        raise HTTPException(404, "Session not found")
+
+    if req.retry_type not in ("targeted", "full_redo"):
+        raise HTTPException(400, "retry_type must be 'targeted' or 'full_redo'")
+
+    current_attempt = session.exam_attempt or 0
+
+    if req.retry_type == "targeted" and current_attempt >= 3:
+        raise HTTPException(
+            409, "Targeted retry not available after 3 attempts — use full_redo"
+        )
+
+    book_slug = session.book_slug or DEFAULT_BOOK_SLUG
+    all_chunks = await chunk_ksvc.get_chunks_for_concept(db, book_slug, session.concept_id)
+
+    if req.retry_type == "targeted":
+        # Return only the failed chunks identified in the last submit
+        failed_ids: set[str] = set(req.failed_chunk_ids or session.failed_chunk_ids or [])
+        retry_raw = [c for c in all_chunks if c["id"] in failed_ids]
+    else:
+        retry_raw = all_chunks
+
+    # Check image existence for returned chunks
+    if retry_raw:
+        retry_ids = [UUID(c["id"]) for c in retry_raw]
+        img_result = await db.execute(
+            select(ChunkImage.chunk_id)
+            .where(ChunkImage.chunk_id.in_(retry_ids))
+            .distinct()
+        )
+        chunks_with_images: set = {row[0] for row in img_result.fetchall()}
+    else:
+        chunks_with_images = set()
+
+    retry_summaries = [
+        ChunkSummary(
+            chunk_id=c["id"],
+            order_index=c["order_index"],
+            heading=c["heading"],
+            has_images=UUID(c["id"]) in chunks_with_images,
+            has_mcq=_heading_has_mcq(c["heading"]),
+        )
+        for c in retry_raw
+    ]
+
+    session.exam_phase = "retry_study"
+    await db.commit()
+
+    logger.info(
+        "[exam-retry] session_id=%s retry_type=%s retry_chunks=%d attempt=%d",
+        session_id, req.retry_type, len(retry_summaries), current_attempt,
+    )
+
+    return ExamRetryResponse(
+        retry_chunks=retry_summaries,
+        exam_phase="retry_study",
+        exam_attempt=current_attempt,
     )
 
 
@@ -1194,7 +1885,7 @@ async def get_session_card_interactions(
 
 
 @router.get("/books", response_model=list[dict])
-async def list_available_books():
+async def list_available_books(db: AsyncSession = Depends(get_db)):
     """Return all processed books available for study."""
     try:
         from config import BOOK_REGISTRY
@@ -1207,10 +1898,16 @@ async def list_available_books():
     except (ImportError, AttributeError):
         slug_to_title = {}
 
+    active_books: set[str] = set()
+    try:
+        active_books = await chunk_ksvc.get_active_books(db)
+    except Exception as exc:
+        logger.warning("[list_available_books] get_active_books failed: %s", exc)
+
     return [
         {
             "slug": slug,
             "title": slug_to_title.get(slug, slug.replace("_", " ").title()),
         }
-        for slug in sorted(teaching_svc.knowledge_services.keys())
+        for slug in sorted(active_books)
     ]

@@ -400,6 +400,21 @@ class ChunkCardsResponse(BaseModel):
     is_last_chunk: bool
 
 
+class CompleteChunkRequest(BaseModel):
+    chunk_id:  str  # UUID of completed study chunk (NOT exam/exercise_gate chunks)
+    correct:   int  # MCQs answered correctly on this chunk
+    total:     int  # Total MCQs attempted on this chunk
+    mode_used: str  # STRUGGLING / NORMAL / FAST
+
+
+class CompleteChunkResponse(BaseModel):
+    chunk_id:           str
+    score:              int        # 0–100 percentage
+    next_mode:          str        # mode for next chunk generation
+    next_chunk_id:      str | None # UUID of next teaching chunk; None if all done
+    all_study_complete: bool       # True when all teaching chunks completed → unlock EXAM
+
+
 class RecoveryCardRequest(BaseModel):
     chunk_id: str
     card_index: int = 0         # the card that triggered recovery
@@ -422,3 +437,86 @@ class SocraticExamResult(BaseModel):
     correct_count: int
     failed_chunk_ids: list[str]
     attempt: int
+
+
+# ── Chunk List Schemas ─────────────────────────────────────────────────────────
+
+class ChunkSummary(BaseModel):
+    """Summary of a single ConceptChunk for the chunk progress indicator."""
+    chunk_id:    str         # UUID string
+    order_index: int         # absolute textbook position (sort key)
+    heading:     str         # e.g. "Use Addition Notation"
+    has_images:  bool        # True if at least one chunk_images row exists
+    has_mcq:     bool        # determined by heading rule (no MCQ for Learning Objectives etc.)
+    chunk_type:  str = "teaching"  # "teaching" | "practice" | "exam_question_source" | "exercise_gate"
+    completed:   bool = False
+    score:       int | None = None
+    mode_used:   str | None = None
+
+
+class ChunkListResponse(BaseModel):
+    """
+    Response for GET /sessions/{id}/chunks.
+    Empty chunks list signals ChromaDB-path session — frontend falls back to legacy card flow.
+    """
+    concept_id:          str
+    section_title:       str
+    chunks:              list[ChunkSummary]
+    current_chunk_index: int   # value of teaching_sessions.chunk_index
+
+
+# ── Exam Schemas ───────────────────────────────────────────────────────────────
+
+class ExamStartRequest(BaseModel):
+    concept_id: str
+
+
+class ExamQuestion(BaseModel):
+    question_index: int
+    chunk_id:       str
+    chunk_heading:  str
+    question_text:  str
+
+
+class ExamStartResponse(BaseModel):
+    exam_id:         str                 # session_id as string
+    questions:       list[ExamQuestion]
+    total_questions: int
+    pass_threshold:  float               # CHUNK_EXAM_PASS_RATE constant
+
+
+class ExamAnswer(BaseModel):
+    question_index: int
+    answer_text:    str
+
+
+class ExamSubmitRequest(BaseModel):
+    answers: list[ExamAnswer]
+
+
+class PerChunkScore(BaseModel):
+    chunk_id: str
+    heading:  str
+    score:    float
+
+
+class ExamSubmitResponse(BaseModel):
+    score:            float               # overall fraction correct (0.0–1.0)
+    passed:           bool                # score >= CHUNK_EXAM_PASS_RATE
+    total_correct:    int
+    total_questions:  int
+    per_chunk_scores: dict[str, float]   # chunk_id -> score fraction
+    failed_chunks:    list[PerChunkScore]
+    exam_attempt:     int
+    retry_options:    list[str]          # ["targeted", "full_redo"] or ["full_redo"]
+
+
+class ExamRetryRequest(BaseModel):
+    retry_type:       str            # "targeted" or "full_redo"
+    failed_chunk_ids: list[str] = []
+
+
+class ExamRetryResponse(BaseModel):
+    retry_chunks: list[ChunkSummary]
+    exam_phase:   str   # "retry_study" or "retry_exam"
+    exam_attempt: int

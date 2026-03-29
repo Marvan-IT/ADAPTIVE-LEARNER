@@ -2,7 +2,6 @@ import { createContext, useContext, useReducer, useCallback } from "react";
 import i18n from "i18next";
 import {
   startSession,
-  getCards,
   assistStudent,
   completeCards,
   beginCheck,
@@ -12,8 +11,13 @@ import {
   recordCardInteraction,
   loadRemediationCards as loadRemediationCardsAPI,
   beginRecheck as beginRecheckAPI,
-  getNextSectionCards,
-  fetchNextAdaptiveCard,
+  generateChunkCards,
+  generateChunkRecoveryCard,
+  getChunkList,
+  completeChunk,
+  startExam,
+  submitExam,
+  retryExam,
 } from "../api/sessions";
 import { useStudent } from "./StudentContext";
 import { useTheme } from "./ThemeContext";
@@ -51,7 +55,6 @@ const initialState = {
   // Adaptive transparency
   learningProfileSummary: null,
   adaptationApplied: null,
-  difficultyBias: null,
   // Remediation / re-check flow
   socraticAttempt: 0,
   remediationNeeded: false,
@@ -61,13 +64,31 @@ const initialState = {
   bestScore: null,
   // Rolling adaptive replace
   adaptiveCallInFlight: false,
-  // Rolling section generation
+  // Section tracking
   hasMoreConcepts: true,
   conceptsTotal: 0,
   conceptsCoveredCount: 0,
-  rollingCallInFlight: false,
   // Per-card adaptive generation
   nextCardInFlight: false,
+  // Chunk-based card loading
+  currentChunkId: null,
+  currentChunkIndex: 0,
+  totalChunks: 0,
+  // Chunk-based navigation (new flow)
+  chunkList: [],
+  chunkIndex: 0,
+  nextChunkCards: null,
+  nextChunkInFlight: false,
+  // Chunk progress tracking
+  chunkProgress: {},
+  currentChunkMode: "NORMAL",
+  allStudyComplete: false,
+  modeJustChanged: false,
+  // Exam state
+  examPhase: null,
+  examQuestions: [],
+  examAttempt: 0,
+  examScores: null,
 };
 
 // Valid phases: IDLE, LOADING, CARDS, CHECKING, COMPLETED,
@@ -168,12 +189,6 @@ function sessionReducer(state, action) {
     case "ADAPTIVE_CALL_DONE":
       return { ...state, adaptiveCallInFlight: false };
 
-    case "ROLLING_CALL_STARTED":
-      return { ...state, rollingCallInFlight: true };
-
-    case "ROLLING_CALL_DONE":
-      return { ...state, rollingCallInFlight: false };
-
     case "NEXT_CARD_FETCH_STARTED":
       return { ...state, nextCardInFlight: true };
 
@@ -186,18 +201,6 @@ function sessionReducer(state, action) {
         cards: [...state.cards, action.payload.card],
         hasMoreConcepts: action.payload.has_more_concepts,
         nextCardInFlight: false,
-      };
-
-    case "APPEND_CARDS":
-      return {
-        ...state,
-        cards: [...state.cards, ...action.payload.cards],
-        hasMoreConcepts: action.payload.has_more_concepts,
-        conceptsTotal: action.payload.concepts_total,
-        conceptsCoveredCount: action.payload.concepts_covered_count,
-        learningProfileSummary: action.payload.learning_profile_summary ?? null,
-        rollingCallInFlight: false,
-        adaptiveCallInFlight: false,
       };
 
     case "REPLACE_UPCOMING_CARD": {
@@ -235,8 +238,77 @@ function sessionReducer(state, action) {
       };
     }
 
-    case "SET_DIFFICULTY_BIAS":
-      return { ...state, difficultyBias: action.payload };
+    case "CHUNK_CARDS_LOADED":
+      return {
+        ...state,
+        cards: action.payload.cards,
+        currentCardIndex: 0,
+        currentChunkId: action.payload.chunk_id,
+        currentChunkIndex: action.payload.chunk_index,
+        totalChunks: action.payload.total_chunks,
+        nextCardInFlight: false,
+      };
+
+    case "CHUNK_LIST_LOADED":
+      return {
+        ...state,
+        chunkList: action.payload.chunks,
+        chunkIndex: action.payload.current_chunk_index,
+      };
+
+    case "CHUNK_CARDS_LOADED_NEW":
+      return {
+        ...state,
+        cards: action.payload.cards,
+        currentCardIndex: 0,
+        maxReachedIndex: 0,
+        chunkIndex: action.payload.chunk_index_after ?? state.chunkIndex,
+        phase: "CARDS",
+        loading: false,
+        hasMoreConcepts: (action.payload.chunk_index_after ?? state.chunkIndex) < state.chunkList.length - 1,
+      };
+
+    case "NEXT_CHUNK_FETCH_STARTED":
+      return { ...state, nextChunkInFlight: true };
+
+    case "NEXT_CHUNK_CARDS_READY":
+      return { ...state, nextChunkCards: action.payload, nextChunkInFlight: false };
+
+    case "NEXT_CHUNK_FETCH_DONE":
+      return { ...state, nextChunkInFlight: false };
+
+    case "CHUNK_ADVANCE":
+      if (!(state.nextChunkCards?.cards?.length > 0)) return state; // safety guard
+      return {
+        ...state,
+        cards: state.nextChunkCards?.cards ?? [],
+        chunkIndex: state.chunkIndex + 1,
+        currentCardIndex: 0,
+        maxReachedIndex: 0,
+        nextChunkCards: null,
+        nextChunkInFlight: false,
+        hasMoreConcepts: (state.chunkIndex + 1) < state.chunkList.length - 1,
+      };
+
+    case "EXAM_STARTED":
+      return {
+        ...state,
+        examPhase: "exam",
+        examQuestions: action.payload.questions,
+        examAttempt: action.payload.exam_attempt ?? 0,
+      };
+
+    case "EXAM_SUBMITTED":
+      return { ...state, examPhase: "submitted", examScores: action.payload };
+
+    case "EXAM_RETRY_SET":
+      return {
+        ...state,
+        examPhase: action.payload.exam_phase,
+        chunkList: action.payload.retry_chunks ?? state.chunkList,
+        chunkIndex: 0,
+      };
+
     case "ADAPTIVE_CARD_ERROR":
       return {
         ...state,
@@ -361,6 +433,27 @@ function sessionReducer(state, action) {
         loading: false,
       };
     }
+    case "CHUNK_COMPLETED": {
+      const prevMode = state.currentChunkMode;
+      const newMode = action.payload.next_mode || prevMode;
+      return {
+        ...state,
+        chunkProgress: {
+          ...state.chunkProgress,
+          [action.payload.chunk_id]: {
+            score: action.payload.score,
+            mode_used: action.payload.next_mode,
+          },
+        },
+        currentChunkMode: newMode,
+        allStudyComplete: action.payload.all_study_complete ?? state.allStudyComplete,
+        modeJustChanged: newMode !== prevMode,
+      };
+    }
+
+    case "MODE_CHANGE_ACKNOWLEDGED":
+      return { ...state, modeJustChanged: false };
+
     case "RESET":
       return initialState;
     case "ERROR":
@@ -401,14 +494,35 @@ export function SessionProvider({ children }) {
         const effectiveStyle = lessonStyle || style;
         const sessionRes = await startSession(student.id, conceptId, effectiveStyle, lessonInterests);
         dispatch({ type: "SESSION_CREATED", payload: sessionRes.data });
-        const cardsRes = await getCards(sessionRes.data.id);
-        dispatch({ type: "CARDS_LOADED", payload: cardsRes.data });
-        trackEvent("cards_loaded", {
-          card_count: cardsRes.data.cards?.length || 0,
-          question_count: cardsRes.data.total_questions || 0,
-          concept_id: cardsRes.data.concept_id,
-          concept_title: cardsRes.data.concept_title,
-        });
+
+        // Check for chunk list — if the concept has chunks, use chunk flow
+        const chunkListRes = await getChunkList(sessionRes.data.id);
+        const chunkListData = chunkListRes.data;
+
+        if (chunkListData.chunks && chunkListData.chunks.length > 0) {
+          // Chunk path: load cards for first chunk
+          dispatch({ type: "CHUNK_LIST_LOADED", payload: chunkListData });
+          const firstChunkId = chunkListData.chunks[chunkListData.current_chunk_index]?.chunk_id
+            ?? chunkListData.chunks[0].chunk_id;
+          const chunkCardsRes = await generateChunkCards(sessionRes.data.id, firstChunkId);
+          dispatch({
+            type: "CHUNK_CARDS_LOADED_NEW",
+            payload: {
+              cards: chunkCardsRes.cards,
+              chunk_index_after: chunkCardsRes.chunk_index,
+            },
+          });
+        } else {
+          // GET /chunks returned an empty list — this should never happen now that ChromaDB
+          // has been removed and every concept must go through the chunk pipeline.
+          dispatch({
+            type: "ERROR",
+            payload: `No chunks found for session ${sessionRes.data.id}. ` +
+              "The chunk pipeline may not have run for this concept. " +
+              "Re-run the extraction pipeline and try again.",
+          });
+        }
+        trackEvent("cards_loaded", { concept_id: conceptId });
       } catch (err) {
         trackEvent("lesson_error", {
           error_message: friendlyError(err),
@@ -428,54 +542,49 @@ export function SessionProvider({ children }) {
         return;
       }
 
-      const nearEnd = state.currentCardIndex >= state.cards.length - 2;
-      let rollingJustStarted = false;
+      // CASE A2: second MCQ fail → RECAP card from explanation, then advance
+      if (signals?.wrongAttempts >= 2) {
+        const currentCard = state.cards[state.currentCardIndex];
+        if (currentCard?.question?.explanation) {
+          const recapCard = {
+            index: state.currentCardIndex + 0.5,
+            title: `Recap: ${currentCard.title || "Key Rule"}`,
+            content: `**Key rule:** ${currentCard.question.explanation}`,
+            image_url: null,
+            caption: null,
+            question: null,
+            is_recovery: true,
+          };
+          dispatch({ type: "INSERT_RECOVERY_CARD", payload: recapCard });
+        }
+        dispatch({ type: "NEXT_CARD" });
+        return;
+      }
 
-      // CASE A: both MCQs wrong → recovery card via completeCardAndGetNext
-      if (signals?.wrongAttempts >= 2 && signals?.reExplainCardTitle) {
+      // CASE A: first MCQ fail → recovery card via chunk-recovery-card endpoint
+      if (signals?.wrongAttempts >= 1 && signals?.reExplainCardTitle) {
         dispatch({ type: "ADAPTIVE_CALL_STARTED" });
         try {
-          const res = await completeCardAndGetNext(state.session.id, signals);
-          // Only replace if backend returned an adapted card (field is absent in current schema)
-          if (res.data?.card) {
-            dispatch({ type: "REPLACE_UPCOMING_CARD", payload: res.data });
-          }
-          if (res.data?.recovery_card) {
-            dispatch({ type: "INSERT_RECOVERY_CARD", payload: res.data.recovery_card });
+          const currentCard = state.cards[state.currentCardIndex];
+          const res = await generateChunkRecoveryCard(
+            state.session.id,
+            currentCard?.chunk_id,
+            state.currentCardIndex,
+            signals?.wrongAnswer ? [signals.wrongAnswer] : []
+          );
+          if (res?.recovery_card) {
+            dispatch({ type: "INSERT_RECOVERY_CARD", payload: res.recovery_card });
           }
           dispatch({ type: "NEXT_CARD" });   // advance past the failed card
-          useAdaptiveStore.getState().updateMode(res.data.learning_profile_summary);
           useAdaptiveStore.getState().awardXP(5);
         } catch (err) {
-          console.error("[SessionContext] adaptive card fetch failed:", err);
+          console.error("[SessionContext] recovery card fetch failed:", err);
           dispatch({ type: "ADAPTIVE_CARD_ERROR" });
           dispatch({ type: "NEXT_CARD" });   // still advance so student is not stuck
         } finally {
           dispatch({ type: "ADAPTIVE_CALL_DONE" });
         }
         return;
-      }
-
-      // CASE B: near end of batch AND more sections remain → pre-fetch next sub-section
-      if (nearEnd && state.hasMoreConcepts && !state.rollingCallInFlight) {
-        rollingJustStarted = true;
-        dispatch({ type: "ROLLING_CALL_STARTED" });
-        getNextSectionCards(state.session.id, {
-          card_index: state.currentCardIndex,
-          time_on_card_sec: signals?.timeOnCardSec ?? 0,
-          wrong_attempts: signals?.wrongAttempts ?? 0,
-          hints_used: signals?.hintsUsed ?? 0,
-          idle_triggers: signals?.idleTriggers ?? 0,
-        }).then(res => {
-          dispatch({ type: "APPEND_CARDS", payload: res.data });
-          if (res.data?.learning_profile_summary) {
-            useAdaptiveStore.getState().updateMode(res.data.learning_profile_summary);
-          }
-        }).catch(err => {
-          console.error("[rolling] failed to fetch next section:", err);
-          dispatch({ type: "ROLLING_CALL_DONE" });
-        });
-        // Fall through — also advance the card index below (pre-fetch is async)
       }
 
       // CASE D: mid-batch — record interaction and advance index
@@ -485,34 +594,21 @@ export function SessionProvider({ children }) {
         console.error("[card] recordCardInteraction failed:", err);
       }
 
-      // Fire per-card adaptive fetch in background before advancing the index
-      // so the new card lands at exactly currentCardIndex + 1 when it arrives.
-      // Skip if rolling-section fetch was just triggered this invocation (mutually exclusive).
-      if (!state.nextCardInFlight && state.hasMoreConcepts && !state.rollingCallInFlight && !rollingJustStarted) {
-        dispatch({ type: "NEXT_CARD_FETCH_STARTED" });
-        fetchNextAdaptiveCard(state.session.id, {
-          card_index:       state.currentCardIndex,
-          time_on_card_sec: signals?.timeOnCardSec ?? 30,
-          wrong_attempts:   signals?.wrongAttempts ?? 0,
-          hints_used:       signals?.hintsUsed ?? 0,
-          idle_triggers:    signals?.idleTriggers ?? 0,
-        }).then((res) => {
-          if (res.data.card) {
-            dispatch({ type: "APPEND_NEXT_CARD", payload: res.data });
-          } else {
-            // Queue exhausted — no new card, just clear the in-flight flag
-            dispatch({ type: "NEXT_CARD_FETCH_DONE" });
+      // Chunk flow: pre-fetch next chunk when on second-to-last card
+      if (state.chunkList.length > 0) {
+        const isSecondToLast = state.currentCardIndex === state.cards.length - 2;
+        const hasNextChunk = state.chunkIndex < state.chunkList.length - 1;
+        if (isSecondToLast && hasNextChunk && !state.nextChunkInFlight && !state.nextChunkCards) {
+          dispatch({ type: "NEXT_CHUNK_FETCH_STARTED" });
+          const nextChunkId = state.chunkList[state.chunkIndex + 1]?.chunk_id;
+          if (nextChunkId) {
+            generateChunkCards(state.session.id, nextChunkId)
+              .then((data) => dispatch({ type: "NEXT_CHUNK_CARDS_READY", payload: data }))
+              .catch(() => dispatch({ type: "NEXT_CHUNK_FETCH_DONE" }));
           }
-          if (!res.data.has_more_concepts) {
-            dispatch({ type: "NEXT_CARD_FETCH_DONE" });
-          }
-          if (res.data?.learning_profile_summary) {
-            useAdaptiveStore.getState().updateMode(res.data.learning_profile_summary);
-          }
-        }).catch((err) => {
-          console.error("[per-card] next-card fetch failed:", err);
-          dispatch({ type: "NEXT_CARD_FETCH_DONE" });
-        });
+        }
+        dispatch({ type: "NEXT_CARD" });
+        return;
       }
 
       dispatch({ type: "NEXT_CARD" });
@@ -522,9 +618,10 @@ export function SessionProvider({ children }) {
       state.cards.length,
       state.currentCardIndex,
       state.adaptiveCallInFlight,
-      state.hasMoreConcepts,
-      state.rollingCallInFlight,
-      state.nextCardInFlight,
+      state.chunkList,
+      state.chunkIndex,
+      state.nextChunkInFlight,
+      state.nextChunkCards,
     ]
   );
 
@@ -659,12 +756,97 @@ export function SessionProvider({ children }) {
     }
   }, []);
 
+  const loadChunkCards = useCallback(async (chunkId) => {
+    if (!state.session?.id) return;
+    try {
+      const response = await generateChunkCards(state.session.id, chunkId);
+      dispatch({ type: "CHUNK_CARDS_LOADED", payload: response });
+    } catch (err) {
+      console.error("Failed to load chunk cards:", err);
+    }
+  }, [state.session?.id]);
+
+  const goToNextChunk = useCallback(async () => {
+    // Happy path: pre-fetch succeeded
+    if (state.nextChunkCards?.cards?.length > 0) {
+      dispatch({ type: "CHUNK_ADVANCE" });
+      return;
+    }
+    // Fallback: pre-fetch failed or empty — fetch on demand
+    if (state.nextChunkInFlight) return;
+    const nextIdx = state.chunkIndex + 1;
+    if (nextIdx >= state.chunkList.length) return;
+    const nextChunkId = state.chunkList[nextIdx]?.chunk_id;
+    if (!nextChunkId || !state.session?.id) return;
+    dispatch({ type: "NEXT_CHUNK_FETCH_STARTED" });
+    try {
+      const data = await generateChunkCards(state.session.id, nextChunkId);
+      if (data?.cards?.length > 0) {
+        dispatch({ type: "NEXT_CHUNK_CARDS_READY", payload: data });
+        dispatch({ type: "CHUNK_ADVANCE" });
+      } else {
+        dispatch({ type: "NEXT_CHUNK_FETCH_DONE" });
+        dispatch({ type: "ERROR", payload: "Could not load cards. Please try again." });
+      }
+    } catch (err) {
+      console.error("[SessionContext] on-demand chunk fetch failed:", err);
+      dispatch({ type: "NEXT_CHUNK_FETCH_DONE" });
+      dispatch({ type: "ERROR", payload: "Could not load cards. Please try again." });
+    }
+  }, [state.nextChunkCards, state.nextChunkInFlight, state.chunkIndex, state.chunkList, state.session]);
+
+  const startExamFlow = useCallback(async () => {
+    if (!state.session) return;
+    dispatch({ type: "START_LOADING" });
+    try {
+      const res = await startExam(state.session.id, { concept_id: state.session.concept_id });
+      dispatch({ type: "EXAM_STARTED", payload: res.data });
+    } catch (err) {
+      console.error("[exam] start failed:", err);
+      dispatch({ type: "ERROR", payload: "Failed to start exam" });
+    }
+  }, [state.session]);
+
+  const submitExamAnswers = useCallback(async (answers) => {
+    if (!state.session) return;
+    try {
+      const res = await submitExam(state.session.id, { answers });
+      dispatch({ type: "EXAM_SUBMITTED", payload: res.data });
+    } catch (err) {
+      console.error("[exam] submit failed:", err);
+      dispatch({ type: "ERROR", payload: "Failed to submit exam" });
+    }
+  }, [state.session]);
+
+  const retryExamFlow = useCallback(async (retryType, failedChunkIds = []) => {
+    if (!state.session) return;
+    try {
+      const res = await retryExam(state.session.id, { retry_type: retryType, failed_chunk_ids: failedChunkIds });
+      dispatch({ type: "EXAM_RETRY_SET", payload: res.data });
+    } catch (err) {
+      console.error("[exam] retry failed:", err);
+      dispatch({ type: "ERROR", payload: "Failed to set up retry" });
+    }
+  }, [state.session]);
+
+  const completeChunkAction = useCallback(async (chunkId, correct, total, modeUsed) => {
+    if (!state.session?.id) return;
+    try {
+      const res = await completeChunk(state.session.id, {
+        chunk_id: chunkId,
+        correct,
+        total,
+        mode_used: modeUsed,
+      });
+      dispatch({ type: "CHUNK_COMPLETED", payload: res.data });
+      return res.data;
+    } catch (err) {
+      console.error("[SessionContext] completeChunk failed:", err);
+    }
+  }, [state.session?.id]);
+
   const reset = useCallback(() => {
     dispatch({ type: "RESET" });
-  }, []);
-
-  const setDifficultyBias = useCallback((bias) => {
-    dispatch({ type: "SET_DIFFICULTY_BIAS", payload: bias });
   }, []);
 
   return (
@@ -681,8 +863,29 @@ export function SessionProvider({ children }) {
         loadRemediationCards,
         startRecheck,
         reset,
-        setDifficultyBias,
-        rollingCallInFlight: state.rollingCallInFlight,
+        loadChunkCards,
+        goToNextChunk,
+        completeChunkAction,
+        startExamFlow,
+        submitExamAnswers,
+        retryExamFlow,
+        currentChunkIndex: state.currentChunkIndex,
+        totalChunks: state.totalChunks,
+        // Chunk navigation
+        chunkList: state.chunkList,
+        chunkIndex: state.chunkIndex,
+        nextChunkInFlight: state.nextChunkInFlight,
+        nextChunkCards: state.nextChunkCards,
+        // Chunk progress
+        chunkProgress: state.chunkProgress,
+        currentChunkMode: state.currentChunkMode,
+        allStudyComplete: state.allStudyComplete,
+        modeJustChanged: state.modeJustChanged,
+        // Exam
+        examPhase: state.examPhase,
+        examQuestions: state.examQuestions,
+        examAttempt: state.examAttempt,
+        examScores: state.examScores,
       }}
     >
       {children}

@@ -16,7 +16,6 @@ PROJECT_ROOT = _backend_dir.parent
 BACKEND_DIR = _backend_dir
 DATA_DIR = BACKEND_DIR / "data"
 OUTPUT_DIR = BACKEND_DIR / "output"
-CHROMA_DIR = OUTPUT_DIR / "chroma_db"
 SRC_DIR = BACKEND_DIR / "src"
 
 # ── API Keys ───────────────────────────────────────────────────────────
@@ -33,9 +32,6 @@ ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
 
 # ── Embedding ──────────────────────────────────────────────────────────
 EMBEDDING_MODEL = "text-embedding-3-small"
-
-# ── ChromaDB ───────────────────────────────────────────────────────────
-CHROMA_COLLECTION_NAME = "openstax_concepts"
 
 # ── Default book ──────────────────────────────────────────────────────────────
 DEFAULT_BOOK_SLUG = "prealgebra"
@@ -65,13 +61,18 @@ ADAPTIVE_CARD_MODEL   = OPENAI_MODEL_MINI   # gpt-4o-mini: fast for single-card 
 NEXT_CARD_MAX_TOKENS: int = 1200   # Single card: title + content + 1 MCQ + motivational note
 
 # ── Chunk-based card generation token budgets (per-chunk, per-mode) ────────────
-CHUNK_MAX_TOKENS_STRUGGLING = 3000   # ~6 content+MCQ pairs
-CHUNK_MAX_TOKENS_NORMAL     = 2000   # ~4 content+MCQ pairs
-CHUNK_MAX_TOKENS_FAST       = 1200   # ~2 content+MCQ pairs
+CHUNK_MAX_TOKENS_STRUGGLING = 6000   # ~6 content+MCQ pairs
+CHUNK_MAX_TOKENS_NORMAL     = 5000   # ~5 content+MCQ pairs
+CHUNK_MAX_TOKENS_FAST       = 3000   # ~2 content+MCQ pairs
 CHUNK_MAX_TOKENS_RECOVERY   = 800    # single recovery card+MCQ
 
 # ── Socratic exam pass threshold for chunk-based architecture ─────────────────
-CHUNK_EXAM_PASS_RATE = 0.65          # 65% — student needs ≥65% to master section
+CHUNK_EXAM_PASS_RATE = 0.70          # 70% — student needs ≥70% to master section
+CHUNK_EXAM_QUESTIONS_PER_CHUNK = 2  # Open-ended questions generated per PM sub-section for exam
+
+# ── Socratic exam LLM token budgets ───────────────────────────────────────────
+CHUNK_MAX_TOKENS_EXAM_Q    = 150    # Per question generation: {"question": "..."}
+CHUNK_MAX_TOKENS_EXAM_EVAL = 100    # Per answer evaluation: {"correct": bool, "feedback": "..."}
 
 # ── Card generation token budgets (profile-adaptive) ──────────────────────────
 # Budget scales with section count × per-section multiplier, clamped to floor/ceiling.
@@ -123,6 +124,7 @@ ADAPTIVE_STATE_BLEND_HISTORY_WEIGHT = 0.40
 
 # ── Image serving ─────────────────────────────────────────────────────
 IMAGE_BASE_URL = os.getenv("IMAGE_BASE_URL", "http://localhost:8889/images")
+IMAGE_STORAGE = os.getenv("IMAGE_STORAGE", "local")
 
 # ── Boilerplate patterns to strip (line-level) ─────────────────────────
 BOILERPLATE_PATTERNS = [

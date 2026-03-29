@@ -33,7 +33,7 @@ export default function ConceptGraph({
     const keys = Object.keys(chapters).sort((a, b) => parseFloat(a) - parseFloat(b));
     const pos = {};
     keys.forEach((ch, ci) => {
-      const list = chapters[ch];
+      const list = [...(chapters[ch])].sort((a, b) => parseFloat(a.section) - parseFloat(b.section));
       const totalW = (list.length - 1) * X_GAP;
       list.forEach((n, ni) => {
         pos[n.concept_id] = {

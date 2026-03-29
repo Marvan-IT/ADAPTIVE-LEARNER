@@ -8,10 +8,11 @@ from datetime import datetime, timezone
 
 from sqlalchemy import (
     String, Text, Boolean, SmallInteger, Integer, Float, DateTime,
-    ForeignKey, UniqueConstraint,
+    ForeignKey, UniqueConstraint, Column, func,
 )
-from sqlalchemy.dialects.postgresql import UUID, ARRAY, JSONB
+from sqlalchemy.dialects.postgresql import UUID, ARRAY, JSONB, TIMESTAMP as TIMESTAMPTZ
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from pgvector.sqlalchemy import Vector
 
 
 class Base(DeclarativeBase):
@@ -121,6 +122,17 @@ class TeachingSession(Base):
     )
     remediation_context: Mapped[str | None] = mapped_column(
         Text, nullable=True
+    )
+
+    # ── Chunk-based architecture tracking ─────────────────────────────────
+    chunk_index: Mapped[int | None] = mapped_column(Integer, default=0, nullable=True)
+    exam_phase: Mapped[str | None] = mapped_column(Text, nullable=True)
+    exam_attempt: Mapped[int | None] = mapped_column(Integer, default=0, nullable=True)
+    exam_scores: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    failed_chunk_ids: Mapped[list | None] = mapped_column(ARRAY(Text), nullable=True)
+    chunk_progress: Mapped[dict | None] = mapped_column(
+        JSONB, nullable=True, default=None,
+        comment="Per-chunk learning progress: {chunk_id: {mode, score, correct, total, completed_at}}"
     )
 
     student: Mapped["Student"] = relationship(back_populates="sessions")
@@ -246,3 +258,32 @@ class SpacedReview(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     student: Mapped["Student"] = relationship(back_populates="spaced_reviews")
+
+
+class ConceptChunk(Base):
+    __tablename__ = "concept_chunks"
+
+    id          = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    book_slug   = Column(Text, nullable=False)
+    concept_id  = Column(Text, nullable=False)
+    section     = Column(Text, nullable=False)
+    order_index = Column(Integer, nullable=False)
+    heading     = Column(Text, nullable=False)
+    text        = Column(Text, nullable=False)
+    latex       = Column(ARRAY(Text), server_default="{}")
+    embedding   = Column(Vector(1536), nullable=True)
+    created_at  = Column(TIMESTAMPTZ(timezone=True), server_default=func.now())
+
+    images = relationship("ChunkImage", back_populates="chunk", cascade="all, delete-orphan")
+
+
+class ChunkImage(Base):
+    __tablename__ = "chunk_images"
+
+    id          = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    chunk_id    = Column(UUID(as_uuid=True), ForeignKey("concept_chunks.id", ondelete="CASCADE"), nullable=False)
+    image_url   = Column(Text, nullable=False)
+    caption     = Column(Text, nullable=True)
+    order_index = Column(Integer, default=0)
+
+    chunk = relationship("ConceptChunk", back_populates="images")

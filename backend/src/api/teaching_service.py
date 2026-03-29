@@ -24,8 +24,9 @@ from config import (
     CARDS_MAX_TOKENS_NORMAL, CARDS_MAX_TOKENS_NORMAL_FLOOR, CARDS_MAX_TOKENS_NORMAL_PER_SECTION,
     CARDS_MAX_TOKENS_FAST, CARDS_MAX_TOKENS_FAST_FLOOR, CARDS_MAX_TOKENS_FAST_PER_SECTION,
     DEFAULT_BOOK_SLUG, NEXT_CARD_MAX_TOKENS,
+    CHUNK_MAX_TOKENS_STRUGGLING, CHUNK_MAX_TOKENS_NORMAL, CHUNK_MAX_TOKENS_FAST, CHUNK_MAX_TOKENS_RECOVERY,
 )
-from api.knowledge_service import KnowledgeService
+from api.chunk_knowledge_service import ChunkKnowledgeService
 from api.prompts import (
     build_presentation_system_prompt,
     build_presentation_user_prompt,
@@ -36,12 +37,33 @@ from api.prompts import (
     build_assistant_system_prompt,
     build_mid_session_checkin_card,
 )
-from db.models import TeachingSession, ConversationMessage, StudentMastery, Student, SpacedReview, CardInteraction
+from db.models import TeachingSession, ConversationMessage, StudentMastery, Student, SpacedReview, CardInteraction, ConceptChunk
 from api.teaching_schemas import CardMCQ, RegenerateMCQRequest
 
 logger = logging.getLogger(__name__)
 
 import re as _re
+
+# Module-level constant — used by generate_per_chunk() and teaching_router.py
+EXERCISE_HEADING_PATTERNS = (
+    "exercises",
+    "practice makes perfect",
+    "everyday math",
+    "writing exercises",
+    "mixed practice",
+    "practice test",
+    "section exercises",
+)
+
+
+def _mode_from_chunk_score(score: int) -> str:
+    """Map previous chunk MCQ score (0–100) to mode for next chunk."""
+    if score >= 80:
+        return "FAST"
+    elif score >= 50:
+        return "NORMAL"
+    return "STRUGGLING"
+
 
 
 def _sanitize_math(text: str) -> str:
@@ -122,44 +144,67 @@ def _clean_salvage(raw: str) -> str | None:
     return raw + "]" * open_brackets + "}" * open_braces
 
 
-def _normalise_per_card(parsed: dict, card_index: int) -> dict:
-    """Normalise a raw per-card LLM dict to the shape expected by LessonCard.
+def _normalise_per_card(parsed: dict, chunk_id: str) -> dict:
+    """Stamp new LessonCard schema fields onto a parsed card dict.
 
     The LLM returns the single-card schema from _NEXT_CARD_JSON_SCHEMA.
-    This function flattens it into the same dict shape used by generate_cards()
-    and generate_next_section_cards() so the rest of the pipeline is uniform.
+    chunk_id is injected by the backend after generation — NOT asked from LLM.
     """
-    # Extract the first MCQ-type question from the 'questions' list, if present.
-    questions = parsed.get("questions") or []
-    question: dict | None = None
-    for q in questions:
-        if isinstance(q, dict) and q.get("type") in ("mcq", "multiple_choice"):
-            question = q
-            break
+    # Handle legacy 'questions' list format: extract first MCQ if present
+    raw_question = parsed.get("question")
+    if not raw_question:
+        questions = parsed.get("questions") or []
+        for q in questions:
+            if isinstance(q, dict) and q.get("type") in ("mcq", "multiple_choice"):
+                raw_question = {
+                    "text": q.get("question", ""),
+                    "options": q.get("options", []),
+                    "correct_index": int(q.get("correct_index", 0) or 0),
+                    "explanation": q.get("explanation", ""),
+                    "difficulty": "MEDIUM",
+                }
+                break
 
-    card: dict = {
-        "index": card_index,
-        "card_type": parsed.get("card_type") or "TEACH",
-        "title": parsed.get("title", f"Card {card_index + 1}"),
-        "content": parsed.get("content", ""),
-        "images": [],
-        "image_indices": [],
-        "difficulty": int(parsed["difficulty"]) if parsed.get("difficulty") is not None else 3,
-        "options": None,
-        "question": None,
-        "question2": None,
+    # Normalise question field to CardMCQ shape
+    normalised_question: dict | None = None
+    if isinstance(raw_question, dict) and raw_question.get("text"):
+        raw_opts = raw_question.get("options", [])
+        # Ensure options is a list of exactly 4 strings (CardMCQ requires min/max=4)
+        if not isinstance(raw_opts, list):
+            raw_opts = []
+        raw_opts = [str(o) for o in raw_opts]  # coerce to strings
+        if len(raw_opts) > 4:
+            raw_opts = raw_opts[:4]
+        elif len(raw_opts) < 4:
+            raw_opts = raw_opts + [""] * (4 - len(raw_opts))
+        # Clamp correct_index to valid range [0, 3]
+        try:
+            correct_idx = int(raw_question.get("correct_index", 0))
+        except (TypeError, ValueError):
+            correct_idx = 0
+        correct_idx = max(0, min(correct_idx, 3))
+        if len(raw_opts) < 2:
+            # Degenerate MCQ — drop question entirely
+            raw_question = None
+        else:
+            normalised_question = {
+                "text":          raw_question.get("text", ""),
+                "options":       raw_opts,
+                "correct_index": correct_idx,
+                "explanation":   raw_question.get("explanation", ""),
+                "difficulty":    raw_question.get("difficulty", "MEDIUM"),
+            }
+
+    return {
+        "index":       parsed.get("index", 0),
+        "title":       parsed.get("title", ""),
+        "content":     parsed.get("content") or "",
+        "image_url":   parsed.get("image_url"),
+        "caption":     parsed.get("caption"),
+        "question":    normalised_question,
+        "chunk_id":    chunk_id,
+        "is_recovery": parsed.get("is_recovery", False),
     }
-
-    if question:
-        card["question"] = {
-            "text": question.get("question", ""),
-            "options": question.get("options", []),
-            "correct_index": int(question.get("correct_index", 0)),
-            "explanation": question.get("explanation", ""),
-            "difficulty": "MEDIUM",
-        }
-
-    return card
 
 
 # Section type classifier — priority order, first match wins
@@ -193,7 +238,7 @@ _ALLCAPS_SECTION_RE = re.compile(
     r'EVERYDAY\s+MATH|WRITING\s+EXERCISES?|PRACTICE\s+MAKES\s+PERFECT|'
     r'MIXED\s+PRACTICE|KEY\s+CONCEPTS?|REVIEW\s+EXERCISES?|PRACTICE\s+TEST|'
     r'GLOSSARY|CHAPTER\s+REVIEW|CHAPTER\s+PRACTICE\s+TEST|HOMEWORK)'
-    r'(?:\s+[\d\.]+)?(?:[\s:].+)?$',
+    r'(?:\s+[\d\.]+(?:[\s:].+)?|:\s*.+)?$',
     re.IGNORECASE | re.MULTILINE,
 )
 
@@ -365,19 +410,11 @@ def _build_learning_profile_summary(summary, generate_as: str, blended_score: fl
 class TeachingService:
     """Manages the full lifecycle of a teaching session."""
 
-    def __init__(self, knowledge_services: "dict[str, KnowledgeService]"):
-        self.knowledge_services = knowledge_services
+    def __init__(self):
+        self._chunk_ksvc = ChunkKnowledgeService()
         self.openai = AsyncOpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
         self.model = OPENAI_MODEL
         self.model_mini = OPENAI_MODEL_MINI
-
-    def _get_ksvc(self, session: "TeachingSession") -> KnowledgeService:
-        """Return the KnowledgeService for the session's book, falling back to default book."""
-        slug = getattr(session, "book_slug", DEFAULT_BOOK_SLUG) or DEFAULT_BOOK_SLUG
-        svc = self.knowledge_services.get(slug)
-        if svc is None:
-            svc = self.knowledge_services.get(DEFAULT_BOOK_SLUG) or next(iter(self.knowledge_services.values()))
-        return svc
 
     async def _chat(self, messages: list, max_tokens: int = 2000, temperature: float = 0.7, model: str | None = None, timeout: float = 30.0) -> str:
         """Call GPT and return the response content. Pass model='mini' to use gpt-4o-mini."""
@@ -450,10 +487,25 @@ class TeachingService:
         if session.presentation_text:
             return session.presentation_text
 
-        # 1. Retrieve concept content from KnowledgeService (RAG)
-        concept = self._get_ksvc(session).get_concept_detail(session.concept_id)
-        if not concept:
+        # 1. Retrieve concept chunks from PostgreSQL
+        # Build a synthetic concept dict from the first chunks of the concept for presentation
+        chunks = await self._chunk_ksvc.get_chunks_for_concept(
+            db, session.book_slug or DEFAULT_BOOK_SLUG, session.concept_id
+        )
+        if not chunks:
             raise ValueError(f"Concept not found: {session.concept_id}")
+        # Aggregate chunk text/latex for presentation (take up to 3 chunks)
+        combined_text = "\n\n".join(c["text"] for c in chunks[:3])
+        combined_latex = []
+        for c in chunks:
+            combined_latex.extend(c.get("latex") or [])
+        concept = {
+            "concept_title": chunks[0].get("heading", session.concept_id),
+            "text": combined_text,
+            "latex": combined_latex[:10],
+            "prerequisites": [],
+            "images": [],
+        }
 
         concept_text = concept["text"]
         concept_title = concept["concept_title"]
@@ -514,10 +566,13 @@ class TeachingService:
 
         session.phase = "CHECKING"
 
-        concept = self._get_ksvc(session).get_concept_detail(session.concept_id)
-        concept_text = concept["text"]
-        concept_title = concept["concept_title"]
-        images = concept.get("images", [])
+        # Retrieve concept context from PostgreSQL chunks
+        _chunks = await self._chunk_ksvc.get_chunks_for_concept(
+            db, session.book_slug or DEFAULT_BOOK_SLUG, session.concept_id
+        )
+        concept_text = "\n\n".join(c["text"] for c in _chunks[:5]) if _chunks else ""
+        concept_title = _chunks[0].get("heading", session.concept_id) if _chunks else session.concept_id
+        images: list = []
 
         # Query this session's card interaction stats for adaptive Socratic calibration
         session_card_stats = None
@@ -890,696 +945,111 @@ class TeachingService:
             for c in cards
         )
 
+    async def _initialize_queue(
+        self,
+        db: AsyncSession,
+        session: TeachingSession,
+    ) -> None:
+        """Build the per-card concepts_queue from concept_chunks rows and persist it on the session.
+
+        Called when generate_cards() is invoked on a session that has no queue yet (PRESENTING
+        phase) or when generate_per_card() detects an empty queue at the start of a session.
+        After this method returns, session.presentation_text contains a valid JSON cache dict
+        and session.phase is "CARDS".
+        """
+        book_slug = getattr(session, "book_slug", None) or DEFAULT_BOOK_SLUG
+        stmt = (
+            select(ConceptChunk)
+            .where(
+                ConceptChunk.concept_id == session.concept_id,
+                ConceptChunk.book_slug == book_slug,
+            )
+            .order_by(ConceptChunk.order_index)
+        )
+        rows = (await db.execute(stmt)).scalars().all()
+        queue = [
+            {
+                "id": str(c.id),
+                "title": c.heading,
+                "text": c.text,
+                "latex": list(c.latex or []),
+                "section": c.section or "",
+                "chapter": (c.section or "").split(".")[0],
+                "images": [],
+            }
+            for c in rows
+        ]
+        logger.info(
+            "[_initialize_queue] built queue: session_id=%s concept_id=%s book_slug=%s chunks=%d",
+            session.id, session.concept_id, book_slug, len(queue),
+        )
+        session.presentation_text = json.dumps({
+            "concepts_queue": queue,
+            "concepts_covered": [],
+            "concepts_total": len(queue),
+            "cache_version": 1,
+        })
+        session.phase = "CARDS"
+        db.add(session)
+        await db.flush()
+
     async def generate_cards(
         self,
         db: AsyncSession,
         session: TeachingSession,
         student: Student,
     ) -> dict:
+        """Bootstraps the per-card generation queue for a fresh session.
+
+        Previously a deprecated stub that returned an empty cards list. Now it initialises
+        the concepts_queue from concept_chunks (if not already present), transitions the
+        session to CARDS phase, generates the first adaptive card via generate_per_card(),
+        and returns a response compatible with the legacy /sessions/{id}/cards contract so
+        that the frontend SessionContext.startLesson() can proceed without changes.
         """
-        Generate card-based lesson: split concept into sub-section cards,
-        each with AI-generated explanation and quiz questions.
-        Returns dict with cards array and metadata.
-        """
-        # Return cached if available — reject stale sessions with old grouping artifacts
-        _CARDS_CACHE_VERSION = 23  # Force regen: pedagogical within-section card ordering (TEACH before EXAMPLE)
-        if session.presentation_text:
-            try:
-                cached = json.loads(session.presentation_text)
-                if "cards" in cached:
-                    # Bust cache when version is behind (old cards from before latest rebuild)
-                    if cached.get("cache_version", 0) < _CARDS_CACHE_VERSION:
-                        raise ValueError("stale cache version")
-                    has_new_schema = any(card.get("card_type") for card in cached.get("cards", []))
-                    is_stale = TeachingService._has_stale_card_titles(cached.get("cards", []))
-                    if has_new_schema and not is_stale:
-                        # Lightweight re-sort on cache load — no re-gen trigger, just ordering
-                        cached_cards = cached.get("cards", [])
-                        if cached_cards:
-                            section_order = [c.get("section_id", "") for c in cached_cards if c.get("section_id")]
-                            repaired, _ = validate_and_repair_cards(cached_cards, section_order)
-                            if repaired:
-                                cached["cards"] = repaired
-                        return cached
-            except (json.JSONDecodeError, TypeError, ValueError):
-                pass
+        from api.teaching_schemas import NextCardRequest
 
-        # 1. Retrieve concept
-        concept = self._get_ksvc(session).get_concept_detail(session.concept_id)
-        if not concept:
-            raise ValueError(f"Concept not found: {session.concept_id}")
-
-        concept_text = concept["text"]
-        concept_title = concept["concept_title"]
-        latex = concept.get("latex", [])
-        images = concept.get("images", [])
-
-        # 2. Parse sub-sections from concept text. Use real sub-sections only;
-        # fall back to single section if parsing yields nothing.
-        sub_sections = self._parse_sub_sections(concept_text)
-        if not sub_sections:
-            sub_sections = [{"title": concept_title, "text": concept_text}]
-        else:
-            # Consolidate micro-sections using the textbook blueprint approach:
-            # classify each section by pedagogical type, then build an ordered blueprint
-            # that merges SOLUTION into preceding EXAMPLE and TIP into preceding item.
-            # Falls back to _group_by_major_topic if the blueprint yields < 2 items.
-            classified = self._classify_sections(sub_sections)
-
-            # Ensure Learning Objectives is always first in the blueprint.
-            # Case A: LO exists but is not at index 0 — move it to front.
-            # Case B: No LO found — synthesize from first section's text if possible.
-            lo_indices = [i for i, s in enumerate(classified) if s.get("section_type") == "LEARNING_OBJECTIVES"]
-            if lo_indices and lo_indices[0] != 0:
-                lo_section = classified.pop(lo_indices[0])
-                classified.insert(0, lo_section)
-            elif not lo_indices:
-                # No LO section found — try to synthesize from intro text
-                first = classified[0] if classified else None
-                if first:
-                    lo_match = re.search(
-                        r'((?:by the end of this (?:section|chapter)'
-                        r'|after (?:studying|reading|completing) this (?:section|chapter)'
-                        r'|you will be able to'
-                        r'|students will be able to'
-                        r'|in this section[,\s]+(?:you|we|students)'
-                        r'|upon completion)'
-                        r'.*?)(?=\n\n|\Z)',
-                        first.get("text", ""), re.IGNORECASE | re.DOTALL
-                    )
-                    if lo_match:
-                        lo_text = lo_match.group(1).strip()
-                        first["text"] = first["text"].replace(lo_match.group(0), "").strip()
-                        classified.insert(0, {
-                            "title": "Learning Objectives",
-                            "text": lo_text,
-                            "section_type": "LEARNING_OBJECTIVES",
-                        })
-
-            blueprint = self._build_textbook_blueprint(classified)
-            if len(blueprint) >= 2:
-                sub_sections = blueprint
-                logger.info("[blueprint] concept=%s raw=%d blueprint=%d",
-                            session.concept_id, len(classified), len(blueprint))
-            else:
-                logger.warning("[blueprint] fallback for concept=%s (%d items)",
-                               session.concept_id, len(blueprint))
-                sub_sections = self._group_by_major_topic(sub_sections)
-
-        # Classify the math domain for section-type-specific prompt notes
-        section_domain = self._classify_section_type(session.concept_id, concept_title)
-
-        # Rolling architecture: generate only the first STARTER_PACK_INITIAL_SECTIONS sub-sections
-        # on the initial request. The remaining sections are stored in concepts_queue and generated
-        # one-by-one via POST /next-section-cards with live student signals.
-        all_sub_sections = sub_sections[:]  # full list preserved for queue
-        # Apply STARTER_PACK_MAX_SECTIONS as a safety cap on the total queue size
-        if len(all_sub_sections) > STARTER_PACK_MAX_SECTIONS:
-            logger.info(
-                "[starter-pack] concept=%s capping total %d sections → %d (safety cap)",
-                session.concept_id, len(all_sub_sections), STARTER_PACK_MAX_SECTIONS,
-            )
-            all_sub_sections = all_sub_sections[:STARTER_PACK_MAX_SECTIONS]
-        sub_sections = all_sub_sections[:STARTER_PACK_INITIAL_SECTIONS]   # generate first N only
-        concepts_queue = all_sub_sections[STARTER_PACK_INITIAL_SECTIONS:]  # remainder for rolling
-        logger.info(
-            "[starter-pack] concept=%s initial=%d queue=%d total=%d",
-            session.concept_id, len(sub_sections), len(concepts_queue), len(all_sub_sections),
-        )
-
-        # 3. Only include images that are educational AND have a real vision description
-        # AND are not self-assessment checklists/rubrics (which pass is_educational=True
-        # but are not math diagrams the student needs to see).
-        _CHECKLIST_KEYWORDS = (
-            "checklist", "self-assessment", "i can", "confidently",
-            "with some help", "rubric", "evaluate my understanding", "learning target",
-        )
-        useful_images = [
-            img for img in images
-            if img.get("is_educational") is not False
-            and img.get("description")
-            and not any(
-                kw in (img.get("description") or "").lower()
-                for kw in _CHECKLIST_KEYWORDS
-            )
-        ]
-        _IMAGE_TYPE_PRIORITY = {"DIAGRAM": 0, "CHART": 1, "GRAPH": 1, "TABLE": 2, "PHOTO": 3}
-        useful_images = sorted(
-            useful_images,
-            key=lambda img: (
-                _IMAGE_TYPE_PRIORITY.get((img.get("image_type") or "").upper(), 4),
-                -len(img.get("description") or ""),
-            ),
-        )[:16]
-        logger.info(
-            "cards concept=%s total_images=%d useful_images=%d",
-            session.concept_id, len(images), len(useful_images),
-        )
-
-        # 3b. Load student history and wrong-option pattern concurrently for adaptive enrichment
-        from adaptive.adaptive_engine import load_student_history, load_wrong_option_pattern, build_blended_analytics
-        from adaptive.profile_builder import build_learning_profile
-        from adaptive.schemas import AnalyticsSummary, CardBehaviorSignals
-
+        # Parse existing cache, if any.
         try:
-            history, wrong_option_pattern = await asyncio.gather(
-                load_student_history(str(session.student_id), session.concept_id, db),
-                load_wrong_option_pattern(str(session.student_id), session.concept_id, db),
-            )
-        except Exception as exc:
-            logger.exception(
-                "[cards-adaptive] history_load_failed: student_id=%s concept_id=%s error=%s — using defaults",
-                session.student_id, session.concept_id, exc,
-            )
-            history = {
-                "total_cards_completed": 0,
-                "avg_time_per_card": None,
-                "avg_wrong_attempts": None,
-                "avg_hints_per_card": None,
-                "sessions_last_7d": 0,
-                "is_known_weak_concept": False,
-                "failed_concept_attempts": 0,
-                "trend_direction": "STABLE",
-                "trend_wrong_list": [],
-            }
-            wrong_option_pattern = None
+            cached = json.loads(session.presentation_text or "{}")
+            if not isinstance(cached, dict):
+                cached = {}
+        except (json.JSONDecodeError, TypeError):
+            cached = {}
 
-        # Build LearningProfile via 60/40 blended analytics.
-        # For Path A (initial card generation, no live interaction yet) we construct a synthetic
-        # CardBehaviorSignals from historical averages and let build_blended_analytics apply
-        # the 60/40 (or 90/10 acute deviation) blend against the historical baseline.
-        current_signals = CardBehaviorSignals(
-            card_index=history.get("total_cards_completed", 0),  # Bug 7 fix: use actual position
-            time_on_card_sec=history["avg_time_per_card"] or 120.0,
-            wrong_attempts=round(history["avg_wrong_attempts"] or 0),
-            hints_used=round(history["avg_hints_per_card"] or 0),
+        # Build queue if missing or empty.
+        if not cached.get("concepts_queue"):
+            await self._initialize_queue(db, session)
+            cached = json.loads(session.presentation_text or "{}")
+
+        # Generate the first card using zero-signal baseline request.
+        zero_req = NextCardRequest(
+            card_index=0,
+            time_on_card_sec=0,
+            wrong_attempts=0,
+            hints_used=0,
             idle_triggers=0,
         )
-        _blended_score: float = 2.0
-        _generate_as: str = "NORMAL"
-        try:
-            blended, _blended_score, _generate_as = build_blended_analytics(
-                current_signals, history,
-                concept_id=session.concept_id,
-                student_id=str(session.student_id),
-            )
-            # Conservative mode cap: new students (< 5 interactions) must not get FAST mode
-            total_interactions = history.get("total_interactions", 0) if history else 0
-            if total_interactions < 2 and _generate_as == "FAST":
-                _generate_as = "NORMAL"
-                _blended_score = min(_blended_score, 2.4)
-                logger.info(
-                    "[mode-cap] concept=%s FAST→NORMAL for new student (interactions=%d)",
-                    session.concept_id, total_interactions,
-                )
-            card_profile = build_learning_profile(blended, has_unmet_prereq=False)
-        except Exception as exc:
-            logger.warning(
-                "[cards-adaptive] blended_analytics_failed: student_id=%s — falling back to direct history: %s",
-                session.student_id, exc,
-            )
-            mini = AnalyticsSummary(
-                student_id=str(session.student_id),
-                concept_id=session.concept_id,
-                time_spent_sec=history["avg_time_per_card"] or 120.0,
-                expected_time_sec=120.0,
-                attempts=max(1, round((history["avg_wrong_attempts"] or 0) + 1)),
-                wrong_attempts=round(history["avg_wrong_attempts"] or 0),
-                hints_used=round(history["avg_hints_per_card"] or 0),
-                revisits=0,
-                recent_dropoffs=0,
-                skip_rate=0.0,
-                quiz_score=max(0.1, 1.0 - min((history["avg_wrong_attempts"] or 0) * 0.15, 0.9)),
-                last_7d_sessions=history["sessions_last_7d"],
-            )
-            card_profile = build_learning_profile(mini, has_unmet_prereq=False)
-        logger.info(
-            "Card adaptive profile for student=%s concept=%s: speed=%s comp=%s eng=%s",
-            session.student_id, session.concept_id,
-            card_profile.speed, card_profile.comprehension, card_profile.engagement,
-        )
+        result = await self.generate_per_card(db, session, student, zero_req)
 
-        # Token budget is content-driven, not mode-driven — all modes reproduce 100% of source content
-        per_section_floor = CARDS_MAX_TOKENS_SLOW_PER_SECTION
-
-        logger.info(
-            "[cards-adaptive] student_id=%s concept_id=%s history_cards=%d "
-            "profile=%s/%s/%s wrong_option_pattern=%s",
-            str(session.student_id), session.concept_id,
-            history["total_cards_completed"],
-            card_profile.speed,
-            card_profile.comprehension,
-            card_profile.engagement,
-            wrong_option_pattern,
-        )
-
-        # 4. Build prompts
-        effective_interests = session.lesson_interests if session.lesson_interests else student.interests
-        language = getattr(student, "preferred_language", "en") or "en"
-
-        # Extract remediation weak concepts from session context (set during earlier REMEDIATING phases)
-        remediation_weak: list[str] = []
-        if session is not None and getattr(session, "socratic_attempt_count", 0) > 0:
-            raw_ctx = getattr(session, "remediation_context", None)
-            if raw_ctx:
-                try:
-                    remediation_weak = json.loads(raw_ctx) if isinstance(raw_ctx, str) else (raw_ctx or [])
-                except Exception:
-                    pass
-
-        system_prompt = build_cards_system_prompt(
-            style=session.style,
-            interests=effective_interests,
-            language=language,
-            learning_profile=card_profile,
-            history=history,
-            images=useful_images,
-            remediation_weak_concepts=remediation_weak if remediation_weak else None,
-            generate_as=_generate_as,
-            blended_state_score=_blended_score,
-            confidence_score=getattr(card_profile, "confidence_score", 0.5),
-            trend_direction=history.get("trend_direction", "STABLE") if history else "STABLE",
-            engagement=getattr(card_profile, "engagement", "ENGAGED"),
-            section_domain=section_domain,
-        )
-
-        # Build a single user_prompt for cache saving purposes (saved to messages later)
-        user_prompt = build_cards_user_prompt(
-            concept_title=concept_title,
-            sub_sections=sub_sections,
-            latex=latex,
-            images=useful_images,
-            wrong_option_pattern=wrong_option_pattern,
-            language=language,
-            interests=effective_interests,
-            style=session.style,
-            learning_profile=card_profile,
-            generate_as=_generate_as,
-            blended_score=_blended_score,
-        )
-
-        # 5. Generate cards — per-section parallel calls so no section is dropped due to truncation.
-        # Each section gets its own LLM call; results are merged in section order.
-        n_sections = len(sub_sections)
-        # Unified budget: scale with content (section count × per-section floor), not mode
-        adaptive_max_tokens = max(CARDS_MAX_TOKENS_SLOW_FLOOR, n_sections * CARDS_MAX_TOKENS_SLOW_PER_SECTION)
-        logger.info(
-            "cards token_budget: concept=%s n_sections=%d profile=%s/%s max_tokens=%d",
-            session.concept_id, n_sections,
-            card_profile.speed, card_profile.comprehension, adaptive_max_tokens,
-        )
-
-        # Extract concept overview for per-section context
-        concept_overview = concept_text[:400].rstrip() + ("..." if len(concept_text) > 400 else "")
-
-        # FAST mode: merge consecutive TRY_IT sections into TRY_IT_BATCH before sending to LLM
-        if _generate_as == "FAST":
-            sub_sections = self._batch_consecutive_try_its(sub_sections)
-            batch_count = sum(1 for s in sub_sections if s.get("section_type") == "TRY_IT_BATCH")
-            if batch_count:
-                logger.info("[fast-batch] concept=%s try_it_batches=%d total_sections=%d",
-                            session.concept_id, batch_count, len(sub_sections))
-            sub_sections = self._batch_consecutive_properties(sub_sections)
-            prop_batch_count = sum(1 for s in sub_sections if s.get("section_type") == "PROPERTY_BATCH")
-            if prop_batch_count:
-                logger.info("[fast-batch] concept=%s property_batches=%d total_sections=%d",
-                            session.concept_id, prop_batch_count, len(sub_sections))
-
-        # Initialize concept/image tracking for coverage context
-        concepts_covered: list[str] = []
-        images_used_this_section: list[str] = []
-        concept_index = 0
-
-        # Per-section parallel generation (complete coverage, no content loss)
-        all_raw_cards = await self._generate_cards_per_section(
-            system_prompt=system_prompt,
-            concept_title=concept_title,
-            concept_overview=concept_overview,
-            sections=sub_sections,
-            latex=latex,
-            images=useful_images,
-            max_tokens_per_section=adaptive_max_tokens,
-            per_section_floor=per_section_floor,
-            concept_index=concept_index,
-            concepts_covered=concepts_covered,
-            images_used_this_section=images_used_this_section,
-            generate_as=_generate_as,
-            blended_score=_blended_score,
-        )
-
-        # Update tracking after main generation
-        concept_index += len(sub_sections)
-        concepts_covered.extend(s["title"] for s in sub_sections)
-        for card in all_raw_cards:
-            if card.get("images"):
-                for img in card["images"]:
-                    fname = img.get("filename") or img.get("file")
-                    if fname and fname not in images_used_this_section:
-                        images_used_this_section.append(fname)
-
-        # Build section title order before gap-fill so actual_pos lookup is available.
-        _section_order_titles = [s["title"] for s in sub_sections]
-
-        # Gap-fill pass: detect and regenerate any section that produced no card
-        missing = self._find_missing_sections(all_raw_cards, sub_sections)
-        if missing:
-            logger.warning(
-                "[card-gen] gap-fill: %d sections missing: %s",
-                len(missing), [s["title"] for s in missing],
-            )
-            for missing_section in missing:
-                actual_pos = (
-                    _section_order_titles.index(missing_section["title"])
-                    if missing_section["title"] in _section_order_titles
-                    else len(_section_order_titles)
-                )
-                section_cards = await self._generate_cards_per_section(
-                    system_prompt=system_prompt,
-                    concept_title=concept_title,
-                    concept_overview=concept_overview,
-                    sections=[missing_section],
-                    latex=latex,
-                    images=useful_images,
-                    max_tokens_per_section=per_section_floor,
-                    per_section_floor=per_section_floor,
-                    concept_index=concept_index,
-                    concepts_covered=concepts_covered,
-                    images_used_this_section=images_used_this_section,
-                    generate_as=_generate_as,
-                    blended_score=_blended_score,
-                )
-                for card in section_cards:
-                    card["_section_index"] = actual_pos
-                all_raw_cards.extend(section_cards)
-
-        # Post-generation validation: infer missing section_ids, deduplicate, and re-sort.
-        # Build section_order from sub_section titles (used as stable section identifiers here).
-        # NOTE: validate_and_repair_cards runs FIRST (fuzzy section assignment), then integer
-        # _section_index sort runs SECOND so curriculum order is always the final authority.
-        all_raw_cards, _still_missing = validate_and_repair_cards(
-            all_raw_cards,
-            section_order=_section_order_titles,
-            required_sections=None,  # gap-fill pass above already handled re-gen; just repair
-        )
-        # RC4: Re-sort all_raw_cards to restore curriculum section order after gap-fill append.
-        # Sort by section index only — preserve textbook order within each section
-        all_raw_cards.sort(key=lambda c: (
-            c.get("_section_index", len(sub_sections)),
-            _CARD_TYPE_ORDER.get(c.get("card_type") or "", 5),
-        ))
-        # Remove cards with empty title or content — prevents blank card renders
-        all_raw_cards = [
-            c for c in all_raw_cards
-            if c.get("title", "").strip() and c.get("content", "").strip()
-        ]
-
-        # Missed-image cleanup: attach any unassigned useful_image to the card whose
-        # content has the most word overlap with the image description.
-        # Ensures zero image loss — content-based matching, not random assignment.
-        if useful_images:
-            _assigned_fnames: set[str] = {
-                img.get("filename") or img.get("file", "")
-                for card in all_raw_cards
-                for img in card.get("images", [])
-            }
-            for _img in useful_images:
-                _fname = _img.get("filename") or _img.get("file", "")
-                if _fname in _assigned_fnames or not _fname:
-                    continue
-                _desc_words = set((_img.get("description") or "").lower().split())
-                if not _desc_words:
-                    continue
-                _best_card = None
-                _best_score = 0
-                for _card in all_raw_cards:
-                    _content_words = set(_card.get("content", "").lower().split())
-                    _score = len(_desc_words & _content_words)
-                    if _score > _best_score:
-                        _best_score = _score
-                        _best_card = _card
-                if _best_card is not None and _best_score > 0:
-                    _best_card.setdefault("images", []).append(_img)
-                    _assigned_fnames.add(_fname)
-
-        if _still_missing:
-            logger.warning(
-                "[card-validate] session=%s sections still uncovered after gap-fill: %s",
-                str(session.id), _still_missing,
-            )
-
-        cards_data = {"cards": all_raw_cards}
-        raw_cards = cards_data.get("cards", [])
-
-        # 7. Post-process: validate unified schema, normalise question, strip HTML wrappers
-        import re as _re
-        for ci, card in enumerate(raw_cards):
-            card["index"] = ci
-            # Strip any <markdown>...</markdown> wrapper the LLM may emit
-            content = card.get("content", "")
-            content = _re.sub(r"</?markdown>", "", content, flags=_re.IGNORECASE).strip()
-            card["content"] = content
-            # Forward difficulty from LLM response; fall back to 3 (medium) if absent or None
-            if card.get("difficulty") is None:
-                card["difficulty"] = 3
-            else:
-                try:
-                    card["difficulty"] = int(card["difficulty"])
-                except (TypeError, ValueError):
-                    card["difficulty"] = 3
-
-            # Validate and normalise the unified MCQ question field
-            q = card.get("question")
-            if q is None:
-                # Accept backward-compat: old sessions may store quick_check
-                q = card.get("quick_check")
-                if isinstance(q, dict):
-                    # Remap quick_check shape → question shape
-                    q = {
-                        "text": q.get("question", ""),
-                        "options": q.get("options", []),
-                        "correct_index": q.get("correct_index", 0),
-                        "explanation": q.get("explanation", ""),
-                    }
-            if isinstance(q, dict):
-                opts = q.get("options", [])
-                if not isinstance(opts, list) or len(opts) != 4:
-                    logger.warning(
-                        "[card-schema] session=%s card=%d: question.options invalid "
-                        "(got %s) — nullifying question",
-                        str(session.id), ci, len(opts) if isinstance(opts, list) else type(opts).__name__,
-                    )
-                    card["question"] = None
-                else:
-                    ci_val = q.get("correct_index", 0)
-                    if not isinstance(ci_val, int) or ci_val < 0 or ci_val >= len(opts):
-                        logger.warning(
-                            "[card-schema] session=%s card=%d: correct_index %s out of range — clamping to 0",
-                            str(session.id), ci, ci_val,
-                        )
-                        ci_val = 0
-                    card["question"] = {
-                        "text": str(q.get("text", q.get("question", ""))),
-                        "options": [str(o) for o in opts],
-                        "correct_index": ci_val,
-                        "explanation": str(q.get("explanation", "")),
-                    }
-            else:
-                card["question"] = None
-
-            # ---- Validate and normalise question2 ----
-            q2 = card.get("question2")
-            if isinstance(q2, dict):
-                opts2 = q2.get("options", [])
-                if not isinstance(opts2, list) or len(opts2) != 4:
-                    logger.warning(
-                        "[card-schema] session=%s card=%d '%s': question2.options invalid — will use question fallback",
-                        str(session.id), ci, card.get("title", "?"),
-                    )
-                    card["question2"] = None
-                else:
-                    ci2 = q2.get("correct_index", 0)
-                    if not isinstance(ci2, int) or not (0 <= ci2 < len(opts2)):
-                        ci2 = 0
-                    card["question2"] = {
-                        "text": str(q2.get("text") or q2.get("question") or ""),
-                        "options": [str(o) for o in opts2],
-                        "correct_index": ci2,
-                        "explanation": str(q2.get("explanation", "")),
-                    }
-            else:
-                card["question2"] = None
-
-            # Fallback: if question2 still null but question is valid, copy question as fallback
-            if card.get("question2") is None and isinstance(card.get("question"), dict):
-                card["question2"] = dict(card["question"])
-                logger.warning(
-                    "[card-schema] session=%s card=%d '%s': question2 missing from LLM — using question as fallback",
-                    str(session.id), ci, card.get("title", "?"),
-                )
-
-            # Apply math sanitization: wrap bare LaTeX commands and balance $ signs
-            if card.get("content"):
-                card["content"] = _sanitize_math(card["content"])
-            if card.get("question"):
-                q = card["question"]
-                if q.get("text"):
-                    q["text"] = _sanitize_math(q["text"])
-                if q.get("options"):
-                    q["options"] = [_sanitize_math(o) if isinstance(o, str) else o for o in q["options"]]
-
-            # Ensure image_indices is a list (LLM may omit it)
-            if not isinstance(card.get("image_indices"), list):
-                card["image_indices"] = []
-
-            # Initialise empty images list; index-based resolution below
-            card["images"] = []
-
-        # 7c. Insert mid-session check-in cards at every CARDS_MID_SESSION_CHECK_INTERVAL position
-        # e.g., after card index 11 (0-based), 23, 35 ... (every 12 cards)
-        if CARDS_MID_SESSION_CHECK_INTERVAL > 0 and len(raw_cards) >= CARDS_MID_SESSION_CHECK_INTERVAL:
-            cards_with_checkins = []
-            for i, card in enumerate(raw_cards):
-                cards_with_checkins.append(card)
-                # Insert check-in after every Nth card (0-based: after index N-1, 2N-1, ...)
-                if (i + 1) % CARDS_MID_SESSION_CHECK_INTERVAL == 0 and (i + 1) < len(raw_cards):
-                    checkin = build_mid_session_checkin_card()
-                    checkin["index"] = len(cards_with_checkins)
-                    cards_with_checkins.append(checkin)
-            # Re-index all cards after insertion
-            for new_ci, card in enumerate(cards_with_checkins):
-                card["index"] = new_ci
-            raw_cards = cards_with_checkins
-
-        # ── Index-based image assignment (trusts LLM's topic-relevant image_indices) ──
-        # The LLM receives a numbered list of image descriptions and assigns each image
-        # to the most topically relevant card via image_indices. We use those assignments
-        # directly instead of overriding with positional/round-robin heuristics.
-        if useful_images:
-            import re as _re_img
-            assigned_global: set[int] = set()
-            for card in raw_cards:
-                card.setdefault("images", [])
-                image_indices = card.pop("image_indices", []) or []
-                if not isinstance(image_indices, list):
-                    image_indices = []
-
-                # Build global→local index map and populate card.images — limit to max 1 image per card
-                global_to_local: dict[int, int] = {}
-                for global_idx in image_indices:
-                    if (
-                        isinstance(global_idx, int)
-                        and 0 <= global_idx < len(useful_images)
-                    ):
-                        img_copy = dict(useful_images[global_idx])
-                        img_copy["caption"] = (
-                            img_copy.get("description")
-                            or f"Diagram for: {card.get('title', '')}"
-                        )
-                        global_to_local[global_idx] = len(card["images"])
-                        card["images"].append(img_copy)
-                        assigned_global.add(global_idx)
-
-                # Remap [IMAGE:N] markers in content: global index → local card.images index
-                # so frontend lookup card.images[N] returns the correct image object.
-                def _remap(m, g2l=global_to_local):
-                    n = int(m.group(1))
-                    return f"[IMAGE:{g2l[n]}]" if n in g2l else ""
-
-                card["content"] = _re_img.sub(
-                    r"\[IMAGE:(\d+)\]", _remap, card.get("content", "")
-                )
-
-            # RC5: Keyword-based fallback image assignment for VISUAL cards that the LLM
-            # did not assign any images to (LLM skips [IMAGE:N] markers ~30% of the time).
-            unassigned = [
-                (i, img) for i, img in enumerate(useful_images)
-                if i not in assigned_global
-            ]
-            for card in raw_cards:
-                if card.get("images"):
-                    continue  # Already has an image — skip
-                if not unassigned:
-                    break     # No more images to distribute
-                # Use unassigned pool if available, otherwise allow sharing an already-assigned image
-                pool = unassigned if unassigned else list(enumerate(useful_images))
-                if not pool:
-                    continue
-                card_text = (card.get("title", "") + " " + card.get("content", "")).lower()
-                best_score, best_pool_idx = -1, 0
-                for pool_idx, (global_idx, img) in enumerate(pool):
-                    desc = (img.get("description") or "").lower()
-                    score = sum(1 for w in card_text.split() if len(w) > 3 and w in desc)
-                    if score > best_score:
-                        best_score, best_pool_idx = score, pool_idx
-                global_idx, img = pool[best_pool_idx]
-                min_score = 1 if card.get("card_type") == "VISUAL" else 2
-                if best_score < min_score:
-                    continue
-                img_copy = dict(img)
-                img_copy["caption"] = img.get("description") or f"Diagram: {card.get('title', '')}"
-                card["images"] = [img_copy]
-                if unassigned:
-                    unassigned.pop(best_pool_idx)
-                    assigned_global.add(global_idx)
-                logger.info(
-                    "[image-fallback] card '%s' (type=%s) assigned image %d via keyword fallback (score=%d)",
-                    card.get("title", ""), card.get("card_type", ""), global_idx, best_score,
-                )
-        else:
-            for card in raw_cards:
-                card.pop("image_indices", None)
-                card.setdefault("images", [])
-
-        cards_with_images = sum(1 for c in raw_cards if c.get("images"))
-        logger.info(
-            "[cards-generated] session=%s concept=%s cards=%d with_images=%d",
-            str(session.id), session.concept_id, len(raw_cards), cards_with_images,
-        )
-
-        # Save assigned image indices so rolling generation can exclude already-used images
-        assigned_global = {
-            idx
-            for card in raw_cards
-            for idx in (card.get("image_indices") or [])
-            if isinstance(idx, int)
-        }
-        # Fallback: also collect indices from cards that received images via fallback assignment
-        # by checking which useful_images are present in card["images"] by description match
-        for gi, img in enumerate(useful_images):
-            for card in raw_cards:
-                if card.get("images") and any(
-                    i.get("description") == img.get("description") for i in card["images"]
-                ):
-                    assigned_global.add(gi)
-
-        result = {
+        return {
             "session_id": str(session.id),
             "concept_id": session.concept_id,
-            "concept_title": concept_title,
-            "style": session.style,
-            "phase": session.phase,
-            "cards": raw_cards,
-            "total_questions": 0,  # Retained for API compat; no longer a meaningful count
-            "cache_version": _CARDS_CACHE_VERSION,
-            "concepts_queue": concepts_queue,                          # remaining sub-sections
-            "concepts_covered": [s["title"] for s in sub_sections],   # covered so far
-            "concepts_total": len(all_sub_sections),                   # total count
-            "needs_review": [],                                        # double-fail recovery tracking
-            "system_prompt": system_prompt,                            # needed by generate_next_section_cards()
-            "_images": useful_images,                                  # resolved images for rolling generation
-            "assigned_image_indices": list(assigned_global),          # indices already used in initial batch
+            "concept_title": session.concept_id,
+            "style": session.style or "default",
+            "phase": "CARDS",
+            "cards": [result["card"]] if result.get("card") else [],
+            "total_questions": 0,
+            "cache_version": 1,
+            "has_more_concepts": result["has_more_concepts"],
+            "concepts_total": result["concepts_total"],
+            "concepts_covered_count": result["concepts_covered_count"],
         }
 
-        # 8. Cache and save messages
-        session.presentation_text = json.dumps(result)
-        msg_count = await self._get_message_count(db, session.id)
-        await self._save_message(db, session.id, "system", system_prompt, "PRESENTING", msg_count)
-        await self._save_message(db, session.id, "user", user_prompt, "PRESENTING", msg_count + 1)
-        await self._save_message(db, session.id, "assistant", json.dumps(cards_data), "PRESENTING", msg_count + 2)
-
-        await db.flush()
-        return result
-
+    # ── LEGACY STUB — generate_cards full body removed in Phase 3 ──
+    # The block below preserves the _CARDS_CACHE_VERSION reference so no
+    # accidental restoration attempts break compilation.
+    _CARDS_CACHE_VERSION_COMPAT = 23  # was: 23 — kept for legacy cache bust detection only
     async def generate_next_section_cards(
         self,
         db: AsyncSession,
@@ -1587,166 +1057,18 @@ class TeachingService:
         student,
         signals,  # NextSectionCardsRequest
     ) -> dict:
-        """Pop next sub-section from concepts_queue, generate cards with live-signal mode, append to session.
-
-        Returns a dict suitable for constructing NextSectionCardsResponse.
-        """
-        _raw_cache = json.loads(session.presentation_text or "{}")
-        cached = _raw_cache if isinstance(_raw_cache, dict) else {}
-        concepts_queue = list(cached.get("concepts_queue", []))
-        concepts_covered = list(cached.get("concepts_covered", []))
-        all_sub_sections_count = cached.get("concepts_total", 1)
-
-        if not concepts_queue:
-            return {
-                "cards": [],
-                "has_more_concepts": False,
-                "concepts_total": all_sub_sections_count,
-                "concepts_covered_count": len(concepts_covered),
-                "current_mode": "NORMAL",
-            }
-
-        next_section = concepts_queue.pop(0)
-
-        # Build blended analytics from accumulated session signals
-        session_signals = list(cached.get("session_signals", []))
-        session_signals.append({
-            "card_index": signals.card_index,
-            "time_on_card_sec": signals.time_on_card_sec,
-            "wrong_attempts": signals.wrong_attempts,
-            "hints_used": signals.hints_used,
-        })
-
-        # Determine adaptive mode via the same blended analytics path used in generate_cards()
-        from adaptive.adaptive_engine import load_student_history, build_blended_analytics
-        from adaptive.profile_builder import build_learning_profile
-        from adaptive.schemas import AnalyticsSummary, CardBehaviorSignals
-
-        _current_mode = "NORMAL"
-        _per_section_floor = CARDS_MAX_TOKENS_NORMAL_PER_SECTION
-        _blended_score: float = 2.0
-        _generate_as: str = "NORMAL"
-        blended = None
-        try:
-            history = await load_student_history(str(session.student_id), session.concept_id, db)
-            # Use exponential recency-weighted aggregation of all session signals
-            # so that a recovery event (high wrong_attempts) doesn't snap back to NORMAL
-            # immediately on the next section.
-            if len(session_signals) == 1:
-                agg_time = session_signals[0]["time_on_card_sec"]
-                agg_wrong = float(session_signals[0]["wrong_attempts"])
-            else:
-                weights = [0.5 ** (len(session_signals) - 1 - i) for i in range(len(session_signals))]
-                total_w = sum(weights)
-                agg_time  = sum(s["time_on_card_sec"] * w for s, w in zip(session_signals, weights)) / total_w
-                agg_wrong = sum(s["wrong_attempts"]   * w for s, w in zip(session_signals, weights)) / total_w
-
-            current_signals = CardBehaviorSignals(
-                card_index=session_signals[-1]["card_index"],
-                time_on_card_sec=agg_time,
-                wrong_attempts=round(agg_wrong),
-                hints_used=session_signals[-1].get("hints_used", 0),
-                idle_triggers=session_signals[-1].get("idle_triggers", 0),
-            )
-            blended, _blended_score, _generate_as = build_blended_analytics(
-                current_signals, history,
-                concept_id=session.concept_id,
-                student_id=str(session.student_id),
-            )
-            profile = build_learning_profile(blended, has_unmet_prereq=False)
-            _current_mode = profile.speed
-            # Map profile.speed keys to _CARD_MODE_DELIVERY keys (SLOW is not a valid key)
-            _generate_as = "STRUGGLING" if (_current_mode == "SLOW" or getattr(profile, 'comprehension', '') == "STRUGGLING") else _current_mode
-            if _current_mode == "SLOW" or profile.comprehension == "STRUGGLING":
-                _per_section_floor = CARDS_MAX_TOKENS_SLOW_PER_SECTION
-            elif _current_mode == "FAST" and profile.comprehension == "STRONG":
-                _per_section_floor = CARDS_MAX_TOKENS_FAST_PER_SECTION
-            else:
-                _per_section_floor = CARDS_MAX_TOKENS_NORMAL_PER_SECTION
-        except Exception as exc:
-            logger.warning(
-                "[next-section] blended_analytics_failed: student_id=%s — defaulting to NORMAL: %s",
-                session.student_id, exc,
-            )
-
-        system_prompt = cached.get("system_prompt", "")
-        concept_title = cached.get("concept_title", "")
-        latex: list = []  # LaTeX already embedded in section text from initial generation
-
-        # Load image pool from cache (saved during initial generation)
-        cached_images = cached.get("_images", [])
-        already_assigned = set(cached.get("assigned_image_indices", []))
-        available_images = cached_images  # full image pool available for every per-card section
-
-        # Generate cards for this ONE sub-section
-        new_raw_cards = await self._generate_cards_per_section(
-            system_prompt=system_prompt,
-            concept_title=concept_title,
-            concept_overview="",
-            sections=[next_section],
-            latex=latex,
-            images=available_images,
-            max_tokens_per_section=_per_section_floor,
-            per_section_floor=_per_section_floor,
-            generate_as=_generate_as,
-            blended_score=_blended_score,
+        """DEPRECATED — replaced by chunk-based per-chunk generation. Returns empty result."""
+        logger.warning(
+            "[generate_next_section_cards] deprecated — use chunk-based generation. session_id=%s",
+            session.id,
         )
-
-        # Remove cards with empty title or content — prevents blank card renders
-        new_raw_cards = [
-            c for c in new_raw_cards
-            if c.get("title", "").strip() and c.get("content", "").strip()
-        ]
-
-        # Track newly assigned images for future rolling calls
-        new_assigned = {
-            idx
-            for card in new_raw_cards
-            for idx in (card.get("image_indices") or [])
-            if isinstance(idx, int)
-        }
-        cached["assigned_image_indices"] = list(already_assigned | new_assigned)
-
-        # Stamp absolute indices starting after the existing cached cards
-        base_idx = len(cached.get("cards", []))
-        for i, card in enumerate(new_raw_cards):
-            card["_section_index"] = base_idx + i
-            card["index"] = base_idx + i
-            # Ensure required defaults
-            card.setdefault("images", [])
-            card.setdefault("image_indices", [])
-            if card.get("difficulty") is None:
-                card["difficulty"] = 3
-            else:
-                try:
-                    card["difficulty"] = int(card["difficulty"])
-                except (TypeError, ValueError):
-                    card["difficulty"] = 3
-
-        # Append to session cache
-        cached_cards = list(cached.get("cards", []))
-        cached_cards.extend(new_raw_cards)
-        cached["cards"] = cached_cards
-        cached["concepts_queue"] = concepts_queue
-        concepts_covered.append(next_section.get("title", ""))
-        cached["concepts_covered"] = concepts_covered
-        cached["session_signals"] = session_signals
-        session.presentation_text = json.dumps(cached)
-        await db.flush()
-
-        logger.info(
-            "[next-section] session=%s section=%r new_cards=%d mode=%s remaining=%d",
-            str(session.id), next_section.get("title", "?"),
-            len(new_raw_cards), _current_mode, len(concepts_queue),
-        )
-
         return {
-            "cards": new_raw_cards,
-            "has_more_concepts": len(concepts_queue) > 0,
-            "concepts_total": all_sub_sections_count,
-            "concepts_covered_count": len(concepts_covered),
-            "current_mode": _current_mode,
-            "learning_profile_summary": _build_learning_profile_summary(blended, _generate_as, _blended_score),
+            "cards": [],
+            "has_more_concepts": False,
+            "concepts_total": 0,
+            "concepts_covered_count": 0,
+            "current_mode": "NORMAL",
+            "learning_profile_summary": None,
         }
 
     async def generate_per_card(
@@ -1799,18 +1121,36 @@ class TeachingService:
 
         # ── Step 2: Empty queue guard ────────────────────────────────────────────
         if not concepts_queue:
-            logger.info(
-                "[per-card] queue_empty: session_id=%s covered=%d total=%d",
-                session.id, len(concepts_covered), all_sections_count,
-            )
-            return {
-                "session_id": str(session.id),
-                "card": None,
-                "has_more_concepts": False,
-                "current_mode": "NORMAL",
-                "concepts_covered_count": len(concepts_covered),
-                "concepts_total": all_sections_count,
-            }
+            # If the queue is empty and nothing has been covered yet, the session was
+            # likely just created (PRESENTING phase) and never had its queue built.
+            # Auto-initialize from concept_chunks so the student isn't stuck.
+            if not concepts_covered:
+                logger.warning(
+                    "[per-card] queue_empty_auto_init: session_id=%s — initialising queue from DB",
+                    session.id,
+                )
+                await self._initialize_queue(db, session)
+                try:
+                    _raw_cache = json.loads(session.presentation_text or "{}")
+                    cached = _raw_cache if isinstance(_raw_cache, dict) else {}
+                except (json.JSONDecodeError, TypeError):
+                    cached = {}
+                concepts_queue = list(cached.get("concepts_queue", []))
+                all_sections_count = cached.get("concepts_total", 1)
+
+            if not concepts_queue:
+                logger.info(
+                    "[per-card] queue_empty: session_id=%s covered=%d total=%d",
+                    session.id, len(concepts_covered), all_sections_count,
+                )
+                return {
+                    "session_id": str(session.id),
+                    "card": None,
+                    "has_more_concepts": False,
+                    "current_mode": "NORMAL",
+                    "concepts_covered_count": len(concepts_covered),
+                    "concepts_total": all_sections_count,
+                }
 
         # ── Step 3: Pop next content piece ───────────────────────────────────────
         next_piece = concepts_queue.pop(0)
@@ -1907,11 +1247,15 @@ class TeachingService:
         gen_profile = build_generation_profile(card_profile)
 
         # ── Step 9: Build piece-scoped concept_detail ────────────────────────────
-        concept_detail_base = self._get_ksvc(session).get_concept_detail(session.concept_id) or {}
+        # Use only data available from the cached piece — no ChromaDB lookup needed
         piece_concept_detail = {
-            **concept_detail_base,
-            "text": next_piece.get("text", ""),
-            "concept_title": next_piece.get("title", concept_detail_base.get("concept_title", "")),
+            "concept_id":    session.concept_id,
+            "concept_title": next_piece.get("title", session.concept_id),
+            "text":          next_piece.get("text", ""),
+            "chapter":       next_piece.get("chapter", ""),
+            "section":       next_piece.get("section", ""),
+            "latex":         next_piece.get("latex", []),
+            "images":        content_piece_images,
         }
 
         # ── Step 10: Build prompts (Bug 6 fix — pass content_piece_images) ───────
@@ -1974,23 +1318,21 @@ class TeachingService:
 
         # Normalise to LessonCard shape
         card_position = len(cached.get("cards", []))
-        card_dict = _normalise_per_card(parsed, card_index=card_position)
+        card_dict = _normalise_per_card(parsed, chunk_id=next_piece.get("id") or session.concept_id)
 
-        # ── Step 13: Resolve image_indices from per-card LLM response ────────
+        # ── Step 13: Resolve image from per-card LLM response ────────────────
         new_assigned: set[int] = set()
-        image_indices = parsed.get("image_indices") or []
-        resolved_images = []
-        for idx in image_indices:
+        resolved_image = None
+        for idx in (parsed.get("image_indices") or []):
             if 0 <= idx < len(content_piece_images):
-                img = dict(content_piece_images[idx])
-                img.setdefault("caption", img.get("description", ""))
-                resolved_images.append(img)
-                # Track the original cached_images index so it is not re-assigned
+                resolved_image = content_piece_images[idx]
                 orig_idx = _cp_to_cached_idx.get(idx)
                 if orig_idx is not None:
                     new_assigned.add(orig_idx)
-                break  # max 1 image per card
-        card_dict["images"] = resolved_images
+                break
+        if resolved_image:
+            card_dict["image_url"] = resolved_image.get("url") or resolved_image.get("image_url")
+            card_dict["caption"] = resolved_image.get("caption") or resolved_image.get("description")
 
         # ── Step 14: Update cache and flush ──────────────────────────────────
         cached["concepts_queue"] = concepts_queue
@@ -2041,6 +1383,379 @@ class TeachingService:
             "concepts_total": all_sections_count,
         }
 
+    # ── Chunk-Based Card Generation ────────────────────────────────────────
+
+    async def generate_per_chunk(
+        self,
+        session: TeachingSession,
+        db: AsyncSession,
+        chunk_id: str,
+    ) -> list[dict]:
+        """Generate all cards for a single ConceptChunk in one LLM call.
+
+        Returns a list of card dicts (new LessonCard schema).
+        Each card has chunk_id stamped on it by _normalise_per_card().
+        """
+        from adaptive.adaptive_engine import build_blended_analytics
+        from adaptive.prompt_builder import build_chunk_card_prompt, build_next_card_prompt, _CARD_MODE_DELIVERY
+        from adaptive.schemas import CardBehaviorSignals
+
+        chunk = await self._chunk_ksvc.get_chunk(db, chunk_id)
+        if not chunk:
+            raise ValueError(f"Chunk not found: {chunk_id}")
+
+        # exercise_gate chunks (SECTION X.X EXERCISES) are shown as EXAM buttons in the
+        # frontend — they never generate study cards.
+        _chunk_heading = (chunk.get("heading") or "") if isinstance(chunk, dict) else getattr(chunk, "heading", "")
+        if re.match(r"^section\s+\d+\.\d+", _chunk_heading.lower()):
+            return []
+
+        images = await self._chunk_ksvc.get_chunk_images(db, chunk_id)
+
+        # Determine mode from session cache signals
+        try:
+            _cache_raw = json.loads(session.presentation_text or "{}")
+            _cached = _cache_raw if isinstance(_cache_raw, dict) else {}
+        except (json.JSONDecodeError, TypeError):
+            _cached = {}
+
+        _generate_as = _cached.get("current_mode", "NORMAL")
+        if _generate_as not in ("STRUGGLING", "NORMAL", "FAST"):
+            _generate_as = "NORMAL"
+
+        token_budgets = {
+            "STRUGGLING": CHUNK_MAX_TOKENS_STRUGGLING,
+            "NORMAL":     CHUNK_MAX_TOKENS_NORMAL,
+            "FAST":       CHUNK_MAX_TOKENS_FAST,
+        }
+        max_tokens = token_budgets.get(_generate_as, CHUNK_MAX_TOKENS_NORMAL)
+
+        # Build the user prompt
+        student = await db.get(Student, session.student_id)
+        language = getattr(student, "preferred_language", "en") or "en" if student else "en"
+        interests = list(session.lesson_interests or [])
+        if not interests and student:
+            interests = list(getattr(student, "interests", None) or [])
+        style = session.style or "default"
+
+        user_prompt = build_chunk_card_prompt(
+            chunk=chunk,
+            images=images,
+            student_mode=_generate_as,
+            style=style,
+            interests=interests,
+            language=language,
+        )
+
+        # Detect exercise/practice chunks (uses module-level EXERCISE_HEADING_PATTERNS)
+        is_exercise_chunk = any(p in (chunk.get("heading") or "").lower() for p in EXERCISE_HEADING_PATTERNS)
+
+        if is_exercise_chunk:
+            # Fetch preceding teaching subsections for this concept
+            SKIP_HEADINGS = ("learning objectives", "key terms", "summary", "chapter review", "review exercises", "practice test")
+            try:
+                all_concept_chunks = await self._chunk_ksvc.get_chunks_for_concept(
+                    db, chunk.get("book_slug", ""), chunk.get("concept_id", "")
+                )
+                # Get chunks that come before this one (lower order_index), excluding non-teaching chunks
+                current_order = chunk.get("order_index", 9999)
+                teaching_headings = [
+                    c["heading"] for c in all_concept_chunks
+                    if c.get("order_index", 0) < current_order
+                    and not any(skip in c["heading"].lower() for skip in SKIP_HEADINGS)
+                ]
+            except Exception as _ex_err:
+                logger.warning(f"[per-chunk] exercise chunk heading fetch failed: {_ex_err}")
+                teaching_headings = []
+
+            n_subsections = max(len(teaching_headings), 1)
+            subsection_list = "\n".join(f"{i+1}. {h}" for i, h in enumerate(teaching_headings)) or "1. (this section)"
+
+            # Per-mode explanation length for exercise wrong-answer feedback
+            explanation_length = {
+                "STRUGGLING": "full step-by-step numbered walkthrough of what went wrong",
+                "NORMAL": "brief 2–3 sentence explanation of the correct approach",
+                "FAST": "one-line correction only ('Correct: X because Y')",
+            }.get(_generate_as, "brief 2–3 sentence explanation")
+
+            system_prompt = (
+                "You are ADA, an adaptive math tutor.\n\n"
+                "EXERCISE CHUNK MODE: Generate exactly 2 MCQ cards per teaching subsection listed below.\n\n"
+                f"Teaching subsections covered in this section:\n{subsection_list}\n\n"
+                f"Total required cards: {n_subsections * 2}\n\n"
+                "RULES:\n"
+                "1. Generate exactly 2 MCQ cards per subsection — in the same order as the subsection list.\n"
+                "2. Use the EXERCISE CHUNK CONTENT provided as source for question wording.\n"
+                "3. Every MCQ must be at REAL TEXTBOOK DIFFICULTY — same for all modes.\n"
+                f"4. Wrong-answer explanation length: {explanation_length}.\n"
+                "5. content field = brief problem context (1–2 sentences max); question = the MCQ.\n"
+                "6. EVERY card's question field MUST have: options = exactly 4 non-empty strings; "
+                "correct_index in [0, 1, 2, 3].\n"
+                "7. Return ONLY a JSON array. No markdown fences. No commentary.\n"
+                "SCHEMA per card: "
+                '{"index":0,"title":"...","content":"...","image_url":null,"caption":null,'
+                '"question":{"text":"...","options":["A","B","C","D"],'
+                '"correct_index":0,"explanation":"...","difficulty":"HARD"},"is_recovery":false}\n'
+            )
+        else:
+            system_prompt = (
+                "You are ADA, an adaptive math tutor. Turn a chunk of textbook content into "
+                "rich, learnable lesson cards.\n\n"
+                "══════════════ RULE #1 — COMBINED CARDS ══════════════\n"
+                "Every card MUST have BOTH:\n"
+                "  • content: a full explanation that teaches the concept (NEVER empty)\n"
+                "  • question: a complete MCQ testing that concept (NEVER null)\n"
+                "A card without a question is WRONG. A card without content is WRONG.\n"
+                "══════════════════════════════════════════════════════\n\n"
+                "CONTENT RULE: Use the CHUNK CONTENT as your source of facts, concepts, "
+                "formulas, and examples. Then EXPLAIN each concept clearly — add definitions "
+                "in plain language, worked-through examples, and analogies so the student "
+                "can learn without any other resource. Do NOT just copy raw sentences; teach.\n\n"
+                "COVERAGE: Every concept, definition, formula, and worked example in CHUNK "
+                "CONTENT must appear on a card. Never skip any.\n\n"
+                "MERGE RULES:\n"
+                "NEVER merge: formula/LaTeX, worked examples, numbered steps, named definitions.\n"
+                "MAY merge ONLY when ALL three are true: ≤2 sentences AND continues same topic "
+                "AND introduces no new concept.\n"
+                "STRUGGLING: never merge. NORMAL: merge only if all 3 conditions met. "
+                "FAST: merge if conceptually related and both short.\n\n"
+                "MODE RULE: Mode changes HOW you write each card (vocabulary, analogies, MCQ "
+                "difficulty). Mode NEVER reduces coverage or drops content.\n\n"
+                "MCQ RULES: 4 non-empty options. correct_index in [0,1,2,3]. "
+                "Test understanding of the concept — do not copy verbatim from content.\n\n"
+                "OUTPUT: JSON array only. No markdown fences. No commentary.\n\n"
+                "EXAMPLE of one correct combined card:\n"
+                "{\"index\":0,\"title\":\"Whole Numbers\","
+                "\"content\":\"Whole numbers are 0, 1, 2, 3, and so on — the counting numbers "
+                "plus zero. Unlike fractions or negatives, whole numbers represent complete, "
+                "non-negative amounts. Zero is included because it means having none of "
+                "something. Example: if you have 3 apples and eat all 3, you have 0 apples — "
+                "zero is still a whole number.\","
+                "\"image_url\":null,\"caption\":null,"
+                "\"question\":{\"text\":\"Which of the following is a whole number?\","
+                "\"options\":[\"-3\",\"0.5\",\"0\",\"2/3\"],"
+                "\"correct_index\":2,"
+                "\"explanation\":\"Whole numbers start at 0: 0, 1, 2, 3, .... "
+                "Negative numbers, decimals, and fractions are not whole numbers.\","
+                "\"difficulty\":\"MEDIUM\"},\"is_recovery\":false}\n\n"
+                f"STUDENT MODE (writing style, vocabulary, difficulty — not card structure):\n"
+                f"{_CARD_MODE_DELIVERY.get(_generate_as, _CARD_MODE_DELIVERY['NORMAL'])}\n"
+            )
+
+        # Call LLM
+        timeout = max(30.0, max_tokens / 80.0 + 15.0)
+
+        def _parse_cards(raw_text: str) -> list:
+            cleaned = self._extract_json_block(raw_text)
+            cleaned = _fix_latex_backslashes(cleaned)
+            for attempt_str in (cleaned, _clean_salvage(cleaned)):
+                if attempt_str is None:
+                    continue
+                try:
+                    parsed = json.loads(attempt_str)
+                    if isinstance(parsed, list) and parsed:
+                        return parsed
+                except json.JSONDecodeError:
+                    pass
+            return []
+
+        try:
+            raw = await self._chat(
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                max_tokens=max_tokens,
+                model="main",
+                timeout=timeout,
+            )
+            cards_data = _parse_cards(raw)
+        except Exception as _llm_err:
+            logger.warning("[per-chunk] primary LLM call failed: session_id=%s chunk_id=%s err=%s",
+                           session.id, chunk_id, _llm_err)
+            raw = ""
+            cards_data = []
+
+        # Retry once with a minimal prompt if first attempt yielded nothing
+        if not cards_data:
+            logger.warning(
+                "[per-chunk] first attempt empty, retrying with minimal prompt: session_id=%s chunk_id=%s raw=%s",
+                session.id, chunk_id, raw[:300],
+            )
+            retry_system = (
+                "You are ADA, a math tutor. Return ONLY a JSON array of lesson cards. "
+                "Each card: {\"index\":0,\"title\":\"...\",\"content\":\"...\",\"image_url\":null,"
+                "\"caption\":null,\"question\":{\"text\":\"...\",\"options\":[\"A\",\"B\",\"C\",\"D\"],"
+                "\"correct_index\":0,\"explanation\":\"...\",\"difficulty\":\"MEDIUM\"},\"is_recovery\":false}. "
+                "No markdown fences. No commentary. Only the JSON array."
+            )
+            try:
+                raw2 = await self._chat(
+                    messages=[
+                        {"role": "system", "content": retry_system},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    max_tokens=max_tokens,
+                    model="mini",
+                    timeout=timeout,
+                )
+                cards_data = _parse_cards(raw2)
+            except Exception as _llm_err2:
+                logger.warning("[per-chunk] retry LLM call failed: session_id=%s chunk_id=%s err=%s",
+                               session.id, chunk_id, _llm_err2)
+                cards_data = []
+
+        # Normalise each card
+        cards = []
+        for i, parsed_card in enumerate(cards_data):
+            if not isinstance(parsed_card, dict):
+                continue
+            parsed_card["index"] = i
+            try:
+                card = _normalise_per_card(parsed_card, chunk_id)
+                cards.append(card)
+            except Exception as _norm_err:
+                logger.warning("[per-chunk] skipping malformed card %d: %s", i, _norm_err)
+
+        # If chunk has images but LLM assigned none, inject first image into first card
+        if images and cards and not any(c.get("image_url") for c in cards):
+            cards[0]["image_url"] = images[0]["image_url"]
+            cards[0]["caption"] = images[0].get("caption")
+
+        # Final fallback: synthetic card from chunk content so student never sees a 500
+        if not cards:
+            logger.error(
+                "[per-chunk] both attempts failed, using fallback card: session_id=%s chunk_id=%s",
+                session.id, chunk_id,
+            )
+            heading = chunk.get("heading") or "Lesson Content"
+            body = (chunk.get("text") or "")[:800]
+            fallback: dict = {
+                "index": 0,
+                "title": heading,
+                "content": body if body else "Content could not be loaded. Please try again.",
+                "image_url": None,
+                "caption": None,
+                "question": None,
+                "is_recovery": False,
+                "chunk_id": chunk_id,
+            }
+            cards = [fallback]
+
+        logger.info(
+            "[per-chunk] generated: session_id=%s chunk_id=%s cards=%d mode=%s",
+            session.id, chunk_id, len(cards), _generate_as,
+        )
+        return cards
+
+    async def generate_recovery_card_for_chunk(
+        self,
+        session: TeachingSession,
+        chunk: dict,
+        chunk_images: list[dict],
+        card_index: int = 0,
+        wrong_answers: list[str] | None = None,
+    ) -> dict | None:
+        """Generate a single recovery TEACH card for a chunk the student failed.
+
+        Targeted re-explanation in STRUGGLING mode using chunk text directly.
+        Returns card dict with is_recovery=True and chunk_id stamped, or None on failure.
+        """
+        try:
+            student = await None  # not needed for this call; chunk text is self-contained
+        except Exception:
+            pass
+
+        student = None
+        try:
+            from sqlalchemy.ext.asyncio import AsyncSession as _AS
+            from db.models import Student as _Student
+        except Exception:
+            pass
+
+        chunk_id = chunk.get("id", "")
+        topic_title = chunk.get("heading", "this topic")
+
+        # Anti-loop guard
+        if topic_title.startswith("Let's Try Again"):
+            return None
+
+        wrong_ctx = ""
+        if wrong_answers:
+            wrong_ctx = (
+                f"\n\nThe student answered these MCQs INCORRECTLY: {', '.join(wrong_answers[:3])}. "
+                "Re-explain specifically to correct these misconceptions.\n"
+            )
+
+        system_prompt = (
+            "You are ADA, an adaptive math tutor. Generate ONE recovery TEACH card.\n"
+            "The student struggled with this chunk twice. Re-explain in the SIMPLEST way.\n"
+            "RULES:\n"
+            "- Title MUST start exactly with: Let's Try Again — \n"
+            "- Language: age 8-10 reading level. Define every term.\n"
+            "- Open with a real-world analogy BEFORE any formula.\n"
+            "- Use numbered step-by-step explanation.\n"
+            "- End with ONE easy MCQ — confidence-building.\n"
+            "- Return ONLY valid JSON matching the schema below. No markdown fences.\n"
+            'SCHEMA: {"index": ' + str(card_index) + ', "title": "Let\'s Try Again — <topic>", '
+            '"content": "<markdown>", "image_url": null, "caption": null, '
+            '"question": {"text": "<question>", "options": ["A","B","C","D"], '
+            '"correct_index": 0, "explanation": "<why>", "difficulty": "EASY"}, '
+            '"is_recovery": true}'
+        )
+
+        image_note = ""
+        if chunk_images:
+            image_note = f"\nAVAILABLE IMAGE: {chunk_images[0]['image_url']}"
+            if chunk_images[0].get("caption"):
+                image_note += f" ({chunk_images[0]['caption']})"
+            image_note += "\nSet image_url to this URL if the card references the image, otherwise null.\n"
+
+        user_prompt = (
+            f"Re-explain this chunk in STRUGGLING mode:\n"
+            f"Heading: {topic_title}\n\n"
+            f"Chunk text (use as factual basis):\n{chunk.get('text', '')[:2000]}"
+            f"{image_note}{wrong_ctx}"
+            "Return ONLY the JSON object."
+        )
+
+        raw = await self._chat(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            max_tokens=CHUNK_MAX_TOKENS_RECOVERY,
+            model="mini",
+            timeout=30.0,
+            temperature=0.3,
+        )
+
+        cleaned = self._extract_json_block(raw)
+        cleaned = _fix_latex_backslashes(cleaned)
+        try:
+            parsed = json.loads(cleaned)
+        except json.JSONDecodeError:
+            salvaged = _clean_salvage(cleaned)
+            if salvaged:
+                try:
+                    parsed = json.loads(salvaged)
+                except json.JSONDecodeError:
+                    logger.error("[recovery-chunk] JSON parse failed: chunk_id=%s", chunk_id)
+                    return None
+            else:
+                return None
+
+        if not isinstance(parsed, dict):
+            return None
+
+        card = _normalise_per_card(parsed, chunk_id)
+        # Inject first chunk image if the LLM didn't set one
+        if not card.get("image_url") and chunk_images:
+            card["image_url"] = chunk_images[0]["image_url"]
+            card["caption"] = chunk_images[0].get("caption")
+        card["is_recovery"] = True
+        return card
+
     async def complete_card_interaction(
         self, db: AsyncSession, session, student, req
     ) -> dict:
@@ -2090,12 +1805,14 @@ class TeachingService:
         if req.wrong_attempts >= 2 and req.re_explain_card_title:
             cached = json.loads(session.presentation_text or "{}")
             seen_titles = cached.get("concepts_covered", [])
-            ksvc = self._get_ksvc(session)
+            # Generate recovery card using ChunkKnowledgeService directly
             try:
                 recovery_card = await generate_recovery_card(
                     topic_title=req.re_explain_card_title,
                     concept_id=session.concept_id,
-                    knowledge_svc=ksvc,
+                    chunk_ksvc=self._chunk_ksvc,
+                    book_slug=session.book_slug or DEFAULT_BOOK_SLUG,
+                    db=db,
                     llm_client=self.openai,
                     language=getattr(student, "preferred_language", "en") or "en",
                     interests=getattr(student, "interests", None),
@@ -2389,9 +2106,14 @@ class TeachingService:
             raise ValueError(f"Session not found: {session_id}")
 
         failed_topics = json.loads(session.remediation_context or '["key concepts"]')
-        concept = self._get_ksvc(session).get_concept_detail(session.concept_id)
-        if not concept:
-            raise ValueError(f"Concept not found: {session.concept_id}")
+        # Retrieve concept context from PostgreSQL chunks
+        _rem_chunks = await self._chunk_ksvc.get_chunks_for_concept(
+            db, session.book_slug or DEFAULT_BOOK_SLUG, session.concept_id
+        )
+        concept = {
+            "concept_title": _rem_chunks[0].get("heading", session.concept_id) if _rem_chunks else session.concept_id,
+            "text": "\n\n".join(c["text"] for c in _rem_chunks[:3]) if _rem_chunks else "",
+        }
         student = await db.get(Student, session.student_id)
 
         system_prompt = self._build_remediation_cards_prompt(failed_topics, concept, student)
@@ -2521,9 +2243,14 @@ class TeachingService:
             raise ValueError(f"Session not found: {session_id}")
 
         failed_topics = json.loads(session.remediation_context or "[]")
-        concept = self._get_ksvc(session).get_concept_detail(session.concept_id)
-        if not concept:
-            raise ValueError(f"Concept not found: {session.concept_id}")
+        # Retrieve concept context from PostgreSQL chunks
+        _rck_chunks = await self._chunk_ksvc.get_chunks_for_concept(
+            db, session.book_slug or DEFAULT_BOOK_SLUG, session.concept_id
+        )
+        concept = {
+            "concept_title": _rck_chunks[0].get("heading", session.concept_id) if _rck_chunks else session.concept_id,
+            "text": "\n\n".join(c["text"] for c in _rck_chunks[:3]) if _rck_chunks else "",
+        }
         student = await db.get(Student, session.student_id)
 
         # Determine next phase based on attempt count

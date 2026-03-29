@@ -6,6 +6,7 @@ import { useTheme } from "../context/ThemeContext";
 import { useStudent } from "../context/StudentContext";
 import ProgressBar from "../components/learning/ProgressBar";
 import CardLearningView from "../components/learning/CardLearningView";
+import SubsectionNav from "../components/learning/SubsectionNav";
 import SocraticChat from "../components/learning/SocraticChat";
 import CompletionView from "../components/learning/CompletionView";
 import { trackEvent } from "../utils/analytics";
@@ -23,6 +24,8 @@ export default function LearningPage() {
     session, conceptTitle, currentCardIndex,
     cards, cardAnswers, messages,
     checkScore, bestScore,
+    chunkList, chunkProgress, currentChunkId, currentChunkMode,
+    allStudyComplete, startExamFlow,
   } = useSession();
   const { setStyle } = useTheme();
   const { student } = useStudent();
@@ -91,16 +94,33 @@ export default function LearningPage() {
         <p style={{ color: "var(--color-text-muted)", textAlign: "center", maxWidth: "400px" }}>
           {error}
         </p>
-        <button
-          onClick={() => { reset(); navigate("/map"); }}
-          style={{
-            padding: "0.6rem 1.5rem", borderRadius: "10px", border: "none",
-            backgroundColor: "var(--color-primary)", color: "#fff",
-            fontSize: "1rem", fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
-          }}
-        >
-          {t("learning.backToMap")}
-        </button>
+        <div style={{ display: "flex", gap: "0.75rem" }}>
+          <button
+            onClick={() => {
+              reset();
+              const style = searchParams.get("style");
+              startLesson(decodeURIComponent(conceptId), style, lessonInterests);
+            }}
+            style={{
+              padding: "0.6rem 1.5rem", borderRadius: "10px", border: "none",
+              backgroundColor: "var(--color-primary)", color: "#fff",
+              fontSize: "1rem", fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
+            }}
+          >
+            {t("learning.tryAgain")}
+          </button>
+          <button
+            onClick={() => { reset(); navigate("/map"); }}
+            style={{
+              padding: "0.6rem 1.5rem", borderRadius: "10px",
+              border: "1.5px solid var(--color-primary)", backgroundColor: "transparent",
+              color: "var(--color-primary)",
+              fontSize: "1rem", fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
+            }}
+          >
+            {t("learning.backToMap")}
+          </button>
+        </div>
       </div>
     );
   }
@@ -501,13 +521,47 @@ export default function LearningPage() {
       <ProgressBar phase={phase} />
 
       {/* Primary learning phases */}
-      {phase === "CARDS" && <CardLearningView />}
+      {phase === "CARDS" && (
+        chunkList?.length > 0 ? (
+          <div style={{ display: "flex", gap: 0 }}>
+            <SubsectionNav
+              chunkList={chunkList}
+              chunkProgress={chunkProgress}
+              currentChunkId={currentChunkId}
+              allStudyComplete={allStudyComplete}
+              currentMode={currentChunkMode}
+              onExamClick={() => startExamFlow?.()}
+            />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <CardLearningView />
+            </div>
+          </div>
+        ) : (
+          <CardLearningView />
+        )
+      )}
       {phase === "CHECKING" && <SocraticChat />}
       {phase === "COMPLETED" && <CompletionView />}
 
       {/* Remediation phases — cards with remediation banner */}
       {(phase === "REMEDIATING" || phase === "REMEDIATING_2") && (
-        <CardLearningView remediationMode={true} />
+        chunkList?.length > 0 ? (
+          <div style={{ display: "flex", gap: 0 }}>
+            <SubsectionNav
+              chunkList={chunkList}
+              chunkProgress={chunkProgress}
+              currentChunkId={currentChunkId}
+              allStudyComplete={allStudyComplete}
+              currentMode={currentChunkMode}
+              onExamClick={() => startExamFlow?.()}
+            />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <CardLearningView remediationMode={true} />
+            </div>
+          </div>
+        ) : (
+          <CardLearningView remediationMode={true} />
+        )
       )}
 
       {/* Re-check phases — Socratic chat with recheck banner */}

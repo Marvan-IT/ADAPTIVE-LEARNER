@@ -34,7 +34,6 @@ from config import (
     get_book_config,
     get_pdf_path,
     OUTPUT_DIR,
-    CHROMA_DIR,
     BOOK_REGISTRY,
     OPENAI_API_KEY,
     OPENAI_BASE_URL,
@@ -52,8 +51,18 @@ from images.mathpix_client import submit_pdf, wait_for_pdf_completion, download_
 from graph.dependency_builder import build_dependency_edges
 from graph.graph_store import create_graph, validate_graph, save_graph_json, get_graph_stats
 
-from storage.chroma_store import initialize_collection, store_concept_blocks, get_collection_stats
 from storage.json_exporter import export_full_output, export_individual_files
+
+# ChromaDB removed — stub functions so legacy pipeline code that guards behind skip_chroma
+# does not crash on import. These stubs raise on call so any un-guarded path surfaces clearly.
+def initialize_collection(*args, **kwargs):
+    raise RuntimeError("ChromaDB has been removed. Use --skip-chroma flag or the chunk ingestion pipeline.")
+
+def store_concept_blocks(*args, **kwargs):
+    raise RuntimeError("ChromaDB has been removed.")
+
+def get_collection_stats(*args, **kwargs):
+    raise RuntimeError("ChromaDB has been removed.")
 
 from images.image_extractor import extract_image_decisions
 
@@ -929,12 +938,59 @@ if __name__ == "__main__":
         dest="max_sections",
         help="Limit processing to the first N sections (useful for testing image extraction).",
     )
+    parser.add_argument(
+        "--chunks",
+        action="store_true",
+        default=False,
+        help=(
+            "Run chunk-based extraction pipeline (new architecture). "
+            "Reads book.mmd, embeds subsection chunks, and saves to PostgreSQL concept_chunks table. "
+            "Requires OPENAI_API_KEY and DATABASE_URL in backend/.env."
+        ),
+    )
     args = parser.parse_args()
 
     if args.list_books:
         print("Available book codes:")
         for code, config in BOOK_REGISTRY.items():
             print(f"  {code:12s} -> {config['title']}")
+        sys.exit(0)
+
+    # ── Chunk-based extraction pipeline (new architecture) ────────────────────
+    if args.chunks:
+        import asyncio as _asyncio
+        from config import OUTPUT_DIR as _OUTPUT_DIR, BOOK_CODE_MAP as _BOOK_CODE_MAP
+        from extraction.chunk_builder import build_chunks as _build_chunks
+        from db.connection import async_session_factory as _async_session_factory
+
+        # Resolve book slug: accept either book_code (e.g. PREALG) or book_slug (e.g. prealgebra)
+        raw_book = args.book
+        if raw_book in BOOK_REGISTRY:
+            _book_slug = BOOK_REGISTRY[raw_book]["book_slug"]
+        elif raw_book in _BOOK_CODE_MAP:
+            _book_slug = raw_book  # already a slug
+        else:
+            # Try matching as a slug value
+            matched = [slug for slug in _BOOK_CODE_MAP if slug == raw_book]
+            if matched:
+                _book_slug = matched[0]
+            else:
+                print(f"ERROR: Unknown book code or slug: {raw_book!r}. Use --list-books to see options.")
+                sys.exit(1)
+
+        _mmd_path = _OUTPUT_DIR / _book_slug / "book.mmd"
+        if not _mmd_path.exists():
+            print(f"ERROR: {_mmd_path} not found.")
+            print("Run the whole-PDF Mathpix pipeline first (without --chunks) to generate book.mmd.")
+            sys.exit(1)
+
+        logger.info("Starting chunk pipeline for book_slug=%s, mmd=%s", _book_slug, _mmd_path)
+
+        async def _run_chunks():
+            async with _async_session_factory() as session:
+                await _build_chunks(_book_slug, _mmd_path, session)
+
+        _asyncio.run(_run_chunks())
         sys.exit(0)
 
     # Clear Mathpix cache if requested (legacy pipeline only)

@@ -42,7 +42,9 @@ MCQ: EASY (confidence-building). QUESTION hint: MUST use visual method — dot a
 MANDATORY: ALL definitions, formulas, and worked example steps MUST appear. Never skip content.
 FUN ENGAGEMENT: Add 1 brief surprising or fun fact (1 sentence) to one card — warm and concept-related.
 Tone: warm, patient, encouraging.
-JARGON BAN: Never use a math term (e.g. "integer", "denominator", "coefficient") without immediately defining it in simple words a 9-year-old understands. Pattern: plain-English explanation FIRST, math term SECOND.""",
+JARGON BAN: Never use a math term (e.g. "integer", "denominator", "coefficient") without immediately defining it in simple words a 9-year-old understands. Pattern: plain-English explanation FIRST, math term SECOND.
+MCQ wrong-answer explanation: full step-by-step numbered walkthrough — show exactly what went wrong and the correct path.
+Apply the student's STYLE and INTERESTS from the user prompt for all analogies and real-world hooks. STYLE=gamer → gaming language; STYLE=pirate → pirate language; STYLE=astronaut → space/science language. Interests → use them for analogies and examples.""",
 
     "NORMAL": """\
 ## DELIVERY MODE: NORMAL
@@ -50,7 +52,9 @@ Language: high school level. Define terms on first use. Analogy density: ~50%.
 Numbered steps: for all worked examples. MCQ: MEDIUM (real understanding, common-mistake distractors).
 MANDATORY: ALL definitions, formulas, and worked example steps MUST appear on every card.
 FUN ENGAGEMENT: Add 1 real-world application hook to one card where it fits naturally.
-QUESTION hint: concrete approach description (not just 'try it').""",
+QUESTION hint: concrete approach description (not just 'try it').
+MCQ wrong-answer explanation: brief 2–3 sentence explanation of the correct approach.
+Apply the student's STYLE and INTERESTS from the user prompt for all analogies and real-world hooks. STYLE=gamer → gaming language; STYLE=pirate → pirate language; STYLE=astronaut → space/science language. Interests → use them for analogies and examples.""",
 
     "FAST": """\
 ## DELIVERY MODE: FAST
@@ -60,7 +64,9 @@ MCQ: HARD (edge cases, traps, reversed questions). Analogy density: ~20%. Lead w
 MANDATORY: ALL definitions, formulas, and ALL worked example steps MUST appear — reduce scaffolding, NOT substance.
 FAST cards must be AT LEAST as content-rich as NORMAL cards — more technical in language, NOT shorter in substance. Never omit definitions, formulas, or worked example steps.
 FUN ENGAGEMENT: Add 1 intellectually stimulating challenge or 'did you know?' to one card — only content that deepens understanding.
-Never produce a card with only images and no explanatory text.""",
+Never produce a card with only images and no explanatory text.
+MCQ wrong-answer explanation: one-line correction only ('Correct: X because Y').
+Apply the student's STYLE and INTERESTS from the user prompt for all analogies and real-world hooks. STYLE=gamer → gaming language; STYLE=pirate → pirate language; STYLE=astronaut → space/science language. Interests → use them for analogies and examples.""",
 }
 
 
@@ -85,27 +91,59 @@ _LESSON_JSON_SCHEMA = """\
 
 _NEXT_CARD_JSON_SCHEMA = """\
 {
-  "card_type": "<one of: TEACH | VISUAL | EXAMPLE | APPLICATION | QUESTION | FUN | RECAP>",
-  "title": "<concise card title>",
-  "content": "<markdown-formatted explanation — maximum 6 lines>",
-  "image_indices": [],
+  "index": "<int — 0-based position in the card sequence>",
+  "title": "<short heading for this card, e.g. 'The Rounding Rule'>",
+  "content": "<markdown text — the paragraph(s) for this card>",
+  "image_url": "<string URL or null — only set if this card should show the chunk image>",
+  "caption": "<figure caption string or null>",
   "motivational_note": "<one warm encouraging sentence based on student progress, or null>",
-  "questions": [
-    {
-      "type": "mcq",
-      "question": "<question text>",
-      "options": ["<A>", "<B>", "<C>", "<D>"],
-      "correct_index": 0,
-      "explanation": "<why the correct option is right>"
-    },
-    {
-      "type": "true_false",
-      "question": "<true/false statement>",
-      "correct_answer": "true",
-      "explanation": "<brief explanation>"
-    }
-  ]
+  "question": {
+    "text": "<MCQ question text>",
+    "options": ["<A>", "<B>", "<C>", "<D>"],
+    "correct_index": 0,
+    "explanation": "<brief explanation shown after answer>",
+    "difficulty": "MEDIUM"
+  }
 }"""
+
+
+def build_chunk_card_prompt(
+    chunk: dict,
+    images: list[dict],
+    student_mode: str,    # "STRUGGLING" | "NORMAL" | "FAST"
+    style: str,
+    interests: list[str],
+    language: str,
+) -> str:
+    """Build user prompt for generating all cards for a single chunk."""
+    image_block = ""
+    if images:
+        image_block = "\n\nIMAGES IN THIS CHUNK:\n"
+        for i, img in enumerate(images):
+            image_block += f"  [{i}] {img['image_url']}"
+            if img.get("caption"):
+                image_block += f" — {img['caption']}"
+            image_block += "\n"
+        image_block += (
+            "\nYou MUST assign each image to the card whose content most closely relates to it. "
+            "Set that card's image_url to the image URL and caption to the image caption. "
+            "Do NOT set image_url=null on all cards when images are provided.\n"
+        )
+
+    return (
+        f"CHUNK HEADING: {chunk['heading']}\n"
+        f"\nCHUNK CONTENT:\n{chunk['text']}"
+        f"{image_block}\n"
+        f"STUDENT MODE: {student_mode}\n"
+        f"STYLE: {style}\n"
+        f"INTERESTS: {', '.join(interests) if interests else 'general'}\n"
+        f"LANGUAGE: {language}\n"
+        "\nGenerate COMBINED cards — each card MUST contain BOTH a complete content explanation "
+        "AND the MCQ question in the same card object. The content field must be thorough and "
+        "self-contained (definitions, worked examples, and steps as needed per mode rules above) — "
+        "rich enough that a student can learn from it without any other resource. "
+        "Return a JSON array of card objects matching the schema above.\n"
+    )
 
 
 def build_adaptive_prompt(
@@ -425,9 +463,9 @@ def build_next_card_prompt(
         + _NEXT_CARD_JSON_SCHEMA
         + "\n\nGenerate EXACTLY 1 card (the JSON object above — NOT wrapped in an array).\n"
         "Do NOT include a 'concept_explanation' key.\n"
-        "\"card_type\": one of TEACH | VISUAL | EXAMPLE | APPLICATION | QUESTION | FUN | RECAP — choose based on the content type\n"
-        "\"image_indices\": list of 0-based indices from the RELEVANT IMAGES block whose description directly matches this card's content ([] if no images apply)\n"
-        f"Set difficulty = {max(1, min(5, 1 + math.ceil(4 * card_index / max(card_index + 3, 4))))}\n\n"
+        "\"question\": object with fields text, options, correct_index, explanation, difficulty — never null.\n"
+        "\"image_url\": string URL from RELEVANT IMAGES block if the card content directly references that image, otherwise null.\n"
+        f"Set question difficulty to {'EASY' if card_index < 2 else 'MEDIUM' if card_index < 5 else 'HARD'}.\n\n"
         "MCQ QUALITY RULE: The question MUST test understanding, reasoning, or application "
         "in a NEW scenario — NEVER ask a question whose answer is explicitly written verbatim "
         "in the card content above it. BAD: content says 'total is 215' → asks 'What is the total?'. "
