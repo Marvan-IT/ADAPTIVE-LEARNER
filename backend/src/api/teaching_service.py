@@ -1534,6 +1534,10 @@ class TeachingService:
                 "- The question must test understanding or application — NEVER ask a question whose answer is explicitly written verbatim in the card content above it.\n"
                 "- Wrong-answer options should represent realistic student misconceptions.\n"
                 "- Every math expression in question text and options MUST use $...$ LaTeX notation.\n\n"
+                "RULE #8 — DIFFICULTY:\n"
+                "Set the difficulty field on every question based on the student's current mode:\n"
+                "STRUGGLING → \"EASY\"   NORMAL → \"MEDIUM\"   FAST → \"HARD\"\n"
+                "All cards in this session use the SAME difficulty level determined by mode.\n\n"
                 "OUTPUT: A JSON array only. No markdown fences. No commentary before or after.\n\n"
                 "EXAMPLE card (topic: even/odd numbers — NOT your actual content):\n"
                 "{\"index\":0,\"title\":\"Even and Odd Numbers\","
@@ -1543,7 +1547,7 @@ class TeachingService:
                 "\"options\":[\"$6$\",\"$9$\",\"$12$\",\"$4$\"],"
                 "\"correct_index\":1,"
                 "\"explanation\":\"$9 \u00f7 2 = 4$ remainder $1$, so 9 is odd. The others (6, 12, 4) are all divisible by 2 with no remainder.\","
-                "\"difficulty\":2},\"is_recovery\":false}\n\n"
+                "\"difficulty\":\"MEDIUM\"},\"is_recovery\":false}\n\n"
                 f"STUDENT MODE (writing style, vocabulary, difficulty — not card structure):\n"
                 f"{_CARD_MODE_DELIVERY.get(_generate_as, _CARD_MODE_DELIVERY['NORMAL'])}\n"
             )
@@ -1588,6 +1592,7 @@ class TeachingService:
                 "[per-chunk] first attempt empty, retrying with minimal prompt: session_id=%s chunk_id=%s raw=%s",
                 session.id, chunk_id, raw[:300],
             )
+            _difficulty_label = {"STRUGGLING": "EASY", "NORMAL": "MEDIUM", "FAST": "HARD"}.get(_generate_as, "MEDIUM")
             retry_system = (
                 "You are ADA, a math tutor. Output ONLY a JSON array of lesson cards — no markdown fences, no commentary.\n"
                 "RULE 1 — COVERAGE: Every concept in CHUNK CONTENT must appear on a card. Never skip any.\n"
@@ -1600,7 +1605,7 @@ class TeachingService:
                 "\"caption\":\"<caption or null>\","
                 "\"question\":{\"text\":\"...\","
                 "\"options\":[\"A\",\"B\",\"C\",\"D\"],\"correct_index\":0,"
-                "\"explanation\":\"...\",\"difficulty\":2},\"is_recovery\":false}"
+                f"\"explanation\":\"...\",\"difficulty\":\"{_difficulty_label}\"}},\"is_recovery\":false}}"
             )
             try:
                 raw2 = await self._chat(
@@ -1659,7 +1664,7 @@ class TeachingService:
                     "options": [heading, "None of the above", "Not defined here", "Unknown"],
                     "correct_index": 0,
                     "explanation": f"This card covers the topic: {heading}.",
-                    "difficulty": 1,
+                    "difficulty": {"STRUGGLING": "EASY", "NORMAL": "MEDIUM", "FAST": "HARD"}.get(_generate_as, "MEDIUM"),
                 },
                 "is_recovery": False,
                 "chunk_id": chunk_id,

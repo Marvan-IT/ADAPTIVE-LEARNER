@@ -10,6 +10,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func, and_, update
+from sqlalchemy import update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -32,6 +33,8 @@ from config import (
     CHUNK_MAX_TOKENS_EXAM_EVAL,
     OPENAI_MODEL_MINI,
 )
+from adaptive.adaptive_engine import build_blended_analytics, load_student_history
+from adaptive.schemas import CardBehaviorSignals
 from db.connection import get_db
 from db.models import Student, TeachingSession, ConversationMessage, StudentMastery, SpacedReview, CardInteraction
 from db.models import ConceptChunk, ChunkImage
@@ -963,7 +966,7 @@ async def complete_chunk(
     db: AsyncSession = Depends(get_db),
 ):
     """Record completion of a study chunk and determine mode for the next chunk."""
-    from api.teaching_service import EXERCISE_HEADING_PATTERNS, _mode_from_chunk_score
+    from api.teaching_service import EXERCISE_HEADING_PATTERNS
     from datetime import datetime
 
     session = await db.get(TeachingSession, session_id)
@@ -983,8 +986,33 @@ async def complete_chunk(
     }
     session.chunk_progress = existing_progress
 
-    # Determine mode for next chunk
-    next_mode = _mode_from_chunk_score(score)
+    # Determine mode for next chunk using adaptive blending
+    try:
+        history = await load_student_history(str(session.student_id), session.concept_id, db)
+        history["section_count"] = history.get("section_count", 0) + 1
+
+        signals = CardBehaviorSignals(
+            card_index=max(req.total - 1, 0),
+            wrong_attempts=req.total - req.correct,
+            hints_used=0,
+            time_on_card_sec=history.get("avg_time_per_card") or 0.0,
+            idle_triggers=0,
+        )
+
+        _, _, next_mode = build_blended_analytics(
+            signals, history, session.concept_id, str(session.student_id)
+        )
+
+        # Persist section_count increment to Student profile
+        await db.execute(
+            sa_update(Student)
+            .where(Student.id == session.student_id)
+            .values(section_count=Student.section_count + 1)
+        )
+    except Exception:
+        logger.exception("[complete_chunk] adaptive blending failed, falling back to threshold")
+        from api.teaching_service import _mode_from_chunk_score
+        next_mode = _mode_from_chunk_score(score)
 
     # Update presentation_text cache with next mode
     if session.presentation_text:
@@ -1127,6 +1155,23 @@ async def list_chunks(
 
     section_title = chunks[0].section if chunks else ""
 
+    # Inject synthetic exam gate if the section has no exercise_gate chunk
+    visible_for_exam = [s for s in summaries if s.chunk_type != "exam_question_source"]
+    if visible_for_exam and visible_for_exam[-1].chunk_type != "exercise_gate":
+        from uuid import uuid5, NAMESPACE_DNS
+        synthetic_id = str(uuid5(NAMESPACE_DNS, f"exam_gate:{concept_id}"))
+        summaries.append(ChunkSummary(
+            chunk_id=synthetic_id,
+            order_index=(summaries[-1].order_index + 1) if summaries else 0,
+            heading="Section Exam",
+            has_images=False,
+            has_mcq=False,
+            chunk_type="exercise_gate",
+            completed=False,
+            score=None,
+            mode_used=None,
+        ))
+
     logger.info(
         "[chunks] session_id=%s concept_id=%s total=%d current_index=%d",
         session_id, concept_id, len(summaries), session.chunk_index or 0,
@@ -1211,15 +1256,14 @@ async def start_exam(
     if not chunks:
         raise HTTPException(404, f"No chunks found for concept '{req.concept_id}'")
 
-    # Filter to exam_question_source chunks only
+    # Filter to teaching and practice chunks as exam source material
     exam_source_chunks = [
         c for c in chunks
-        if _get_chunk_type(c["heading"]) == "exam_question_source"
+        if _get_chunk_type(c["heading"]) in ("teaching", "practice")
     ]
+
     if not exam_source_chunks:
-        raise HTTPException(
-            409, "No exam question source chunks available for exam"
-        )
+        raise HTTPException(409, "No exam source chunks available for exam")
 
     llm = teaching_svc.openai
 

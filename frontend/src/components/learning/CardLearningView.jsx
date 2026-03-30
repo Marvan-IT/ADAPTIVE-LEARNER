@@ -180,7 +180,7 @@ export default function CardLearningView({ remediationMode = false }) {
   const feedbackTimerRef = useRef(null);
 
   // Assistant panel reveal: hidden until first answer submitted
-  const [showAssistant, setShowAssistant] = useState(false);
+  const [showAssistant, setShowAssistant] = useState(true);
 
   // Exam local state
   const [examAnswers, setExamAnswers] = useState([]);
@@ -1029,10 +1029,9 @@ export default function CardLearningView({ remediationMode = false }) {
 
       {/* ─── Assistant Panel — slides in after first answer ─── */}
       <div
-        className="transition-all duration-500 overflow-hidden"
         style={{
-          width: showAssistant ? "320px" : "0px",
-          opacity: showAssistant ? 1 : 0,
+          width: "320px",
+          opacity: 1,
           flexShrink: 0,
           position: "sticky",
           top: "70px",
