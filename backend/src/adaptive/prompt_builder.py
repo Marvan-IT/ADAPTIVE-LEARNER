@@ -38,38 +38,32 @@ _CARD_MODE_DELIVERY: dict[str, str] = {
 ## DELIVERY MODE: STRUGGLING
 Language: age 8–10. Define every term. Open with real-world analogy FIRST.
 Analogy density: ~80%. Numbered steps: ALWAYS — every step on its own numbered line.
-MCQ: EASY (confidence-building). QUESTION hint: MUST use visual method — dot arrays (● ● ●), number line, or labeled diagram.
-MANDATORY: ALL definitions, formulas, and worked example steps MUST appear. Never skip content.
+MCQ: EASY (confidence-building). QUESTION hint: Use a concrete, visual, or real-world description — for counting/quantity topics use dot arrays (● ● ●) or number lines; for other topics use a real-world comparison.
 FUN ENGAGEMENT: Add 1 brief surprising or fun fact (1 sentence) to one card — warm and concept-related.
+COMPLETENESS RULE: Write each definition, formula, and worked example out IN FULL. Never abbreviate, summarize, or say "as shown above." If a chunk contains a 3-step worked example, all 3 steps must appear on the card. Write as much as needed to genuinely teach — do not stop early.
 Tone: warm, patient, encouraging.
 JARGON BAN: Never use a math term (e.g. "integer", "denominator", "coefficient") without immediately defining it in simple words a 9-year-old understands. Pattern: plain-English explanation FIRST, math term SECOND.
-MCQ wrong-answer explanation: full step-by-step numbered walkthrough — show exactly what went wrong and the correct path.
-Apply the student's STYLE and INTERESTS from the user prompt for all analogies and real-world hooks. STYLE=gamer → gaming language; STYLE=pirate → pirate language; STYLE=astronaut → space/science language. Interests → use them for analogies and examples.
-IMPORTANT: Enrichment (analogies, fun facts, real-world hooks) ADDS to chunk content — never replaces it. All definitions, formulas, and examples from CHUNK CONTENT must still appear.""",
+MCQ wrong-answer explanation: full step-by-step numbered walkthrough — show exactly what went wrong and the correct path.""",
 
     "NORMAL": """\
 ## DELIVERY MODE: NORMAL
 Language: high school level. Define terms on first use. Analogy density: ~50%.
 Numbered steps: for all worked examples. MCQ: MEDIUM (real understanding, common-mistake distractors).
-MANDATORY: ALL definitions, formulas, and worked example steps MUST appear across all cards collectively.
 FUN ENGAGEMENT: Add 1 real-world application hook to one card where it fits naturally.
+COMPLETENESS RULE: Write each definition, formula, and worked example out IN FULL. Never abbreviate, summarize, or say "as shown above." If a chunk contains a 3-step worked example, all 3 steps must appear on the card. Write as much as needed to genuinely teach — do not stop early.
 QUESTION hint: concrete approach description (not just 'try it').
-MCQ wrong-answer explanation: brief 2–3 sentence explanation of the correct approach.
-Apply the student's STYLE and INTERESTS from the user prompt for all analogies and real-world hooks. STYLE=gamer → gaming language; STYLE=pirate → pirate language; STYLE=astronaut → space/science language. Interests → use them for analogies and examples.
-IMPORTANT: Enrichment (analogies, fun facts, real-world hooks) ADDS to chunk content — never replaces it. All definitions, formulas, and examples from CHUNK CONTENT must still appear.""",
+MCQ wrong-answer explanation: 2–3 sentence explanation of the correct approach — do NOT shorten card content.""",
 
     "FAST": """\
 ## DELIVERY MODE: FAST
 Language: technical terminology freely used. 'Why it works' reasoning included.
 ALL procedural steps MUST appear — written as connected technical prose (no "Step 1/2/3" labels).
 MCQ: HARD (edge cases, traps, reversed questions). Analogy density: ~20%. Lead with formula/rule directly.
-MANDATORY: ALL definitions, formulas, and ALL worked example steps MUST appear — reduce scaffolding, NOT substance.
-FAST cards must be AT LEAST as content-rich as NORMAL cards — more technical in language, NOT shorter in substance. Never omit definitions, formulas, or worked example steps.
+FAST means technically denser language and harder MCQs — NOT shorter cards. Write out every definition, formula, and worked example step in full. Never omit or abbreviate a formula or example step.
 FUN ENGAGEMENT: Add 1 intellectually stimulating challenge or 'did you know?' to one card — only content that deepens understanding.
+COMPLETENESS RULE: Write each definition, formula, and worked example out IN FULL. Never abbreviate, summarize, or say "as shown above." If a chunk contains a 3-step worked example, all 3 steps must appear on the card. Write as much as needed to genuinely teach — do not stop early.
 Never produce a card with only images and no explanatory text.
-MCQ wrong-answer explanation: one-line correction only ('Correct: X because Y').
-Apply the student's STYLE and INTERESTS from the user prompt for all analogies and real-world hooks. STYLE=gamer → gaming language; STYLE=pirate → pirate language; STYLE=astronaut → space/science language. Interests → use them for analogies and examples.
-IMPORTANT: Enrichment (analogies, fun facts, real-world hooks) ADDS to chunk content — never replaces it. All definitions, formulas, and examples from CHUNK CONTENT must still appear.""",
+MCQ wrong-answer explanation: one-line correction only ('Correct: X because Y').""",
 }
 
 
@@ -131,7 +125,8 @@ def build_chunk_card_prompt(
             "\nThese images are VISIBLE to you in this conversation. "
             "Describe what you actually see in each image when writing the card content it relates to. "
             "Assign each image URL to the matching card's image_url field. "
-            "Do NOT set image_url=null on all cards when images are provided.\n"
+            "Assign each image to the card whose content relates to it — relevance matters. "
+            "Some cards may have no image if the image is not relevant to that card's content.\n"
         )
 
     return (
@@ -142,8 +137,11 @@ def build_chunk_card_prompt(
         f"STYLE: {style}\n"
         f"INTERESTS: {', '.join(interests) if interests else 'general'}\n"
         f"LANGUAGE: {language}\n"
-        "For each item: explain it using the chunk's own definitions and worked examples, "
-        "then enrich with mode-appropriate analogies. Return a JSON array of card objects.\n"
+        "For each item in CHUNK CONTENT: write a card that (1) states the definition or concept "
+        "completely, (2) shows a worked example with every step, (3) states any formula in $LaTeX$, "
+        "(4) adds a mode-appropriate analogy or real-world hook. "
+        "Write as much as needed to genuinely teach — do not stop early. "
+        "Return a JSON array of card objects.\n"
     )
 
 

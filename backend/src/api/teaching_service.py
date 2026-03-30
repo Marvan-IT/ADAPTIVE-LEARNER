@@ -160,10 +160,11 @@ def _image_to_data_url(image_url: str, book_slug: str) -> str | None:
     try:
         from config import OUTPUT_DIR
         from pathlib import Path as _ImgPath
-        prefix = f"/images/{book_slug}/"
-        if not image_url.startswith(prefix):
+        marker = f"/images/{book_slug}/"
+        idx = image_url.find(marker)
+        if idx == -1:
             return None
-        rel_path = image_url[len(prefix):]
+        rel_path = image_url[idx + len(marker):]
         file_path = _ImgPath(OUTPUT_DIR) / book_slug / rel_path
         if not file_path.exists():
             return None
@@ -1449,6 +1450,15 @@ class TeachingService:
         if re.match(r"^section\s+\d+\.\d+", _chunk_heading.lower()):
             return []
 
+        # Skip non-teaching headings (Learning Objectives, Key Terms, Summary, etc.)
+        _NO_TEACHING_PATTERNS = (
+            "learning objectives", "key terms", "key concepts",
+            "summary", "chapter review", "review exercises", "practice test",
+        )
+        if any(p in _chunk_heading.lower() for p in _NO_TEACHING_PATTERNS):
+            logger.info("[per-chunk] skipping non-teaching chunk: heading=%r", _chunk_heading)
+            return []
+
         images = await self._chunk_ksvc.get_chunk_images(db, chunk_id)
 
         # Determine mode from session cache signals
@@ -1540,7 +1550,9 @@ class TeachingService:
             system_prompt = (
                 "You are ADA, an adaptive math tutor. Generate lesson cards for the CHUNK CONTENT provided.\n\n"
                 "RULE #1 — COVERAGE (non-negotiable):\n"
-                "Every concept, definition, formula, and worked example in CHUNK CONTENT must appear on exactly one card. Never skip any item.\n\n"
+                "Every concept, definition, formula, and worked example in CHUNK CONTENT must appear on exactly one card. Never skip any item.\n"
+                "For 'TRY IT' exercises: use them as inspiration for the MCQ question on the preceding example's card.\n"
+                "Do NOT create a separate explanation card for each TRY IT — they are practice, not new content.\n\n"
                 "RULE #2 — COMBINED CARDS (mandatory):\n"
                 "Every card MUST have BOTH:\n"
                 "- content: a full explanation (NEVER empty or null)\n"
@@ -1552,8 +1564,11 @@ class TeachingService:
                 "NEVER set image_url=null on ALL cards when images are provided — distribute images across cards.\n\n"
                 "RULE #4 — CONTENT QUALITY:\n"
                 "For each concept in CHUNK CONTENT:\n"
-                "1. Walk through the chunk's own definitions and worked examples step by step in student vocabulary.\n"
-                "2. Then enrich with a mode-appropriate analogy or real-world hook.\n"
+                "(a) State the definition or rule IN FULL — do not paraphrase to fewer words than the original.\n"
+                "(b) Write out every step of every worked example explicitly, IN SEQUENCE, on the SAME card.\n"
+                "    A worked example with N steps must have all N steps — never split a worked example across cards.\n"
+                "(c) Write the formula in $LaTeX$ notation if applicable.\n"
+                "(d) Enrich with a mode-appropriate analogy or real-world hook.\n"
                 "Enrichment ADDS to chunk content — it never replaces chunk content.\n"
                 "Do NOT copy raw textbook sentences verbatim. Do NOT invent facts not present in CHUNK CONTENT.\n\n"
                 "RULE #5 — MERGE RULES:\n"
@@ -1566,12 +1581,18 @@ class TeachingService:
                 "- EXACTLY 4 options (A, B, C, D). correct_index must be 0, 1, 2, or 3.\n"
                 "- EXACTLY ONE option must be correct. Verify no other option is also defensible.\n"
                 "- The question must test understanding or application — NEVER ask a question whose answer is explicitly written verbatim in the card content above it.\n"
-                "- Wrong-answer options should represent realistic student misconceptions.\n"
+                "- Wrong-answer options must be specific, plausible mistakes a real student makes —\n"
+                "  e.g. confusing 0 as a counting number, or $-3$ as a whole number.\n"
+                "  NEVER use 'None of the above', 'All of the above', or randomly implausible values.\n"
                 "- Every math expression in question text and options MUST use $...$ LaTeX notation.\n\n"
                 "RULE #8 — DIFFICULTY:\n"
                 "Set the difficulty field on every question based on the student's current mode:\n"
                 "STRUGGLING → \"EASY\"   NORMAL → \"MEDIUM\"   FAST → \"HARD\"\n"
                 "All cards in this session use the SAME difficulty level determined by mode.\n\n"
+                "RULE #9 — LANGUAGE:\n"
+                "Write ALL card content, MCQ text, options, and explanations in the language specified by LANGUAGE in the user message.\n"
+                "Keep formulas and $LaTeX$ expressions unchanged — mathematics notation is universal.\n"
+                "Use the target language's standard mathematical terminology for all math terms.\n\n"
                 "OUTPUT: A JSON array only. No markdown fences. No commentary before or after.\n\n"
                 "EXAMPLE card (topic: even/odd numbers — NOT your actual content):\n"
                 "{\"index\":0,\"title\":\"Even and Odd Numbers\","
@@ -1582,6 +1603,8 @@ class TeachingService:
                 "\"correct_index\":1,"
                 "\"explanation\":\"$9 \u00f7 2 = 4$ remainder $1$, so 9 is odd. The others (6, 12, 4) are all divisible by 2 with no remainder.\","
                 "\"difficulty\":\"MEDIUM\"},\"is_recovery\":false}\n\n"
+                "NOTE: This example card covers a compact 2-definition chunk. Your chunk may require longer "
+                "cards with full worked example steps — write as much as needed per the COMPLETENESS RULE.\n\n"
                 f"STUDENT MODE (writing style, vocabulary, difficulty — not card structure):\n"
                 f"{_CARD_MODE_DELIVERY.get(_generate_as, _CARD_MODE_DELIVERY['NORMAL'])}\n"
             )
