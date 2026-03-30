@@ -1,24 +1,26 @@
 version: "3.9"
 
-# ── ADA — local / production Docker Compose stack ────────────────────────────
+# ── ADA — Docker Compose stack ───────────────────────────────────────────────
 #
 # Services:
-#   db        PostgreSQL 16 + pgvector — persistent volume; exposed on 5432 for tooling
+#   db        PostgreSQL 16 + pgvector — persistent volume
 #   backend   FastAPI/uvicorn on port 8889; waits for db health check
 #   frontend  nginx serving the Vite build; proxies /api/ to backend
 #
 # Prerequisites:
 #   1. Copy backend/.env.example → backend/.env and fill in real values.
-#   2. Set POSTGRES_PASSWORD in the shell or a root-level .env file:
-#        export POSTGRES_PASSWORD=mysecretpassword
-#      Default falls back to "changeme" for local dev only — never use in prod.
+#   2. Create a root .env file with shared secrets:
+#        POSTGRES_PASSWORD=<strong-random-password>
+#        VITE_API_SECRET_KEY=<must-match-API_SECRET_KEY-in-backend/.env>
 #
 # Usage:
 #   docker compose up --build       # build all images and start
 #   docker compose up -d            # start in background
-#   docker compose down -v          # stop and remove volumes
+#   docker compose logs -f          # tail logs
+#   docker compose down             # stop (keeps data)
+#   docker compose down -v          # stop and destroy volumes
 #
-# Migrations (run once after `up`):
+# Migrations (run once after first `up`):
 #   docker compose exec backend python -m alembic upgrade head
 
 services:
@@ -28,11 +30,12 @@ services:
     environment:
       POSTGRES_DB: AdaptiveLearner
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
+    # DB only accessible from within the Docker network — not exposed to host
+    expose:
+      - "5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
@@ -44,21 +47,19 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     restart: unless-stopped
-    # backend/.env provides OPENAI_API_KEY, MATHPIX_*, API_SECRET_KEY, etc.
-    # DATABASE_URL is overridden here to point at the "db" service by hostname.
     env_file:
       - ./backend/.env
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-changeme}@db:5432/AdaptiveLearner
+      DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:?err}@db:5432/AdaptiveLearner
       ENVIRONMENT: production
-    ports:
-      - "8889:8889"
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost}
+      IMAGE_BASE_URL: ${IMAGE_BASE_URL:-http://localhost/images}
+    expose:
+      - "8889"
     depends_on:
       db:
         condition: service_healthy
     volumes:
-      # Mount pipeline output and data so they are not baked into the image.
-      # These directories can be gigabytes and must never be containerized.
       - ./backend/output:/app/output
       - ./backend/data:/app/data
 
@@ -66,13 +67,29 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: ""
+        VITE_API_SECRET_KEY: ${VITE_API_SECRET_KEY:?Set VITE_API_SECRET_KEY in .env}
+        VITE_POSTHOG_KEY: ${VITE_POSTHOG_KEY:-}
     restart: unless-stopped
     ports:
       - "80:80"
+      - "443:443"
     depends_on:
       - backend
+    volumes:
+      # Mount Certbot SSL certs and challenge dir (created by deploy.sh)
+      - ./certbot/conf:/etc/letsencrypt:ro
+      - ./certbot/www:/var/www/certbot:ro
+
+  # Certbot sidecar — renews SSL certs every 12 hours
+  certbot:
+    image: certbot/certbot
+    restart: unless-stopped
+    volumes:
+      - ./certbot/conf:/etc/letsencrypt
+      - ./certbot/www:/var/www/certbot
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;'"
 
 volumes:
   postgres_data:
-    # Named volume so database data survives container restarts.
-    # To fully reset: docker compose down -v

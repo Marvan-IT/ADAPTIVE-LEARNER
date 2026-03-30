@@ -1,0 +1,11 @@
+.env
+.env.*
+node_modules/
+dist/
+.vite/
+test-results/
+playwright-report/
+.eslintcache
+.DS_Store
+.git/
+.claude/

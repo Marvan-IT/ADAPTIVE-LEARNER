@@ -1,6 +1,4 @@
 # ── Stage 1: build the React/Vite SPA ────────────────────────────────────────
-# node:20-alpine keeps the builder image small; the output dist/ folder is
-# copied into the much smaller nginx stage so the final image has no Node.js.
 FROM node:20-alpine AS builder
 
 WORKDIR /app
@@ -8,6 +6,15 @@ WORKDIR /app
 # Install deps first (cached unless package*.json changes)
 COPY package*.json ./
 RUN npm ci
+
+# Vite inlines VITE_* env vars at build time — pass them as build args.
+# VITE_API_BASE_URL defaults to "" (relative) which works behind nginx proxy.
+ARG VITE_API_BASE_URL=""
+ARG VITE_API_SECRET_KEY
+ARG VITE_POSTHOG_KEY=""
+ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
+ENV VITE_API_SECRET_KEY=$VITE_API_SECRET_KEY
+ENV VITE_POSTHOG_KEY=$VITE_POSTHOG_KEY
 
 # Copy source and build
 COPY . .
