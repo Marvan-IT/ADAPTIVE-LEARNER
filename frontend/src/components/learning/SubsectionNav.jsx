@@ -19,6 +19,7 @@ export default function SubsectionNav({
   allStudyComplete = false,
   onExamClick,
   currentMode = "NORMAL",
+  onExitSubsection = null,
 }) {
   const { t } = useTranslation();
 
@@ -44,6 +45,27 @@ export default function SubsectionNav({
       overflowY: "auto",
       flexShrink: 0,
     }}>
+      {onExitSubsection && (
+        <button
+          onClick={onExitSubsection}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "4px",
+            background: "none",
+            border: "none",
+            cursor: "pointer",
+            color: "#64748b",
+            fontSize: "12px",
+            padding: "6px 12px 4px",
+            width: "100%",
+            textAlign: "left",
+            fontFamily: "inherit",
+          }}
+        >
+          ← {t("learning.exitSubsection", "Back to list")}
+        </button>
+      )}
       <div style={{
         padding: "0 12px 8px",
         fontSize: "11px",
@@ -55,7 +77,7 @@ export default function SubsectionNav({
         {t("subsectionNav.title", "Subsections")}
       </div>
 
-      {visibleChunks.map((chunk) => {
+      {visibleChunks.map((chunk, idx) => {
         if (chunk.chunk_type === "exercise_gate") {
           const locked = !allStudyComplete;
           return (
@@ -100,6 +122,9 @@ export default function SubsectionNav({
         const isDone = chunk.chunk_id in chunkProgress;
         const score = chunkProgress[chunk.chunk_id]?.score;
         const isOptional = chunk.chunk_type === "practice";
+        const isLocked = chunk.chunk_type !== "exercise_gate"
+          && idx > 0
+          && !(visibleChunks[idx - 1]?.chunk_id in (chunkProgress || {}));
 
         return (
           <div
@@ -110,7 +135,7 @@ export default function SubsectionNav({
               borderRadius: "6px",
               background: isCurrent ? "#ede9fe" : "transparent",
               border: isCurrent ? "1.5px solid #7c3aed" : "1px solid transparent",
-              cursor: "default",
+              cursor: isLocked ? "not-allowed" : "default",
             }}
           >
             <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
@@ -119,7 +144,7 @@ export default function SubsectionNav({
                 style={{ fontSize: "13px", flexShrink: 0, color: isDone ? "#16a34a" : isCurrent ? "#5b21b6" : "#94a3b8" }}
                 aria-hidden="true"
               >
-                {isDone ? "✓" : isCurrent ? "●" : "○"}
+                {isDone ? "✓" : isLocked ? "🔒" : isCurrent ? "●" : "○"}
               </span>
 
               {/* Heading */}
@@ -166,6 +191,17 @@ export default function SubsectionNav({
                   borderRadius: "4px",
                 }}>
                   {t("subsectionNav.optional", "Optional")}
+                </span>
+              )}
+              {isLocked && (
+                <span style={{
+                  fontSize: "10px",
+                  color: "#64748b",
+                  background: "#f1f5f9",
+                  padding: "1px 5px",
+                  borderRadius: "4px",
+                }}>
+                  {t("subsectionNav.lockedSubsection", "Complete previous section first")}
                 </span>
               )}
             </div>

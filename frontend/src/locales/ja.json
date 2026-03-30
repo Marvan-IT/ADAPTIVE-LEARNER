@@ -174,6 +174,10 @@
   "exam.loadingSection": "次のセクションを読み込み中…",
   "learning.nextSection": "次のセクション",
   "learning.startExam": "試験を開始",
+  "learning.chooseSubsection": "セクションを選択",
+  "learning.startSubsection": "開始",
+  "learning.startLearning": "学習を始める",
+  "learning.exitSubsection": "← リストに戻る",
   "learning.noCardsError": "カードを読み込めませんでした。もう一度お試しください。",
   "subsectionNav.title": "サブセクション",
   "subsectionNav.exam": "試験",
@@ -185,5 +189,6 @@
   "subsectionNav.modeFast": "速い",
   "subsectionNav.modeChange.struggling": "一歩一歩進めましょう",
   "subsectionNav.modeChange.normal": "よくできました！ペースを保ちましょう",
-  "subsectionNav.modeChange.fast": "素晴らしい！ファストトラックに切り替えます"
+  "subsectionNav.modeChange.fast": "素晴らしい！ファストトラックに切り替えます",
+  "subsectionNav.lockedSubsection": "前のセクションを先に完了してください"
 }

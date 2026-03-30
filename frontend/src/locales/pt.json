@@ -174,6 +174,10 @@
   "exam.loadingSection": "A carregar a próxima seção…",
   "learning.nextSection": "Próxima seção",
   "learning.startExam": "Iniciar exame",
+  "learning.chooseSubsection": "Escolha uma subseção",
+  "learning.startSubsection": "Iniciar",
+  "learning.startLearning": "Começar a aprender",
+  "learning.exitSubsection": "← Voltar à lista",
   "learning.noCardsError": "Não foi possível carregar os cartões. Por favor, tente novamente.",
   "subsectionNav.title": "Subseções",
   "subsectionNav.exam": "Exame",
@@ -185,5 +189,6 @@
   "subsectionNav.modeFast": "Rápido",
   "subsectionNav.modeChange.struggling": "Vamos fazer isso passo a passo",
   "subsectionNav.modeChange.normal": "Bom trabalho! Mantendo o ritmo",
-  "subsectionNav.modeChange.fast": "Excelente! Mudando para o modo rápido"
+  "subsectionNav.modeChange.fast": "Excelente! Mudando para o modo rápido",
+  "subsectionNav.lockedSubsection": "Conclua a seção anterior primeiro"
 }

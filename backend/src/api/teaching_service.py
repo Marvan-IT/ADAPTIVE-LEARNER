@@ -925,7 +925,7 @@ class TeachingService:
         """
         session.style = new_style
 
-        if session.phase == "PRESENTING":
+        if session.phase == "PRESENTING" and session.presentation_text is not None:
             session.presentation_text = None
             return await self.generate_presentation(db, session, student)
 
@@ -1404,6 +1404,11 @@ class TeachingService:
         if not chunk:
             raise ValueError(f"Chunk not found: {chunk_id}")
 
+        chunk_text = (chunk.get("text") or "").strip()
+        if not chunk_text:
+            logger.warning("[per-chunk] chunk has no text content: chunk_id=%s", chunk_id)
+            return []
+
         # exercise_gate chunks (SECTION X.X EXERCISES) are shown as EXAM buttons in the
         # frontend — they never generate study cards.
         _chunk_heading = (chunk.get("heading") or "") if isinstance(chunk, dict) else getattr(chunk, "heading", "")
@@ -1499,45 +1504,46 @@ class TeachingService:
             )
         else:
             system_prompt = (
-                "You are ADA, an adaptive math tutor. Turn a chunk of textbook content into "
-                "rich, learnable lesson cards.\n\n"
-                "══════════════ RULE #1 — COMBINED CARDS ══════════════\n"
+                "You are ADA, an adaptive math tutor. Generate lesson cards for the CHUNK CONTENT provided.\n\n"
+                "RULE #1 — COVERAGE (non-negotiable):\n"
+                "Every concept, definition, formula, and worked example in CHUNK CONTENT must appear on exactly one card. Never skip any item.\n\n"
+                "RULE #2 — COMBINED CARDS (mandatory):\n"
                 "Every card MUST have BOTH:\n"
-                "  • content: a full explanation that teaches the concept (NEVER empty)\n"
-                "  • question: a complete MCQ testing that concept (NEVER null)\n"
-                "A card without a question is WRONG. A card without content is WRONG.\n"
-                "══════════════════════════════════════════════════════\n\n"
-                "CONTENT RULE: Use the CHUNK CONTENT as your source of facts, concepts, "
-                "formulas, and examples. Then EXPLAIN each concept clearly — add definitions "
-                "in plain language, worked-through examples, and analogies so the student "
-                "can learn without any other resource. Do NOT just copy raw sentences; teach.\n\n"
-                "COVERAGE: Every concept, definition, formula, and worked example in CHUNK "
-                "CONTENT must appear on a card. Never skip any.\n\n"
-                "MERGE RULES:\n"
-                "NEVER merge: formula/LaTeX, worked examples, numbered steps, named definitions.\n"
-                "MAY merge ONLY when ALL three are true: ≤2 sentences AND continues same topic "
-                "AND introduces no new concept.\n"
-                "STRUGGLING: never merge. NORMAL: merge only if all 3 conditions met. "
-                "FAST: merge if conceptually related and both short.\n\n"
-                "MODE RULE: Mode changes HOW you write each card (vocabulary, analogies, MCQ "
-                "difficulty). Mode NEVER reduces coverage or drops content.\n\n"
-                "MCQ RULES: 4 non-empty options. correct_index in [0,1,2,3]. "
-                "Test understanding of the concept — do not copy verbatim from content.\n\n"
-                "OUTPUT: JSON array only. No markdown fences. No commentary.\n\n"
-                "EXAMPLE of one correct combined card:\n"
-                "{\"index\":0,\"title\":\"Whole Numbers\","
-                "\"content\":\"Whole numbers are 0, 1, 2, 3, and so on — the counting numbers "
-                "plus zero. Unlike fractions or negatives, whole numbers represent complete, "
-                "non-negative amounts. Zero is included because it means having none of "
-                "something. Example: if you have 3 apples and eat all 3, you have 0 apples — "
-                "zero is still a whole number.\","
-                "\"image_url\":null,\"caption\":null,"
-                "\"question\":{\"text\":\"Which of the following is a whole number?\","
-                "\"options\":[\"-3\",\"0.5\",\"0\",\"2/3\"],"
-                "\"correct_index\":2,"
-                "\"explanation\":\"Whole numbers start at 0: 0, 1, 2, 3, .... "
-                "Negative numbers, decimals, and fractions are not whole numbers.\","
-                "\"difficulty\":\"MEDIUM\"},\"is_recovery\":false}\n\n"
+                "- content: a full explanation (NEVER empty or null)\n"
+                "- question: a complete MCQ object (NEVER null)\n"
+                "A card without a question is WRONG.\n\n"
+                "RULE #3 — IMAGE ASSIGNMENT:\n"
+                "If IMAGES are listed in the user message: assign the most relevant image URL to the card whose content most closely relates to it.\n"
+                "Set image_url to the exact URL string and caption to the exact caption string.\n"
+                "NEVER set image_url=null on ALL cards when images are provided — distribute images across cards.\n\n"
+                "RULE #4 — CONTENT QUALITY:\n"
+                "For each concept in CHUNK CONTENT:\n"
+                "1. Walk through the chunk's own definitions and worked examples step by step in student vocabulary.\n"
+                "2. Then enrich with a mode-appropriate analogy or real-world hook.\n"
+                "Enrichment ADDS to chunk content — it never replaces chunk content.\n"
+                "Do NOT copy raw textbook sentences verbatim. Do NOT invent facts not present in CHUNK CONTENT.\n\n"
+                "RULE #5 — MERGE RULES:\n"
+                "NEVER merge: formula/LaTeX expressions, worked examples, numbered steps, named definitions.\n"
+                "MAY merge ONLY when ALL three are true: (a) \u22642 sentences total, (b) continues the same topic, (c) introduces no new concept.\n"
+                "Mode override: STRUGGLING \u2192 never merge. FAST \u2192 merge if conceptually related and both short.\n\n"
+                "RULE #6 — MODE RULE:\n"
+                "The student's current mode NEVER reduces content coverage. Mode only changes delivery style (tone, scaffolding, analogy density). All concepts from CHUNK CONTENT must still appear regardless of mode.\n\n"
+                "RULE #7 — MCQ RULES:\n"
+                "- EXACTLY 4 options (A, B, C, D). correct_index must be 0, 1, 2, or 3.\n"
+                "- EXACTLY ONE option must be correct. Verify no other option is also defensible.\n"
+                "- The question must test understanding or application — NEVER ask a question whose answer is explicitly written verbatim in the card content above it.\n"
+                "- Wrong-answer options should represent realistic student misconceptions.\n"
+                "- Every math expression in question text and options MUST use $...$ LaTeX notation.\n\n"
+                "OUTPUT: A JSON array only. No markdown fences. No commentary before or after.\n\n"
+                "EXAMPLE card (topic: even/odd numbers — NOT your actual content):\n"
+                "{\"index\":0,\"title\":\"Even and Odd Numbers\","
+                "\"content\":\"An even number is any integer exactly divisible by 2. For example, 4 \u00f7 2 = 2 with no remainder, so 4 is even. An odd number leaves a remainder of 1. Think of it like sharing cookies \u2014 even means everyone gets the same share.\","
+                "\"image_url\":\"<URL from IMAGES list or null>\",\"caption\":\"<caption text or null>\","
+                "\"question\":{\"text\":\"Which of the following is an odd number?\","
+                "\"options\":[\"$6$\",\"$9$\",\"$12$\",\"$4$\"],"
+                "\"correct_index\":1,"
+                "\"explanation\":\"$9 \u00f7 2 = 4$ remainder $1$, so 9 is odd. The others (6, 12, 4) are all divisible by 2 with no remainder.\","
+                "\"difficulty\":2},\"is_recovery\":false}\n\n"
                 f"STUDENT MODE (writing style, vocabulary, difficulty — not card structure):\n"
                 f"{_CARD_MODE_DELIVERY.get(_generate_as, _CARD_MODE_DELIVERY['NORMAL'])}\n"
             )
@@ -1583,11 +1589,18 @@ class TeachingService:
                 session.id, chunk_id, raw[:300],
             )
             retry_system = (
-                "You are ADA, a math tutor. Return ONLY a JSON array of lesson cards. "
-                "Each card: {\"index\":0,\"title\":\"...\",\"content\":\"...\",\"image_url\":null,"
-                "\"caption\":null,\"question\":{\"text\":\"...\",\"options\":[\"A\",\"B\",\"C\",\"D\"],"
-                "\"correct_index\":0,\"explanation\":\"...\",\"difficulty\":\"MEDIUM\"},\"is_recovery\":false}. "
-                "No markdown fences. No commentary. Only the JSON array."
+                "You are ADA, a math tutor. Output ONLY a JSON array of lesson cards — no markdown fences, no commentary.\n"
+                "RULE 1 — COVERAGE: Every concept in CHUNK CONTENT must appear on a card. Never skip any.\n"
+                "RULE 2 — COMBINED CARDS: Every card MUST have content AND question (NEVER null).\n"
+                "RULE 3 — IMAGES: If IMAGES are listed in the user message, assign relevant URLs. "
+                "Never set image_url=null on all cards when images exist.\n"
+                "SCHEMA per card: "
+                "{\"index\":0,\"title\":\"...\",\"content\":\"...\","
+                "\"image_url\":\"<URL from IMAGES list or null>\","
+                "\"caption\":\"<caption or null>\","
+                "\"question\":{\"text\":\"...\","
+                "\"options\":[\"A\",\"B\",\"C\",\"D\"],\"correct_index\":0,"
+                "\"explanation\":\"...\",\"difficulty\":2},\"is_recovery\":false}"
             )
             try:
                 raw2 = await self._chat(
@@ -1617,10 +1630,15 @@ class TeachingService:
             except Exception as _norm_err:
                 logger.warning("[per-chunk] skipping malformed card %d: %s", i, _norm_err)
 
-        # If chunk has images but LLM assigned none, inject first image into first card
-        if images and cards and not any(c.get("image_url") for c in cards):
-            cards[0]["image_url"] = images[0]["image_url"]
-            cards[0]["caption"] = images[0].get("caption")
+        # If chunk has images but LLM assigned none, distribute across cards
+        if images:
+            assigned_urls = {c.get("image_url") for c in cards if c.get("image_url")}
+            remaining_imgs = [img for img in images if img["image_url"] not in assigned_urls]
+            for card in cards:
+                if not card.get("image_url") and remaining_imgs:
+                    img = remaining_imgs.pop(0)
+                    card["image_url"] = img["image_url"]
+                    card["caption"] = img.get("caption")
 
         # Final fallback: synthetic card from chunk content so student never sees a 500
         if not cards:
@@ -1636,7 +1654,13 @@ class TeachingService:
                 "content": body if body else "Content could not be loaded. Please try again.",
                 "image_url": None,
                 "caption": None,
-                "question": None,
+                "question": {
+                    "text": f"Which best describes: {heading}?",
+                    "options": [heading, "None of the above", "Not defined here", "Unknown"],
+                    "correct_index": 0,
+                    "explanation": f"This card covers the topic: {heading}.",
+                    "difficulty": 1,
+                },
                 "is_recovery": False,
                 "chunk_id": chunk_id,
             }

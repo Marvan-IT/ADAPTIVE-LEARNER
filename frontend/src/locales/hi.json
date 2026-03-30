@@ -174,6 +174,10 @@
   "exam.loadingSection": "अगला अनुभाग लोड हो रहा है…",
   "learning.nextSection": "अगला अनुभाग",
   "learning.startExam": "परीक्षा शुरू करें",
+  "learning.chooseSubsection": "एक उपखंड चुनें",
+  "learning.startSubsection": "शुरू करें",
+  "learning.startLearning": "सीखना शुरू करें",
+  "learning.exitSubsection": "← सूची पर वापस",
   "learning.noCardsError": "कार्ड लोड नहीं हो सके। कृपया पुनः प्रयास करें।",
   "subsectionNav.title": "उपखंड",
   "subsectionNav.exam": "परीक्षा",
@@ -185,5 +189,6 @@
   "subsectionNav.modeFast": "तेज़",
   "subsectionNav.modeChange.struggling": "इसे चरण दर चरण लेते हैं",
   "subsectionNav.modeChange.normal": "अच्छा काम! गति बनाए रखें",
-  "subsectionNav.modeChange.fast": "शानदार! फास्ट ट्रैक पर स्विच हो रहे हैं"
+  "subsectionNav.modeChange.fast": "शानदार! फास्ट ट्रैक पर स्विच हो रहे हैं",
+  "subsectionNav.lockedSubsection": "पहले पिछले अनुभाग को पूरा करें"
 }

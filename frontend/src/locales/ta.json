@@ -174,6 +174,10 @@
   "exam.loadingSection": "அடுத்த பகுதி ஏற்றுகிறது…",
   "learning.nextSection": "அடுத்த பகுதி",
   "learning.startExam": "தேர்வு தொடங்கு",
+  "learning.chooseSubsection": "ஒரு பிரிவை தேர்ந்தெடுக்கவும்",
+  "learning.startSubsection": "தொடங்கு",
+  "learning.startLearning": "கற்றல் தொடங்கு",
+  "learning.exitSubsection": "← பட்டியலுக்கு திரும்பு",
   "learning.noCardsError": "அட்டைகளை ஏற்ற முடியவில்லை. மீண்டும் முயற்சிக்கவும்.",
   "subsectionNav.title": "உப பிரிவுகள்",
   "subsectionNav.exam": "தேர்வு",
@@ -185,5 +189,6 @@
   "subsectionNav.modeFast": "வேகமாக",
   "subsectionNav.modeChange.struggling": "படிப்படியாக முன்னேறலாம்",
   "subsectionNav.modeChange.normal": "நல்ல வேலை! வேகத்தை தொடருங்கள்",
-  "subsectionNav.modeChange.fast": "அருமை! வேகமான பாதைக்கு மாறுகிறோம்"
+  "subsectionNav.modeChange.fast": "அருமை! வேகமான பாதைக்கு மாறுகிறோம்",
+  "subsectionNav.lockedSubsection": "முன் பிரிவை முதலில் முடிக்கவும்"
 }

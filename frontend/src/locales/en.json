@@ -175,6 +175,10 @@
   "exam.loadingSection": "Loading next section…",
   "learning.nextSection": "Next Section",
   "learning.startExam": "Start Exam",
+  "learning.chooseSubsection": "Choose a subsection to start",
+  "learning.startSubsection": "Start",
+  "learning.startLearning": "Start Learning",
+  "learning.exitSubsection": "← Back to list",
   "subsectionNav.title": "Subsections",
   "subsectionNav.exam": "Exam",
   "subsectionNav.locked": "Complete previous subsections first",
@@ -185,5 +189,6 @@
   "subsectionNav.modeFast": "Fast",
   "subsectionNav.modeChange.struggling": "Let's take this step by step",
   "subsectionNav.modeChange.normal": "Good work! Keeping the pace",
-  "subsectionNav.modeChange.fast": "Excellent! Switching to Fast track"
+  "subsectionNav.modeChange.fast": "Excellent! Switching to Fast track",
+  "subsectionNav.lockedSubsection": "Complete previous section first"
 }

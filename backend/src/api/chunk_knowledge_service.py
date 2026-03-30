@@ -55,7 +55,10 @@ class ChunkKnowledgeService:
             .order_by(ConceptChunk.order_index)
         )
         chunks = result.scalars().all()
-        return [self._chunk_to_dict(c) for c in chunks]
+        all_chunks = [self._chunk_to_dict(c) for c in chunks]
+        # Exclude chunks with no text content — they cannot generate meaningful cards
+        all_chunks = [c for c in all_chunks if (c.get("text") or "").strip()]
+        return all_chunks
 
     async def get_chunk(self, db: AsyncSession, chunk_id: str) -> dict | None:
         """Return a single chunk by UUID."""

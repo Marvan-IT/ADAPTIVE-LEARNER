@@ -44,17 +44,19 @@ FUN ENGAGEMENT: Add 1 brief surprising or fun fact (1 sentence) to one card — 
 Tone: warm, patient, encouraging.
 JARGON BAN: Never use a math term (e.g. "integer", "denominator", "coefficient") without immediately defining it in simple words a 9-year-old understands. Pattern: plain-English explanation FIRST, math term SECOND.
 MCQ wrong-answer explanation: full step-by-step numbered walkthrough — show exactly what went wrong and the correct path.
-Apply the student's STYLE and INTERESTS from the user prompt for all analogies and real-world hooks. STYLE=gamer → gaming language; STYLE=pirate → pirate language; STYLE=astronaut → space/science language. Interests → use them for analogies and examples.""",
+Apply the student's STYLE and INTERESTS from the user prompt for all analogies and real-world hooks. STYLE=gamer → gaming language; STYLE=pirate → pirate language; STYLE=astronaut → space/science language. Interests → use them for analogies and examples.
+IMPORTANT: Enrichment (analogies, fun facts, real-world hooks) ADDS to chunk content — never replaces it. All definitions, formulas, and examples from CHUNK CONTENT must still appear.""",
 
     "NORMAL": """\
 ## DELIVERY MODE: NORMAL
 Language: high school level. Define terms on first use. Analogy density: ~50%.
 Numbered steps: for all worked examples. MCQ: MEDIUM (real understanding, common-mistake distractors).
-MANDATORY: ALL definitions, formulas, and worked example steps MUST appear on every card.
+MANDATORY: ALL definitions, formulas, and worked example steps MUST appear across all cards collectively.
 FUN ENGAGEMENT: Add 1 real-world application hook to one card where it fits naturally.
 QUESTION hint: concrete approach description (not just 'try it').
 MCQ wrong-answer explanation: brief 2–3 sentence explanation of the correct approach.
-Apply the student's STYLE and INTERESTS from the user prompt for all analogies and real-world hooks. STYLE=gamer → gaming language; STYLE=pirate → pirate language; STYLE=astronaut → space/science language. Interests → use them for analogies and examples.""",
+Apply the student's STYLE and INTERESTS from the user prompt for all analogies and real-world hooks. STYLE=gamer → gaming language; STYLE=pirate → pirate language; STYLE=astronaut → space/science language. Interests → use them for analogies and examples.
+IMPORTANT: Enrichment (analogies, fun facts, real-world hooks) ADDS to chunk content — never replaces it. All definitions, formulas, and examples from CHUNK CONTENT must still appear.""",
 
     "FAST": """\
 ## DELIVERY MODE: FAST
@@ -66,7 +68,8 @@ FAST cards must be AT LEAST as content-rich as NORMAL cards — more technical i
 FUN ENGAGEMENT: Add 1 intellectually stimulating challenge or 'did you know?' to one card — only content that deepens understanding.
 Never produce a card with only images and no explanatory text.
 MCQ wrong-answer explanation: one-line correction only ('Correct: X because Y').
-Apply the student's STYLE and INTERESTS from the user prompt for all analogies and real-world hooks. STYLE=gamer → gaming language; STYLE=pirate → pirate language; STYLE=astronaut → space/science language. Interests → use them for analogies and examples.""",
+Apply the student's STYLE and INTERESTS from the user prompt for all analogies and real-world hooks. STYLE=gamer → gaming language; STYLE=pirate → pirate language; STYLE=astronaut → space/science language. Interests → use them for analogies and examples.
+IMPORTANT: Enrichment (analogies, fun facts, real-world hooks) ADDS to chunk content — never replaces it. All definitions, formulas, and examples from CHUNK CONTENT must still appear.""",
 }
 
 
@@ -138,11 +141,8 @@ def build_chunk_card_prompt(
         f"STYLE: {style}\n"
         f"INTERESTS: {', '.join(interests) if interests else 'general'}\n"
         f"LANGUAGE: {language}\n"
-        "\nGenerate COMBINED cards — each card MUST contain BOTH a complete content explanation "
-        "AND the MCQ question in the same card object. The content field must be thorough and "
-        "self-contained (definitions, worked examples, and steps as needed per mode rules above) — "
-        "rich enough that a student can learn from it without any other resource. "
-        "Return a JSON array of card objects matching the schema above.\n"
+        "For each item: explain it using the chunk's own definitions and worked examples, "
+        "then enrich with mode-appropriate analogies. Return a JSON array of card objects.\n"
     )
 
 
@@ -318,7 +318,7 @@ def _build_system_prompt(
             "\n\nSLOW LEARNER MODE — additional requirements:\n"
             "- The very first card MUST be an ultra-simple worked example with difficulty=1.\n"
             "- Include at least 2 cards of type 'explain' that each use a concrete real-world analogy.\n"
-            "- Include at least 2 cards of type 'checkpoint' spread through the sequence.\n"
+            "- Include at least 2 cards of type 'checkpoint' spread through the sequence. (This 2-checkpoint minimum overrides the checkpoint frequency setting above.)\n"
             "- Prefer shorter card content; split complex ideas across multiple cards."
         )
 
@@ -465,7 +465,6 @@ def build_next_card_prompt(
         "Do NOT include a 'concept_explanation' key.\n"
         "\"question\": object with fields text, options, correct_index, explanation, difficulty — never null.\n"
         "\"image_url\": string URL from RELEVANT IMAGES block if the card content directly references that image, otherwise null.\n"
-        f"Set question difficulty to {'EASY' if card_index < 2 else 'MEDIUM' if card_index < 5 else 'HARD'}.\n\n"
         "MCQ QUALITY RULE: The question MUST test understanding, reasoning, or application "
         "in a NEW scenario — NEVER ask a question whose answer is explicitly written verbatim "
         "in the card content above it. BAD: content says 'total is 215' → asks 'What is the total?'. "

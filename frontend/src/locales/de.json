@@ -174,6 +174,10 @@
   "exam.loadingSection": "Nächster Abschnitt wird geladen…",
   "learning.nextSection": "Nächster Abschnitt",
   "learning.startExam": "Prüfung starten",
+  "learning.chooseSubsection": "Wähle einen Abschnitt",
+  "learning.startSubsection": "Start",
+  "learning.startLearning": "Lernen beginnen",
+  "learning.exitSubsection": "← Zurück zur Liste",
   "learning.noCardsError": "Karten konnten nicht geladen werden. Bitte versuche es erneut.",
   "subsectionNav.title": "Abschnitte",
   "subsectionNav.exam": "Prüfung",
@@ -185,5 +189,6 @@
   "subsectionNav.modeFast": "Schnell",
   "subsectionNav.modeChange.struggling": "Nehmen wir es Schritt für Schritt",
   "subsectionNav.modeChange.normal": "Gut gemacht! Weiter so",
-  "subsectionNav.modeChange.fast": "Ausgezeichnet! Wechsel in den Schnellmodus"
+  "subsectionNav.modeChange.fast": "Ausgezeichnet! Wechsel in den Schnellmodus",
+  "subsectionNav.lockedSubsection": "Schließe zuerst den vorherigen Abschnitt ab"
 }

@@ -12,7 +12,6 @@ import CompletionView from "../components/learning/CompletionView";
 import { trackEvent } from "../utils/analytics";
 import { AlertCircle, LogOut, MapPin } from "lucide-react";
 import { checkConceptReadiness } from "../api/concepts";
-import { switchStyle, updateSessionInterests } from "../api/sessions";
 
 export default function LearningPage() {
   const { t } = useTranslation();
@@ -26,38 +25,38 @@ export default function LearningPage() {
     checkScore, bestScore,
     chunkList, chunkProgress, currentChunkId, currentChunkMode,
     allStudyComplete, startExamFlow,
+    startChunk, dispatch, loading,
   } = useSession();
   const { setStyle } = useTheme();
   const { student } = useStudent();
 
-  const [lessonInterests, setLessonInterests] = useState([]);
-  const [interestInput, setInterestInput] = useState("");
-  const [showCustomize, setShowCustomize] = useState(false);
-  const [lessonStyle, setLessonStyle] = useState("default");
-  const [prereqWarning, setPrereqWarning] = useState(null); // null | { unmet: [...], style, interests }
+  const [prereqWarning, setPrereqWarning] = useState(null);
   const [prereqChecked, setPrereqChecked] = useState(false);
+
+  // Per-chunk picker state
+  const [selectedChunkId, setSelectedChunkId] = useState(null);
+  const [chunkStyle, setChunkStyle] = useState("default");
+  const [chunkInterests, setChunkInterests] = useState([]);
+  const [chunkInterestInput, setChunkInterestInput] = useState("");
 
   useEffect(() => {
     if (conceptId && phase === "IDLE" && !prereqChecked) {
       setPrereqChecked(true);
-      const lessonStyle = searchParams.get("style");
-      const interestsParam = searchParams.get("interests");
-      const urlInterests = interestsParam ? interestsParam.split(",").map(s => s.trim()).filter(Boolean) : [];
-      const mergedInterests = [...new Set([...urlInterests, ...lessonInterests])];
-      if (lessonStyle) setStyle(lessonStyle);
+      const urlStyle = searchParams.get("style");
+      if (urlStyle) setStyle(urlStyle);
 
       checkConceptReadiness(decodeURIComponent(conceptId), student.id)
         .then(res => {
           const data = res.data;
           if (!data.all_prerequisites_met && data.unmet_prerequisites.length > 0) {
-            setPrereqWarning({ unmet: data.unmet_prerequisites, style: lessonStyle, interests: mergedInterests });
+            setPrereqWarning({ unmet: data.unmet_prerequisites });
           } else {
-            startLesson(decodeURIComponent(conceptId), lessonStyle, mergedInterests);
+            startLesson(decodeURIComponent(conceptId), null, []);
           }
         })
         .catch((err) => {
           console.error("[LearningPage] prereq check failed:", err);
-          startLesson(decodeURIComponent(conceptId), lessonStyle, mergedInterests);
+          startLesson(decodeURIComponent(conceptId), null, []);
         });
     }
   }, [conceptId, phase, prereqChecked]);
@@ -98,8 +97,7 @@ export default function LearningPage() {
           <button
             onClick={() => {
               reset();
-              const style = searchParams.get("style");
-              startLesson(decodeURIComponent(conceptId), style, lessonInterests);
+              startLesson(decodeURIComponent(conceptId), null, []);
             }}
             style={{
               padding: "0.6rem 1.5rem", borderRadius: "10px", border: "none",
@@ -132,86 +130,6 @@ export default function LearningPage() {
         margin: "0 auto",
         padding: "1.5rem 1.5rem 3rem",
       }}>
-        {/* Customize this lesson — compact collapsible panel */}
-        <div className="text-center mb-4">
-          <button
-            onClick={() => setShowCustomize(c => !c)}
-            style={{ fontSize: 12, background: 'none', border: 'none', cursor: 'pointer', opacity: 0.7 }}
-            title={t('customize.panelTitle') || 'Customize lesson'}
-          >
-            ⚙
-          </button>
-          {showCustomize && (
-            <div style={{ background: '#f8f8f8', borderRadius: 8, padding: 12, marginBottom: 12, fontSize: 13, marginTop: 8 }}>
-              {!!session && (
-                <p style={{ fontSize: 11, color: '#b45309', marginBottom: 8, marginTop: 0, fontWeight: 600 }}>
-                  {t('customize.lockedDuringLesson')}
-                </p>
-              )}
-              {/* Style selector */}
-              <div style={{ marginBottom: 8 }}>
-                <label style={{ fontWeight: 600, marginRight: 8 }}>{t('customize.style') || 'Style:'}</label>
-                <select
-                  value={lessonStyle}
-                  disabled={!!session}
-                  onChange={async (e) => {
-                    const newStyle = e.target.value;
-                    setLessonStyle(newStyle);
-                    if (session) {
-                      try { await switchStyle(session.id, newStyle); } catch (err) { console.error("[customize] failed to save:", err); }
-                    }
-                  }}
-                >
-                  <option value="default">{t('customize.styleDefault') || 'Default'}</option>
-                  <option value="pirate">{t('customize.stylePirate') || 'Pirate'}</option>
-                  <option value="astronaut">{t('customize.styleAstronaut') || 'Astronaut'}</option>
-                  <option value="gamer">{t('customize.styleGamer') || 'Gamer'}</option>
-                </select>
-              </div>
-              {/* Interests input */}
-              <div>
-                <label style={{ fontWeight: 600, marginRight: 8 }}>{t('customize.interests') || 'Interests:'}</label>
-                <input
-                  value={interestInput}
-                  disabled={!!session}
-                  onChange={e => setInterestInput(e.target.value)}
-                  onKeyDown={async (e) => {
-                    if (e.key === 'Enter' && interestInput.trim()) {
-                      const updated = [...lessonInterests, interestInput.trim()].slice(0, 10);
-                      setLessonInterests(updated);
-                      setInterestInput('');
-                      if (session) {
-                        try { await updateSessionInterests(session.id, updated); } catch (err) { console.error("[customize] failed to save:", err); }
-                      }
-                    }
-                  }}
-                  placeholder={t('customize.addInterest') || 'Add topic (press Enter)'}
-                  style={{ marginRight: 8, fontSize: 12 }}
-                />
-                {lessonInterests.map((interest, i) => (
-                  <span key={i} style={{ background: '#e0e0e0', borderRadius: 4, padding: '2px 6px', marginRight: 4, fontSize: 12 }}>
-                    {interest}
-                    <button
-                      disabled={!!session}
-                      onClick={async () => {
-                        const updated = lessonInterests.filter((_, j) => j !== i);
-                        setLessonInterests(updated);
-                        if (session) {
-                          try { await updateSessionInterests(session.id, updated); } catch (err) { console.error("[customize] failed to save:", err); }
-                        }
-                      }}
-                      style={{ background: 'none', border: 'none', cursor: !!session ? 'not-allowed' : 'pointer', marginLeft: 4 }}
-                    >x</button>
-                  </span>
-                ))}
-              </div>
-              <p style={{ fontSize: 11, color: '#888', marginTop: 6, marginBottom: 0 }}>
-                {t('customize.nextCardsNote') || 'Your next cards will reflect these preferences.'}
-              </p>
-            </div>
-          )}
-        </div>
-
         {/* Skeleton: mimics card layout */}
         <div style={{ display: "flex", gap: "1rem", alignItems: "flex-start" }}>
           <div style={{ flex: "1 1 0", minWidth: 0 }}>
@@ -310,6 +228,402 @@ export default function LearningPage() {
           <MapPin size={18} />
           {t("learning.backToMap")}
         </button>
+      </div>
+    );
+  }
+
+  // ── Subsection picker ──────────────────────────────────────────────────────
+  if (phase === "SELECTING_CHUNK") {
+    const visibleChunks = (chunkList || []).filter(
+      (c) => c.chunk_type !== "exam_question_source"
+    );
+
+    const handleStartClick = (chunkId) => {
+      if (selectedChunkId === chunkId) {
+        setSelectedChunkId(null); // collapse if already open
+      } else {
+        setSelectedChunkId(chunkId);
+        setChunkStyle("default");
+        setChunkInterests([]);
+        setChunkInterestInput("");
+      }
+    };
+
+    const handleStartLearning = async (chunkId) => {
+      setSelectedChunkId(null);
+      await startChunk(chunkId, chunkStyle, chunkInterests);
+    };
+
+    return (
+      <div style={{
+        maxWidth: "700px",
+        margin: "0 auto",
+        padding: "2rem 1.5rem 3rem",
+      }}>
+        {/* Prerequisite Warning Modal */}
+        {prereqWarning && (
+          <div style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 1000,
+            backgroundColor: "rgba(0, 0, 0, 0.55)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "1rem",
+          }}>
+            <div style={{
+              backgroundColor: "var(--color-bg-card)",
+              borderRadius: "var(--radius-xl)",
+              padding: "2rem",
+              maxWidth: "480px",
+              width: "100%",
+              boxShadow: "0 20px 60px rgba(0,0,0,0.3)",
+              display: "flex",
+              flexDirection: "column",
+              gap: "1rem",
+            }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+                <AlertCircle size={28} color="var(--color-danger)" style={{ flexShrink: 0 }} />
+                <h2 style={{ margin: 0, fontSize: "1.25rem", fontWeight: 800, color: "var(--color-text)", lineHeight: 1.3 }}>
+                  {t("learning.notReadyYet")}
+                </h2>
+              </div>
+              <p style={{ margin: 0, fontSize: "0.95rem", color: "var(--color-text-muted)", lineHeight: 1.6 }}>
+                {t("learning.helpsMasterFirst")}
+              </p>
+              <ul style={{ margin: 0, paddingLeft: "1.25rem", display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+                {prereqWarning.unmet.map((prereq) => (
+                  <li key={prereq.concept_id} style={{ fontSize: "0.95rem", color: "var(--color-text)", fontWeight: 600, lineHeight: 1.5 }}>
+                    {prereq.concept_title}
+                  </li>
+                ))}
+              </ul>
+              <div style={{ display: "flex", gap: "0.75rem", marginTop: "0.5rem", flexWrap: "wrap" }}>
+                <button
+                  onClick={() => { setPrereqWarning(null); navigate("/map"); }}
+                  style={{
+                    flex: "1 1 auto", padding: "0.65rem 1.25rem", borderRadius: "var(--radius-md)",
+                    border: "none", backgroundColor: "var(--color-primary)", color: "#fff",
+                    fontSize: "0.95rem", fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
+                  }}
+                >
+                  {t("learning.learnPrereqFirst")}
+                </button>
+                <button
+                  onClick={() => {
+                    setPrereqWarning(null);
+                    startLesson(decodeURIComponent(conceptId), null, []);
+                  }}
+                  style={{
+                    flex: "1 1 auto", padding: "0.65rem 1.25rem", borderRadius: "var(--radius-md)",
+                    border: "1px solid var(--color-border)", backgroundColor: "transparent",
+                    color: "var(--color-text-muted)", fontSize: "0.95rem", fontWeight: 600,
+                    cursor: "pointer", fontFamily: "inherit",
+                  }}
+                >
+                  {t("learning.startAnyway")}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <h2 style={{ fontWeight: 700, fontSize: "1.3rem", color: "var(--color-text)", marginBottom: "1.25rem" }}>
+          {t("learning.chooseSubsection", "Choose a subsection to start")}
+        </h2>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+          {visibleChunks.map((chunk, idx) => {
+            if (chunk.chunk_type === "exercise_gate") {
+              const locked = !allStudyComplete;
+              return (
+                <div
+                  key={chunk.chunk_id}
+                  onClick={locked ? undefined : () => startExamFlow?.()}
+                  role={locked ? undefined : "button"}
+                  tabIndex={locked ? undefined : 0}
+                  onKeyDown={locked ? undefined : (e) => {
+                    if (e.key === "Enter" || e.key === " ") startExamFlow?.();
+                  }}
+                  style={{
+                    padding: "14px 16px",
+                    borderRadius: "12px",
+                    background: locked ? "var(--color-surface)" : "var(--color-primary)",
+                    color: locked ? "var(--color-text-muted)" : "#fff",
+                    cursor: locked ? "not-allowed" : "pointer",
+                    border: locked ? "1px dashed var(--color-border)" : "none",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px",
+                    fontWeight: 600,
+                    fontSize: "14px",
+                  }}
+                >
+                  <span aria-hidden="true">📝</span>
+                  <span>{t("subsectionNav.exam", "Exam")}</span>
+                  {locked && (
+                    <span style={{ fontSize: "11px", marginLeft: "auto", color: "var(--color-text-muted)" }}>
+                      {t("subsectionNav.lockedShort", "Locked")}
+                    </span>
+                  )}
+                </div>
+              );
+            }
+
+            const isDone = chunk.chunk_id in (chunkProgress || {});
+            const score = chunkProgress?.[chunk.chunk_id]?.score;
+            const isOptional = chunk.chunk_type === "practice";
+            const isExpanded = selectedChunkId === chunk.chunk_id;
+            const isLocked = chunk.chunk_type !== "exercise_gate"
+              && idx > 0
+              && !(visibleChunks[idx - 1]?.chunk_id in (chunkProgress || {}));
+
+            return (
+              <div
+                key={chunk.chunk_id}
+                style={{
+                  borderRadius: "12px",
+                  border: isExpanded
+                    ? "1.5px solid var(--color-primary)"
+                    : "1px solid var(--color-border)",
+                  background: "var(--color-surface)",
+                  overflow: "hidden",
+                }}
+              >
+                {/* Chunk row */}
+                <div style={{
+                  padding: "12px 16px",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "10px",
+                }}>
+                  {/* Status icon */}
+                  <span style={{
+                    fontSize: "16px",
+                    flexShrink: 0,
+                    color: isDone ? "#16a34a" : "var(--color-text-muted)",
+                  }}>
+                    {isDone ? "✓" : isLocked ? "🔒" : "○"}
+                  </span>
+
+                  {/* Heading */}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <span style={{
+                      fontSize: "14px",
+                      color: "var(--color-text)",
+                      fontWeight: isDone ? 400 : 500,
+                      lineHeight: 1.4,
+                    }}>
+                      {chunk.heading}
+                    </span>
+                    <div style={{ display: "flex", gap: "6px", marginTop: "2px", flexWrap: "wrap" }}>
+                      {isDone && score != null && (
+                        <span style={{
+                          fontSize: "11px",
+                          color: score >= 80 ? "#16a34a" : score >= 50 ? "#2563eb" : "#dc2626",
+                          fontWeight: 600,
+                        }}>
+                          {score}%
+                        </span>
+                      )}
+                      {isOptional && (
+                        <span style={{
+                          fontSize: "11px",
+                          color: "#92400e",
+                          background: "#fef3c7",
+                          padding: "1px 6px",
+                          borderRadius: "4px",
+                        }}>
+                          {t("subsectionNav.optional", "Optional")}
+                        </span>
+                      )}
+                      {isLocked && (
+                        <span style={{
+                          fontSize: "11px",
+                          color: "#64748b",
+                          background: "#f1f5f9",
+                          padding: "1px 6px",
+                          borderRadius: "4px",
+                        }}>
+                          {t("subsectionNav.lockedSubsection", "Complete previous section first")}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Start button */}
+                  <button
+                    disabled={loading || isLocked}
+                    onClick={isLocked ? undefined : () => handleStartClick(chunk.chunk_id)}
+                    style={{
+                      padding: "6px 16px",
+                      borderRadius: "8px",
+                      border: "none",
+                      background: isExpanded ? "var(--color-border)" : "var(--color-primary)",
+                      color: isExpanded ? "var(--color-text)" : "#fff",
+                      fontSize: "13px",
+                      fontWeight: 600,
+                      cursor: loading || isLocked ? "not-allowed" : "pointer",
+                      fontFamily: "inherit",
+                      opacity: loading || isLocked ? 0.5 : 1,
+                      flexShrink: 0,
+                    }}
+                  >
+                    {isExpanded
+                      ? t("common.cancel", "Cancel")
+                      : t("learning.startSubsection", "Start")}
+                  </button>
+                </div>
+
+                {/* Inline config panel */}
+                {isExpanded && (
+                  <div style={{
+                    padding: "12px 16px 16px",
+                    borderTop: "1px solid var(--color-border)",
+                    background: "color-mix(in srgb, var(--color-primary) 4%, var(--color-surface))",
+                  }}>
+                    {/* Style selector */}
+                    <div style={{ marginBottom: "10px" }}>
+                      <label style={{
+                        display: "block",
+                        fontSize: "12px",
+                        fontWeight: 600,
+                        color: "var(--color-text-muted)",
+                        marginBottom: "4px",
+                      }}>
+                        {t("customize.style", "Style")}
+                      </label>
+                      <select
+                        value={chunkStyle}
+                        onChange={(e) => setChunkStyle(e.target.value)}
+                        style={{
+                          fontSize: "13px",
+                          padding: "5px 8px",
+                          borderRadius: "6px",
+                          border: "1px solid var(--color-border)",
+                          background: "var(--color-surface)",
+                          color: "var(--color-text)",
+                          fontFamily: "inherit",
+                          cursor: "pointer",
+                        }}
+                      >
+                        <option value="default">{t("customize.styleDefault", "Default")}</option>
+                        <option value="pirate">{t("customize.stylePirate", "Pirate")}</option>
+                        <option value="astronaut">{t("customize.styleAstronaut", "Astronaut")}</option>
+                        <option value="gamer">{t("customize.styleGamer", "Gamer")}</option>
+                      </select>
+                    </div>
+
+                    {/* Interests tag-input */}
+                    <div style={{ marginBottom: "12px" }}>
+                      <label style={{
+                        display: "block",
+                        fontSize: "12px",
+                        fontWeight: 600,
+                        color: "var(--color-text-muted)",
+                        marginBottom: "4px",
+                      }}>
+                        {t("customize.interests", "Interests")}
+                      </label>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: "4px", marginBottom: "6px" }}>
+                        {chunkInterests.map((interest, i) => (
+                          <span key={i} style={{
+                            background: "color-mix(in srgb, var(--color-primary) 15%, var(--color-surface))",
+                            color: "var(--color-primary)",
+                            borderRadius: "4px",
+                            padding: "2px 8px",
+                            fontSize: "12px",
+                            fontWeight: 500,
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "4px",
+                          }}>
+                            {interest}
+                            <button
+                              onClick={() => setChunkInterests(chunkInterests.filter((_, j) => j !== i))}
+                              style={{
+                                background: "none",
+                                border: "none",
+                                cursor: "pointer",
+                                fontSize: "12px",
+                                color: "var(--color-text-muted)",
+                                padding: 0,
+                                lineHeight: 1,
+                              }}
+                            >
+                              ×
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                      <input
+                        value={chunkInterestInput}
+                        onChange={(e) => setChunkInterestInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && chunkInterestInput.trim()) {
+                            setChunkInterests([...chunkInterests, chunkInterestInput.trim()].slice(0, 10));
+                            setChunkInterestInput("");
+                          }
+                        }}
+                        placeholder={t("customize.addInterest", "Add topic (press Enter)")}
+                        style={{
+                          fontSize: "13px",
+                          padding: "5px 8px",
+                          borderRadius: "6px",
+                          border: "1px solid var(--color-border)",
+                          background: "var(--color-surface)",
+                          color: "var(--color-text)",
+                          fontFamily: "inherit",
+                          width: "100%",
+                          boxSizing: "border-box",
+                        }}
+                      />
+                    </div>
+
+                    {/* Start Learning button */}
+                    <button
+                      disabled={loading}
+                      onClick={() => handleStartLearning(chunk.chunk_id)}
+                      style={{
+                        width: "100%",
+                        padding: "9px 16px",
+                        borderRadius: "8px",
+                        border: "none",
+                        background: "var(--color-primary)",
+                        color: "#fff",
+                        fontSize: "14px",
+                        fontWeight: 700,
+                        cursor: loading ? "not-allowed" : "pointer",
+                        fontFamily: "inherit",
+                        opacity: loading ? 0.6 : 1,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        gap: "8px",
+                      }}
+                    >
+                      {loading ? (
+                        <>
+                          <span style={{
+                            width: "14px", height: "14px", borderRadius: "50%",
+                            border: "2px solid rgba(255,255,255,0.3)",
+                            borderTopColor: "#fff",
+                            display: "inline-block",
+                            animation: "spin 0.7s linear infinite",
+                          }} />
+                          {t("learning.startLearning", "Start Learning")}
+                        </>
+                      ) : (
+                        t("learning.startLearning", "Start Learning")
+                      )}
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
       </div>
     );
   }
@@ -426,9 +740,8 @@ export default function LearningPage() {
               </button>
               <button
                 onClick={() => {
-                  const { style, interests } = prereqWarning;
                   setPrereqWarning(null);
-                  startLesson(decodeURIComponent(conceptId), style, interests);
+                  startLesson(decodeURIComponent(conceptId), null, []);
                 }}
                 style={{
                   flex: "1 1 auto",
@@ -531,6 +844,7 @@ export default function LearningPage() {
               allStudyComplete={allStudyComplete}
               currentMode={currentChunkMode}
               onExamClick={() => startExamFlow?.()}
+              onExitSubsection={() => dispatch({ type: "RETURN_TO_PICKER" })}
             />
             <div style={{ flex: 1, minWidth: 0 }}>
               <CardLearningView />
@@ -554,6 +868,7 @@ export default function LearningPage() {
               allStudyComplete={allStudyComplete}
               currentMode={currentChunkMode}
               onExamClick={() => startExamFlow?.()}
+              onExitSubsection={() => dispatch({ type: "RETURN_TO_PICKER" })}
             />
             <div style={{ flex: 1, minWidth: 0 }}>
               <CardLearningView remediationMode={true} />

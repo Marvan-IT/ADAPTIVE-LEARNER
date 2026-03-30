@@ -172,8 +172,8 @@ export default function CardLearningView({ remediationMode = false }) {
   const isLastCardOfNonFinalChunk = currentCardIndex === cards.length - 1 && chunkList.length > 1 && !isLastChunk;
 
   // Chunk MCQ tracking — correct/total counts for completeChunk call
-  const [chunkCorrect, setChunkCorrect] = React.useState(0);
-  const [chunkTotal, setChunkTotal] = React.useState(0);
+  const [chunkCorrect, setChunkCorrect] = useState(0);
+  const [chunkTotal, setChunkTotal] = useState(0);
 
   // Per-card question state: { mcqIdx, mcqCorrect, mcqFeedback, quickCheckDone, checkinDone }
   const [cardStates, setCardStates] = useState({});
@@ -507,17 +507,6 @@ export default function CardLearningView({ remediationMode = false }) {
       feedbackTimerRef.current = null;
     }
 
-    // Last card of a chunk — record chunk completion before advancing
-    const isLastCardOfChunk = currentCardIndex === cards.length - 1 && chunkList.length > 0;
-    if (isLastCardOfChunk) {
-      const chunkId = cards[currentCardIndex]?.chunk_id;
-      if (chunkId && completeChunkAction) {
-        completeChunkAction(chunkId, chunkCorrect, chunkTotal, currentChunkMode || "NORMAL");
-        setChunkCorrect(0);
-        setChunkTotal(0);
-      }
-    }
-
     await goToNextCard({
       cardIndex:           currentCardIndex,
       timeOnCardSec:       cardStartTimeRef.current !== null ? (performance.now() - cardStartTimeRef.current) / 1000 : 0,
@@ -527,7 +516,17 @@ export default function CardLearningView({ remediationMode = false }) {
       idleTriggers:        idleTriggerCount,
     });
     setShowAssistant(false);
-  }, [currentCardIndex, cards, chunkList, chunkCorrect, chunkTotal, currentChunkMode, completeChunkAction, idleTriggerCount, goToNextCard]);
+  }, [currentCardIndex, idleTriggerCount, goToNextCard]);
+
+  const handleNextChunk = useCallback(async () => {
+    const chunkId = cards[currentCardIndex]?.chunk_id;
+    if (chunkId && completeChunkAction) {
+      await completeChunkAction(chunkId, chunkCorrect, chunkTotal, currentChunkMode || "NORMAL");
+      setChunkCorrect(0);
+      setChunkTotal(0);
+    }
+    goToNextChunk();
+  }, [cards, currentCardIndex, chunkCorrect, chunkTotal, currentChunkMode, completeChunkAction, goToNextChunk]);
 
   // Handle finish button — in remediation mode, go to recheck instead of finishCards
   const handleFinish = useCallback(() => {
@@ -1020,7 +1019,7 @@ export default function CardLearningView({ remediationMode = false }) {
           nextChunkCards={nextChunkCards}
           onPrev={goToPrevCard}
           onNext={handleNextCard}
-          onNextChunk={goToNextChunk}
+          onNextChunk={handleNextChunk}
           onStartExam={startExamFlow}
           onFinish={handleFinish}
           remediationMode={remediationMode}

@@ -289,7 +289,7 @@ export default function StudentHistoryPage() {
                         : <span style={{ color: "#dc2626", fontWeight: 700 }}>✗ Not Mastered</span>
                       : s.phase === "CHECKING"
                         ? <span style={{ color: "var(--color-primary)", fontWeight: 600 }}>💬 In Chat</span>
-                        : s.phase === "CARDS_DONE"
+                        : s.phase === "COMPLETED"
                           ? <span style={{ color: "#d97706", fontWeight: 600 }}>📚 Cards Done</span>
                           : <span style={{ color: "var(--color-text-muted)", fontWeight: 600 }}>🔄 In Progress</span>;
 

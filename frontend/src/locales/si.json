@@ -174,6 +174,10 @@
   "exam.loadingSection": "ඊළඟ කොටස පූරණය වෙමින්…",
   "learning.nextSection": "ඊළඟ කොටස",
   "learning.startExam": "විභාගය ආරම්භ කරන්න",
+  "learning.chooseSubsection": "උපඅංශයක් තෝරන්න",
+  "learning.startSubsection": "ආරම්භ කරන්න",
+  "learning.startLearning": "ඉගෙනීම ආරම්භ කරන්න",
+  "learning.exitSubsection": "← ලැයිස්තුවට ආපසු",
   "learning.noCardsError": "කාඩ්පත් පූරණය කළ නොහැකි විය. කරුණාකර නැවත උත්සාහ කරන්න.",
   "subsectionNav.title": "උපවිබාග",
   "subsectionNav.exam": "විභාගය",
@@ -185,5 +189,6 @@
   "subsectionNav.modeFast": "වේගවත්",
   "subsectionNav.modeChange.struggling": "එය පියවරෙන් පියවර ගනිමු",
   "subsectionNav.modeChange.normal": "හොඳ වැඩ! වේගය රකිමු",
-  "subsectionNav.modeChange.fast": "විශිෂ්ටයි! ශීඝ්‍ර ධාවන මාර්ගයට ගමන් කරමු"
+  "subsectionNav.modeChange.fast": "විශිෂ්ටයි! ශීඝ්‍ර ධාවන මාර්ගයට ගමන් කරමු",
+  "subsectionNav.lockedSubsection": "කලින් කොටස පළමුව සම්පූර්ණ කරන්න"
 }

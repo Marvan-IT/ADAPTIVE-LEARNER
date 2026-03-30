@@ -18,6 +18,8 @@ import {
   startExam,
   submitExam,
   retryExam,
+  switchStyle,
+  updateSessionInterests,
 } from "../api/sessions";
 import { useStudent } from "./StudentContext";
 import { useTheme } from "./ThemeContext";
@@ -91,7 +93,7 @@ const initialState = {
   examScores: null,
 };
 
-// Valid phases: IDLE, LOADING, CARDS, CHECKING, COMPLETED,
+// Valid phases: IDLE, LOADING, SELECTING_CHUNK, CARDS, CHECKING, COMPLETED,
 //               REMEDIATING, RECHECKING, REMEDIATING_2, RECHECKING_2, ATTEMPTS_EXHAUSTED
 
 function sessionReducer(state, action) {
@@ -249,11 +251,29 @@ function sessionReducer(state, action) {
         nextCardInFlight: false,
       };
 
+    case "CHUNK_LOADING":
+      return { ...state, loading: true };
+
     case "CHUNK_LIST_LOADED":
       return {
         ...state,
         chunkList: action.payload.chunks,
         chunkIndex: action.payload.current_chunk_index,
+        phase: "SELECTING_CHUNK",
+        loading: false,
+      };
+
+    case "RETURN_TO_PICKER":
+      return {
+        ...state,
+        phase: "SELECTING_CHUNK",
+        cards: [],
+        currentCardIndex: 0,
+        maxReachedIndex: 0,
+        currentChunkId: null,
+        nextChunkCards: null,
+        nextChunkInFlight: false,
+        loading: false,
       };
 
     case "CHUNK_CARDS_LOADED_NEW":
@@ -263,6 +283,7 @@ function sessionReducer(state, action) {
         currentCardIndex: 0,
         maxReachedIndex: 0,
         chunkIndex: action.payload.chunk_index_after ?? state.chunkIndex,
+        currentChunkId: action.payload.chunk_id ?? null,
         phase: "CARDS",
         loading: false,
         hasMoreConcepts: (action.payload.chunk_index_after ?? state.chunkIndex) < state.chunkList.length - 1,
@@ -285,6 +306,7 @@ function sessionReducer(state, action) {
         chunkIndex: state.chunkIndex + 1,
         currentCardIndex: 0,
         maxReachedIndex: 0,
+        currentChunkId: state.nextChunkCards?.chunk_id ?? state.currentChunkId,
         nextChunkCards: null,
         nextChunkInFlight: false,
         hasMoreConcepts: (state.chunkIndex + 1) < state.chunkList.length - 1,
@@ -498,20 +520,9 @@ export function SessionProvider({ children }) {
         // Check for chunk list — if the concept has chunks, use chunk flow
         const chunkListRes = await getChunkList(sessionRes.data.id);
         const chunkListData = chunkListRes.data;
-
         if (chunkListData.chunks && chunkListData.chunks.length > 0) {
-          // Chunk path: load cards for first chunk
+          // Chunk path: show subsection picker — student selects which chunk to start
           dispatch({ type: "CHUNK_LIST_LOADED", payload: chunkListData });
-          const firstChunkId = chunkListData.chunks[chunkListData.current_chunk_index]?.chunk_id
-            ?? chunkListData.chunks[0].chunk_id;
-          const chunkCardsRes = await generateChunkCards(sessionRes.data.id, firstChunkId);
-          dispatch({
-            type: "CHUNK_CARDS_LOADED_NEW",
-            payload: {
-              cards: chunkCardsRes.cards,
-              chunk_index_after: chunkCardsRes.chunk_index,
-            },
-          });
         } else {
           // GET /chunks returned an empty list — this should never happen now that ChromaDB
           // has been removed and every concept must go through the chunk pipeline.
@@ -532,6 +543,29 @@ export function SessionProvider({ children }) {
       }
     },
     [student, style]
+  );
+
+  const startChunk = useCallback(
+    async (chunkId, chunkStyle, chunkInterests = []) => {
+      if (!state.session?.id) return;
+      dispatch({ type: "CHUNK_LOADING" });
+      try {
+        if (chunkStyle) await switchStyle(state.session.id, chunkStyle);
+        if (chunkInterests.length) await updateSessionInterests(state.session.id, chunkInterests);
+        const res = await generateChunkCards(state.session.id, chunkId);
+        dispatch({
+          type: "CHUNK_CARDS_LOADED_NEW",
+          payload: {
+            cards: res.cards,
+            chunk_index_after: res.chunk_index,
+            chunk_id: chunkId,
+          },
+        });
+      } catch (err) {
+        dispatch({ type: "ERROR", payload: friendlyError(err) });
+      }
+    },
+    [state.session]
   );
 
   const goToNextCard = useCallback(
@@ -594,23 +628,6 @@ export function SessionProvider({ children }) {
         console.error("[card] recordCardInteraction failed:", err);
       }
 
-      // Chunk flow: pre-fetch next chunk when on second-to-last card
-      if (state.chunkList.length > 0) {
-        const isSecondToLast = state.currentCardIndex === state.cards.length - 2;
-        const hasNextChunk = state.chunkIndex < state.chunkList.length - 1;
-        if (isSecondToLast && hasNextChunk && !state.nextChunkInFlight && !state.nextChunkCards) {
-          dispatch({ type: "NEXT_CHUNK_FETCH_STARTED" });
-          const nextChunkId = state.chunkList[state.chunkIndex + 1]?.chunk_id;
-          if (nextChunkId) {
-            generateChunkCards(state.session.id, nextChunkId)
-              .then((data) => dispatch({ type: "NEXT_CHUNK_CARDS_READY", payload: data }))
-              .catch(() => dispatch({ type: "NEXT_CHUNK_FETCH_DONE" }));
-          }
-        }
-        dispatch({ type: "NEXT_CARD" });
-        return;
-      }
-
       dispatch({ type: "NEXT_CARD" });
     },
     [
@@ -618,10 +635,6 @@ export function SessionProvider({ children }) {
       state.cards.length,
       state.currentCardIndex,
       state.adaptiveCallInFlight,
-      state.chunkList,
-      state.chunkIndex,
-      state.nextChunkInFlight,
-      state.nextChunkCards,
     ]
   );
 
@@ -766,34 +779,9 @@ export function SessionProvider({ children }) {
     }
   }, [state.session?.id]);
 
-  const goToNextChunk = useCallback(async () => {
-    // Happy path: pre-fetch succeeded
-    if (state.nextChunkCards?.cards?.length > 0) {
-      dispatch({ type: "CHUNK_ADVANCE" });
-      return;
-    }
-    // Fallback: pre-fetch failed or empty — fetch on demand
-    if (state.nextChunkInFlight) return;
-    const nextIdx = state.chunkIndex + 1;
-    if (nextIdx >= state.chunkList.length) return;
-    const nextChunkId = state.chunkList[nextIdx]?.chunk_id;
-    if (!nextChunkId || !state.session?.id) return;
-    dispatch({ type: "NEXT_CHUNK_FETCH_STARTED" });
-    try {
-      const data = await generateChunkCards(state.session.id, nextChunkId);
-      if (data?.cards?.length > 0) {
-        dispatch({ type: "NEXT_CHUNK_CARDS_READY", payload: data });
-        dispatch({ type: "CHUNK_ADVANCE" });
-      } else {
-        dispatch({ type: "NEXT_CHUNK_FETCH_DONE" });
-        dispatch({ type: "ERROR", payload: "Could not load cards. Please try again." });
-      }
-    } catch (err) {
-      console.error("[SessionContext] on-demand chunk fetch failed:", err);
-      dispatch({ type: "NEXT_CHUNK_FETCH_DONE" });
-      dispatch({ type: "ERROR", payload: "Could not load cards. Please try again." });
-    }
-  }, [state.nextChunkCards, state.nextChunkInFlight, state.chunkIndex, state.chunkList, state.session]);
+  const goToNextChunk = useCallback(() => {
+    dispatch({ type: "RETURN_TO_PICKER" });
+  }, []);
 
   const startExamFlow = useCallback(async () => {
     if (!state.session) return;
@@ -812,6 +800,9 @@ export function SessionProvider({ children }) {
     try {
       const res = await submitExam(state.session.id, { answers });
       dispatch({ type: "EXAM_SUBMITTED", payload: res.data });
+      if (res.data.passed) {
+        await refreshMastery();
+      }
     } catch (err) {
       console.error("[exam] submit failed:", err);
       dispatch({ type: "ERROR", payload: "Failed to submit exam" });
@@ -853,7 +844,9 @@ export function SessionProvider({ children }) {
     <SessionContext.Provider
       value={{
         ...state,
+        dispatch,
         startLesson,
+        startChunk,
         goToNextCard,
         goToPrevCard,
         answerQuestion,
