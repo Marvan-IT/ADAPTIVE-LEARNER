@@ -128,8 +128,9 @@ def build_chunk_card_prompt(
                 image_block += f" — {img['caption']}"
             image_block += "\n"
         image_block += (
-            "\nYou MUST assign each image to the card whose content most closely relates to it. "
-            "Set that card's image_url to the image URL and caption to the image caption. "
+            "\nThese images are VISIBLE to you in this conversation. "
+            "Describe what you actually see in each image when writing the card content it relates to. "
+            "Assign each image URL to the matching card's image_url field. "
             "Do NOT set image_url=null on all cards when images are provided.\n"
         )
 

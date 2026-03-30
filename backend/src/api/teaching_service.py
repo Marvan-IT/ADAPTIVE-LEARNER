@@ -6,6 +6,7 @@ Orchestrates the 2-step teaching flow:
 """
 
 import asyncio
+import base64
 import json
 import logging
 import re
@@ -144,6 +145,39 @@ def _clean_salvage(raw: str) -> str | None:
     return raw + "]" * open_brackets + "}" * open_braces
 
 
+def _coerce_difficulty(val) -> str:
+    """Ensure difficulty is always a valid EASY/MEDIUM/HARD string."""
+    if val in ("EASY", "MEDIUM", "HARD"):
+        return val
+    _int_map = {1: "EASY", 2: "EASY", 3: "MEDIUM", 4: "HARD", 5: "HARD"}
+    if isinstance(val, int):
+        return _int_map.get(val, "MEDIUM")
+    return "MEDIUM"
+
+
+def _image_to_data_url(image_url: str, book_slug: str) -> str | None:
+    """Convert a local /images/{book_slug}/... URL to a base64 data URL for OpenAI vision API."""
+    try:
+        from config import OUTPUT_DIR
+        from pathlib import Path as _ImgPath
+        prefix = f"/images/{book_slug}/"
+        if not image_url.startswith(prefix):
+            return None
+        rel_path = image_url[len(prefix):]
+        file_path = _ImgPath(OUTPUT_DIR) / book_slug / rel_path
+        if not file_path.exists():
+            return None
+        ext = file_path.suffix.lower().lstrip(".")
+        mime = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
+                "gif": "image/gif", "webp": "image/webp"}.get(ext, "image/jpeg")
+        data = file_path.read_bytes()
+        b64 = base64.b64encode(data).decode("utf-8")
+        return f"data:{mime};base64,{b64}"
+    except Exception as _e:
+        logger.debug("[vision] failed to encode image %s: %s", image_url, _e)
+        return None
+
+
 def _normalise_per_card(parsed: dict, chunk_id: str) -> dict:
     """Stamp new LessonCard schema fields onto a parsed card dict.
 
@@ -192,7 +226,7 @@ def _normalise_per_card(parsed: dict, chunk_id: str) -> dict:
                 "options":       raw_opts,
                 "correct_index": correct_idx,
                 "explanation":   raw_question.get("explanation", ""),
-                "difficulty":    raw_question.get("difficulty", "MEDIUM"),
+                "difficulty":    _coerce_difficulty(raw_question.get("difficulty")),
             }
 
     return {
@@ -1569,11 +1603,27 @@ class TeachingService:
                     pass
             return []
 
+        # Build vision-capable user message (base64 encode local images for GPT-4o vision)
+        _book_slug_for_img = chunk.get("book_slug", "prealgebra")
+        _vision_parts = []
+        for _img in (images or [])[:4]:  # Cap at 4 images per call
+            _data_url = _image_to_data_url(_img.get("image_url", ""), _book_slug_for_img)
+            if _data_url:
+                _vision_parts.append({
+                    "type": "image_url",
+                    "image_url": {"url": _data_url, "detail": "low"},
+                })
+
+        if _vision_parts:
+            _user_content: list | str = [{"type": "text", "text": user_prompt}] + _vision_parts
+        else:
+            _user_content = user_prompt
+
         try:
             raw = await self._chat(
                 messages=[
                     {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
+                    {"role": "user", "content": _user_content},
                 ],
                 max_tokens=max_tokens,
                 model="main",
