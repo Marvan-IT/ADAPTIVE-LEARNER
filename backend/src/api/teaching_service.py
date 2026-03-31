@@ -13,6 +13,7 @@ import re
 import uuid
 from datetime import datetime, timezone
 
+from fastapi import HTTPException
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from openai import AsyncOpenAI
@@ -1431,18 +1432,31 @@ class TeachingService:
         Returns a list of card dicts (new LessonCard schema).
         Each card has chunk_id stamped on it by _normalise_per_card().
         """
-        from adaptive.adaptive_engine import build_blended_analytics
-        from adaptive.prompt_builder import build_chunk_card_prompt, build_next_card_prompt, _CARD_MODE_DELIVERY
-        from adaptive.schemas import CardBehaviorSignals
+        try:
+            from adaptive.adaptive_engine import build_blended_analytics
+            from adaptive.prompt_builder import build_chunk_card_prompt, build_next_card_prompt, _CARD_MODE_DELIVERY
+            from adaptive.schemas import CardBehaviorSignals
+        except (ImportError, SyntaxError) as _imp_err:
+            logger.error("[per-chunk] adaptive module import failed: %s", _imp_err)
+            raise HTTPException(status_code=500, detail=f"Server configuration error: {_imp_err}")
 
         chunk = await self._chunk_ksvc.get_chunk(db, chunk_id)
         if not chunk:
-            raise ValueError(f"Chunk not found: {chunk_id}")
+            raise HTTPException(status_code=404, detail=f"Chunk not found: {chunk_id}")
 
         chunk_text = (chunk.get("text") or "").strip()
         if not chunk_text:
-            logger.warning("[per-chunk] chunk has no text content: chunk_id=%s", chunk_id)
-            return []
+            logger.warning("[per-chunk] chunk has no text content, using fallback card: chunk_id=%s", chunk_id)
+            return [{
+                "index": 0,
+                "title": chunk.get("heading") or "Lesson Content",
+                "content": "Content for this section is currently being prepared.",
+                "image_url": None,
+                "caption": None,
+                "question": None,
+                "chunk_id": chunk_id,
+                "is_recovery": False,
+            }]
 
         # exercise_gate chunks (SECTION X.X EXERCISES) are shown as EXAM buttons in the
         # frontend — they never generate study cards.
@@ -1450,16 +1464,11 @@ class TeachingService:
         if re.match(r"^section\s+\d+\.\d+", _chunk_heading.lower()):
             return []
 
-        # Skip non-teaching headings (Learning Objectives, Key Terms, Summary, etc.)
-        _NO_TEACHING_PATTERNS = (
-            "learning objectives", "key terms", "key concepts",
-            "summary", "chapter review", "review exercises", "practice test",
-        )
-        if any(p in _chunk_heading.lower() for p in _NO_TEACHING_PATTERNS):
-            logger.info("[per-chunk] skipping non-teaching chunk: heading=%r", _chunk_heading)
-            return []
-
-        images = await self._chunk_ksvc.get_chunk_images(db, chunk_id)
+        try:
+            images = await self._chunk_ksvc.get_chunk_images(db, chunk_id)
+        except Exception as _img_err:
+            logger.warning("[per-chunk] failed to load images for chunk %s: %s", chunk_id, _img_err)
+            images = []
 
         # Determine mode from session cache signals
         try:

@@ -252,7 +252,7 @@ function sessionReducer(state, action) {
       };
 
     case "CHUNK_LOADING":
-      return { ...state, loading: true };
+      return { ...state, loading: true, error: null, phase: "LOADING" };
 
     case "CHUNK_LIST_LOADED":
       return {
@@ -479,7 +479,9 @@ function sessionReducer(state, action) {
     case "RESET":
       return initialState;
     case "ERROR":
-      return { ...state, error: action.payload, loading: false };
+      return { ...state, error: action.payload, loading: false, phase: state.phase === "LOADING" ? "SELECTING_CHUNK" : state.phase };
+    case "CLEAR_ERROR":
+      return { ...state, error: null };
     default:
       return state;
   }
@@ -550,9 +552,20 @@ export function SessionProvider({ children }) {
       if (!state.session?.id) return;
       dispatch({ type: "CHUNK_LOADING" });
       try {
-        if (chunkStyle) await switchStyle(state.session.id, chunkStyle);
+        if (chunkStyle) {
+          try {
+            await switchStyle(state.session.id, chunkStyle);
+          } catch (styleErr) {
+            // 409 = session already past PRESENTING phase; non-blocking, card load continues
+            console.error("[startChunk] switchStyle failed (non-blocking):", styleErr?.response?.status ?? styleErr);
+          }
+        }
         if (chunkInterests.length) await updateSessionInterests(state.session.id, chunkInterests);
         const res = await generateChunkCards(state.session.id, chunkId);
+        if (!res?.cards?.length) {
+          dispatch({ type: "ERROR", payload: i18n.t("learning.noCardsError") });
+          return;
+        }
         dispatch({
           type: "CHUNK_CARDS_LOADED_NEW",
           payload: {

@@ -455,10 +455,16 @@ async def start_session(request: Request, req: StartSessionRequest, db: AsyncSes
             detail=f"Concept '{req.concept_id}' not found in book '{req.book_slug}'"
         )
 
-    session = await teaching_svc.start_session(
-        db, req.student_id, req.concept_id, req.book_slug, req.style, req.lesson_interests
-    )
-    return session
+    try:
+        session = await teaching_svc.start_session(
+            db, req.student_id, req.concept_id, req.book_slug, req.style, req.lesson_interests
+        )
+        return session
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("[sessions] session creation failed: student_id=%s concept_id=%s", req.student_id, req.concept_id)
+        raise HTTPException(status_code=500, detail=f"Session creation failed: {exc}")
 
 
 @router.post("/sessions/{session_id}/present", response_model=PresentationResponse)
@@ -1112,7 +1118,7 @@ async def list_chunks(
         .where(ConceptChunk.book_slug == book_slug, ConceptChunk.concept_id == concept_id)
         .order_by(ConceptChunk.order_index)
     )
-    chunks = result.scalars().all()
+    chunks = [c for c in result.scalars().all() if (c.text or "").strip()]
 
     if not chunks:
         # ChromaDB-path signal: return empty list

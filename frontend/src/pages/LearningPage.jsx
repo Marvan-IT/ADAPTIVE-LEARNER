@@ -96,8 +96,12 @@ export default function LearningPage() {
         <div style={{ display: "flex", gap: "0.75rem" }}>
           <button
             onClick={() => {
-              reset();
-              startLesson(decodeURIComponent(conceptId), null, []);
+              if (phase === "SELECTING_CHUNK") {
+                dispatch({ type: "CLEAR_ERROR" });
+              } else {
+                reset();
+                startLesson(decodeURIComponent(conceptId), null, []);
+              }
             }}
             style={{
               padding: "0.6rem 1.5rem", borderRadius: "10px", border: "none",
