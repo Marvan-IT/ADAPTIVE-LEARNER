@@ -17,10 +17,23 @@ export function useConceptMap(bookSlug = "prealgebra") {
     setLoading(true);
     setError(null);
     try {
-      const [graphRes, nextRes] = await Promise.all([
-        getGraphFull(bookSlug),
-        getNextConcepts(masteredConcepts, bookSlug),
-      ]);
+      let graphRes, nextRes;
+      try {
+        [graphRes, nextRes] = await Promise.all([
+          getGraphFull(bookSlug),
+          getNextConcepts(masteredConcepts, bookSlug),
+        ]);
+      } catch (fetchErr) {
+        if (fetchErr.response?.status === 404) {
+          // Book not yet processed — show empty graph instead of error
+          setNodes([]);
+          setEdges([]);
+          setNodeStatuses({});
+          setError("not_ready");
+          return;
+        }
+        throw fetchErr;
+      }
 
       let graphNodes = graphRes.data.nodes;
       setEdges(graphRes.data.edges);

@@ -153,6 +153,21 @@ export default function ConceptMapPage() {
     );
   }
 
+  if (error === "not_ready") {
+    return (
+      <div style={{
+        display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+        height: "calc(100vh - 64px)", gap: "1rem",
+      }}>
+        <div style={{ fontSize: "3rem" }}>&#128218;</div>
+        <p style={{ fontSize: "1.2rem", fontWeight: 600 }}>{t("map.bookProcessing", "Textbook content is being prepared")}</p>
+        <p style={{ color: "var(--color-text-muted)", fontSize: "0.95rem", maxWidth: 400, textAlign: "center" }}>
+          {t("map.bookProcessingDesc", "The extraction pipeline is still running. This page will work once the textbook data is ready. Please check back shortly.")}
+        </p>
+      </div>
+    );
+  }
+
   if (error) {
     return (
       <div style={{
