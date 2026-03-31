@@ -99,10 +99,16 @@ const initialState = {
 function sessionReducer(state, action) {
   switch (action.type) {
     case "START_LOADING":
+      if (state.session?.concept_id) {
+        localStorage.removeItem(`ada_session_${state.session.concept_id}`);
+      }
       return { ...initialState, phase: "LOADING", loading: true };
     case "TRANSITION_LOADING":
       return { ...state, loading: true };
     case "SESSION_CREATED":
+      if (action.payload?.concept_id) {
+        localStorage.setItem(`ada_session_${action.payload.concept_id}`, action.payload.id);
+      }
       return { ...state, session: action.payload };
     case "CARDS_LOADED":
       return {
@@ -477,6 +483,9 @@ function sessionReducer(state, action) {
       return { ...state, modeJustChanged: false };
 
     case "RESET":
+      if (state.session?.concept_id) {
+        localStorage.removeItem(`ada_session_${state.session.concept_id}`);
+      }
       return initialState;
     case "ERROR":
       return { ...state, error: action.payload, loading: false, phase: state.phase === "LOADING" ? "SELECTING_CHUNK" : state.phase };

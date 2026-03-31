@@ -846,10 +846,31 @@ async def generate_next_card(
 # NOTE: kept decoupled intentionally (no api/ import in adaptive/).
 # If styles added/changed in api/prompts.py, update this dict too.
 _RECOVERY_STYLE_MODIFIERS: dict[str, str] = {
-    "pirate":    "Use pirate language naturally: 'Ahoy!', 'matey', treasure=answer, ship=student.",
-    "astronaut": "Frame as space mission: 'Mission Control', 'zero gravity', 'launch sequence'.",
-    "gamer":     "Use gaming language: 'level up', 'XP gained', 'boss battle', 'respawn'.",
-    "default":   "",
+    "pirate": (
+        "## PERSONA — MANDATORY\n"
+        "You ARE a pirate math tutor. EVERY response MUST use nautical vocabulary throughout.\n"
+        "Use: 'Ahoy!', 'chart a course through', 'treasure chest', 'crew', 'ship's log', 'navigate'.\n"
+        "NEVER break character. ALL examples and MCQ scenarios MUST use pirate/nautical contexts "
+        "(ships, gold, treasure maps, crews, ocean navigation). "
+        "A student who likes pirates should immediately recognize this tutor as a pirate."
+    ),
+    "gamer": (
+        "## PERSONA — MANDATORY\n"
+        "You ARE a gaming math tutor. EVERY response MUST use gaming vocabulary throughout.\n"
+        "Use: XP, level-up, quest, skill-unlock, Player, mission, boss battle, respawn, checkpoint.\n"
+        "NEVER break character. ALL examples and MCQ scenarios MUST use game contexts "
+        "(quests, inventory, scores, health points, level progression). "
+        "A student who plays games should feel like they're in a tutorial screen."
+    ),
+    "astronaut": (
+        "## PERSONA — MANDATORY\n"
+        "You ARE an astronaut math tutor. EVERY response MUST use space/mission vocabulary throughout.\n"
+        "Use: 'Mission briefing', 'launch sequence', 'orbit', 'coordinates', 'crew', 'Houston'.\n"
+        "NEVER break character. ALL examples and MCQ scenarios MUST use space exploration contexts "
+        "(launch trajectories, orbital paths, mission parameters, star coordinates). "
+        "A student who loves space should feel like they're receiving a NASA briefing."
+    ),
+    "default": "",
 }
 
 
@@ -884,13 +905,22 @@ async def generate_recovery_card(
 
         interests_text = ""
         if interests:
+            first = interests[0]
+            joined = ", ".join(interests[:3])
             interests_text = (
-                f"\nStudent interests: {', '.join(interests[:3])}. "
-                "Weave these naturally into your analogy and examples."
+                f"\n\n## MANDATORY INTEREST RULE\n"
+                f"Student interests: {joined}.\n"
+                f"HARD REQUIREMENT: ALL examples, analogies, worked problems, and MCQ question "
+                f"scenarios MUST be framed in terms of the student's interests above. "
+                f"Do NOT use generic examples (e.g. 'a store sells apples', 'bags of marbles'). "
+                f"Instead frame every example using: {first} context. "
+                f"Every TEACH card MUST contain at least 1 interest-framed worked example. "
+                f"This rule is non-negotiable — a card without an interest-framed example is invalid."
             )
 
         style_modifier = _RECOVERY_STYLE_MODIFIERS.get(style or "default", "")
-        style_text = f"\n\n{style_modifier}" if style_modifier else ""
+        # Persona prepended at TOP of system prompt (before all other instructions)
+        style_prefix = f"{style_modifier}\n\n" if style_modifier else ""
 
         lang_name = LANGUAGE_NAMES.get(language, "English")
         lang_text = (
@@ -899,6 +929,7 @@ async def generate_recovery_card(
         )
 
         system_prompt = (
+            style_prefix +
             "You are an expert adaptive math tutor. Generate ONE recovery TEACH card.\n"
             "The student just struggled with this topic twice. Re-explain in the SIMPLEST way.\n"
             "MANDATORY RULES:\n"
@@ -913,7 +944,7 @@ async def generate_recovery_card(
             '{"title":"Let\'s Try Again — <topic>","content":"<markdown>",'
             '"image_url":null,"caption":null,"question":{"text":"<question>","options":["A","B","C","D"],'
             '"correct_index":0,"explanation":"<why>","difficulty":"EASY"}}'
-            + interests_text + style_text + lang_text
+            + interests_text + lang_text
         )
 
         if wrong_question and wrong_answer_text:
@@ -945,9 +976,9 @@ async def generate_recovery_card(
                 {"role": "system", "content": system_prompt},
                 {"role": "user",   "content": user_prompt},
             ],
-            max_tokens=1200,
+            max_tokens=2000,
             temperature=0.3,
-            timeout=20.0,
+            timeout=40.0,
         )
         raw = response.choices[0].message.content or ""
         try:

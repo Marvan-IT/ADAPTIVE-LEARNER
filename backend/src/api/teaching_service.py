@@ -1470,6 +1470,17 @@ class TeachingService:
             logger.warning("[per-chunk] failed to load images for chunk %s: %s", chunk_id, _img_err)
             images = []
 
+        # Fallback: use concept-level images if chunk has none
+        if not images:
+            try:
+                concept_detail_for_images = await self._chunk_ksvc.get_concept_detail(
+                    db, chunk.get("concept_id", ""), chunk.get("book_slug", "")
+                )
+                if concept_detail_for_images and concept_detail_for_images.get("images"):
+                    images = concept_detail_for_images["images"][:3]
+            except Exception as _cd_err:
+                logger.warning("[per-chunk] failed to load concept images fallback for chunk %s: %s", chunk_id, _cd_err)
+
         # Determine mode from session cache signals
         try:
             _cache_raw = json.loads(session.presentation_text or "{}")
@@ -1495,6 +1506,11 @@ class TeachingService:
         if not interests and student:
             interests = list(getattr(student, "interests", None) or [])
         style = session.style or "default"
+
+        # Build persona prefix to prepend at TOP of system prompts (before all other instructions)
+        from api.prompts import STYLE_MODIFIERS as _STYLE_MODIFIERS
+        _style_modifier = _STYLE_MODIFIERS.get(style, "")
+        _persona_prefix = f"{_style_modifier}\n\n" if _style_modifier else ""
 
         user_prompt = build_chunk_card_prompt(
             chunk=chunk,
@@ -1537,6 +1553,7 @@ class TeachingService:
             }.get(_generate_as, "brief 2–3 sentence explanation")
 
             system_prompt = (
+                _persona_prefix +
                 "You are ADA, an adaptive math tutor.\n\n"
                 "EXERCISE CHUNK MODE: Generate exactly 2 MCQ cards per teaching subsection listed below.\n\n"
                 f"Teaching subsections covered in this section:\n{subsection_list}\n\n"
@@ -1557,6 +1574,7 @@ class TeachingService:
             )
         else:
             system_prompt = (
+                _persona_prefix +
                 "You are ADA, an adaptive math tutor. Generate lesson cards for the CHUNK CONTENT provided.\n\n"
                 "RULE #1 — COVERAGE (non-negotiable):\n"
                 "Every concept, definition, formula, and worked example in CHUNK CONTENT must appear on exactly one card. Never skip any item.\n"

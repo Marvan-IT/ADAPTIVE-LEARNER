@@ -52,7 +52,11 @@ Numbered steps: for all worked examples. MCQ: MEDIUM (real understanding, common
 FUN ENGAGEMENT: Add 1 real-world application hook to one card where it fits naturally.
 COMPLETENESS RULE: Write each definition, formula, and worked example out IN FULL. Never abbreviate, summarize, or say "as shown above." If a chunk contains a 3-step worked example, all 3 steps must appear on the card. Write as much as needed to genuinely teach — do not stop early.
 QUESTION hint: concrete approach description (not just 'try it').
-MCQ wrong-answer explanation: 2–3 sentence explanation of the correct approach — do NOT shorten card content.""",
+MCQ wrong-answer explanation: 2–3 sentence explanation of the correct approach — do NOT shorten card content.
+MANDATORY ENHANCEMENTS — NON-NEGOTIABLE:
+- EVERY TEACH card MUST include exactly 1 real-world analogy. Not optional — ALWAYS required.
+- EVERY TEACH card MUST include a "**Why this matters:**" sentence before the worked example.
+- A VISUAL card MUST be generated whenever the chunk contains math notation (LaTeX, formulas, equations) or references a figure. Do NOT skip the VISUAL card for math-heavy content.""",
 
     "FAST": """\
 ## DELIVERY MODE: FAST
@@ -129,14 +133,29 @@ def build_chunk_card_prompt(
             "Some cards may have no image if the image is not relevant to that card's content.\n"
         )
 
+    interests_rule = ""
+    if interests:
+        first = interests[0]
+        joined = ", ".join(interests)
+        interests_rule = (
+            f"\n## MANDATORY INTEREST RULE\n"
+            f"Student interests: {joined}.\n"
+            f"HARD REQUIREMENT: ALL examples, analogies, worked problems, and MCQ question "
+            f"scenarios MUST be framed in terms of the student's interests above. "
+            f"Do NOT use generic examples (e.g. 'a store sells apples', 'bags of marbles'). "
+            f"Instead frame every example using: {first} context. "
+            f"Every TEACH and EXAMPLE card MUST contain at least 1 interest-framed worked example. "
+            f"This rule is non-negotiable — a card without an interest-framed example is invalid.\n"
+        )
+
     return (
         f"CHUNK HEADING: {chunk['heading']}\n"
         f"\nCHUNK CONTENT:\n{chunk['text']}"
         f"{image_block}\n"
         f"STUDENT MODE: {student_mode}\n"
         f"STYLE: {style}\n"
-        f"INTERESTS: {', '.join(interests) if interests else 'general'}\n"
         f"LANGUAGE: {language}\n"
+        f"{interests_rule}"
         "For each item in CHUNK CONTENT: write a card that (1) states the definition or concept "
         "completely, (2) shows a worked example with every step, (3) states any formula in $LaTeX$, "
         "(4) adds a mode-appropriate analogy or real-world hook. "

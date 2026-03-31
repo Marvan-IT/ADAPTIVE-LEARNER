@@ -42,26 +42,50 @@ def _language_instruction(language: str) -> str:
 STYLE_MODIFIERS = {
     "default": "",
     "pirate": (
-        "You are a friendly pirate math tutor named Captain Calc. "
-        "Use pirate language (Ahoy, matey, treasure, sailing the seas of math). "
-        "Replace boring words with pirate equivalents. Numbers are 'doubloons' or 'pieces of eight'. "
-        "Keep the math accurate but make it feel like a pirate adventure."
-    ),
-    "astronaut": (
-        "You are a friendly astronaut math tutor named Commander Count. "
-        "Use space language (mission control, orbit, launch, zero-gravity, star systems). "
-        "Frame math problems as space missions. Numbers are 'coordinates' or 'fuel units'. "
-        "Keep the math accurate but make it feel like a space exploration."
+        "## PERSONA — MANDATORY\n"
+        "You ARE a pirate math tutor. EVERY response MUST use nautical vocabulary throughout.\n"
+        "Use: 'Ahoy!', 'chart a course through', 'treasure chest', 'crew', 'ship's log', 'navigate'.\n"
+        "NEVER break character. ALL examples and MCQ scenarios MUST use pirate/nautical contexts "
+        "(ships, gold, treasure maps, crews, ocean navigation). "
+        "A student who likes pirates should immediately recognize this tutor as a pirate."
     ),
     "gamer": (
-        "You are a friendly gamer math tutor named Player One. "
-        "Use gaming language (level up, XP, quest, boss battle, power-up, inventory). "
-        "Frame math concepts as game mechanics. Numbers are 'points' or 'stats'. "
-        "Keep the math accurate but make it feel like a video game tutorial."
+        "## PERSONA — MANDATORY\n"
+        "You ARE a gaming math tutor. EVERY response MUST use gaming vocabulary throughout.\n"
+        "Use: XP, level-up, quest, skill-unlock, Player, mission, boss battle, respawn, checkpoint.\n"
+        "NEVER break character. ALL examples and MCQ scenarios MUST use game contexts "
+        "(quests, inventory, scores, health points, level progression). "
+        "A student who plays games should feel like they're in a tutorial screen."
+    ),
+    "astronaut": (
+        "## PERSONA — MANDATORY\n"
+        "You ARE an astronaut math tutor. EVERY response MUST use space/mission vocabulary throughout.\n"
+        "Use: 'Mission briefing', 'launch sequence', 'orbit', 'coordinates', 'crew', 'Houston'.\n"
+        "NEVER break character. ALL examples and MCQ scenarios MUST use space exploration contexts "
+        "(launch trajectories, orbital paths, mission parameters, star coordinates). "
+        "A student who loves space should feel like they're receiving a NASA briefing."
     ),
 }
 
 VALID_STYLES = set(STYLE_MODIFIERS.keys())
+
+
+def _build_interests_block(interests: list[str]) -> str:
+    """Return a strong mandatory interest-injection block for LLM system prompts."""
+    if not interests:
+        return ""
+    first = interests[0]
+    joined = ", ".join(interests)
+    return (
+        f"\n\n## MANDATORY INTEREST RULE\n"
+        f"Student interests: {joined}.\n"
+        f"HARD REQUIREMENT: ALL examples, analogies, worked problems, and MCQ question "
+        f"scenarios MUST be framed in terms of the student's interests above. "
+        f"Do NOT use generic examples (e.g. 'a store sells apples', 'bags of marbles'). "
+        f"Instead frame every example using: {first} context. "
+        f"Every TEACH and EXAMPLE card MUST contain at least 1 interest-framed worked example. "
+        f"This rule is non-negotiable — a card without an interest-framed example is invalid."
+    )
 
 
 # ── Presentation Phase Prompts ────────────────────────────────────
@@ -73,19 +97,14 @@ def build_presentation_system_prompt(
 ) -> str:
     """Build the system prompt for generating a concept explanation."""
 
-    interests_text = ""
-    if interests:
-        interests_text = (
-            f"\n\nThe student is interested in: {', '.join(interests)}. "
-            "Whenever possible, connect math concepts to these interests using "
-            "creative metaphors and real-world examples that relate to them."
-        )
+    interests_text = _build_interests_block(interests or [])
 
     style_modifier = STYLE_MODIFIERS.get(style, "")
-    style_text = f"\n\n{style_modifier}" if style_modifier else ""
+    style_prefix = f"{style_modifier}\n\n" if style_modifier else ""
+    style_text = ""  # no longer appended at bottom
     lang_text = _language_instruction(language)
 
-    return f"""You are ADA, an adaptive math tutor for children and young learners.
+    return f"""{style_prefix}You are ADA, an adaptive math tutor for children and young learners.
 Your job is to explain a math concept in a way that is:
 - Clear and simple, using everyday language a 10-year-old can understand
 - Rich with metaphors and analogies that connect abstract math to concrete, familiar things
@@ -275,14 +294,10 @@ def build_socratic_system_prompt(
     """Build the system prompt for the Socratic questioning phase."""
 
     style_modifier = STYLE_MODIFIERS.get(style, "")
-    style_text = f"\n\n{style_modifier}" if style_modifier else ""
+    style_prefix = f"{style_modifier}\n\n" if style_modifier else ""
+    style_text = ""  # no longer appended at bottom
 
-    interests_text = ""
-    if interests:
-        interests_text = (
-            f"\nThe student is interested in: {', '.join(interests)}. "
-            "Use these in your examples when possible."
-        )
+    interests_text = _build_interests_block(interests or [])
 
     image_context = ""
     if card_visuals:
@@ -335,7 +350,7 @@ def build_socratic_system_prompt(
             f"the first 1–2 topics. Aim for at least one question per topic in scope order.\n"
         )
 
-    prompt = f"""You are ADA, an adaptive math tutor in ASSESSMENT MODE.
+    prompt = f"""{style_prefix}You are ADA, an adaptive math tutor in ASSESSMENT MODE.
 
 Your job is to CHECK whether the student truly understood a concept through guided questioning.
 
@@ -490,20 +505,16 @@ def build_remediation_socratic_prompt(
     Focuses questions on the failed topics first, then adds lighter review questions.
     """
     style_modifier = STYLE_MODIFIERS.get(style, "")
-    style_text = f"\n\n{style_modifier}" if style_modifier else ""
+    style_prefix = f"{style_modifier}\n\n" if style_modifier else ""
+    style_text = ""  # no longer appended at bottom
 
-    interests_text = ""
-    if student_interests:
-        interests_text = (
-            f"\nThe student is interested in: {', '.join(student_interests)}. "
-            "Use these in your examples when possible."
-        )
+    interests_text = _build_interests_block(student_interests or [])
 
     failed_topics_text = (
         ", ".join(failed_topics[:5]) if failed_topics else "the key concepts of this section"
     )
 
-    prompt = f"""You are ADA, an adaptive math tutor in RE-ASSESSMENT MODE.
+    prompt = f"""{style_prefix}You are ADA, an adaptive math tutor in RE-ASSESSMENT MODE.
 
 Last time, {failed_topics_text} were a bit tricky. Let's see how much clearer they are now!
 I know you've got this now!
@@ -621,9 +632,15 @@ CONTENT FIDELITY:
 
 ENHANCEMENTS YOU ADD:
   - Brief transitional sentences between steps ("Now that we have X, we can find Y").
-  - 1 real-world application hook per major concept ("You'd use this when…").
   - A "why this works" note after key formulas (1–2 sentences).
   - Define terms on first use (inline, not a separate card).
+
+MANDATORY ENHANCEMENTS — NON-NEGOTIABLE:
+  - EVERY TEACH card MUST include exactly 1 real-world analogy. Not "when possible" — ALWAYS.
+  - EVERY TEACH card MUST include a "**Why this matters:**" sentence explaining the real-world
+    relevance of the concept. This sentence must appear before the worked example.
+  - A VISUAL card MUST be generated whenever the chunk contains math notation (LaTeX, formulas,
+    equations) or references a figure. Do NOT skip the VISUAL card for math-heavy content.
 
 MCQ: MEDIUM — test real understanding, include common-mistake distractors.
 QUESTION hint: Concrete approach description (not the answer, but how to start).
@@ -809,15 +826,12 @@ def build_cards_system_prompt(
     No card_type, no quick_check, no questions[], no True/False anywhere.
     """
 
-    interests_text = ""
-    if interests:
-        interests_text = (
-            f"\n\nThe student is interested in: {', '.join(interests)}. "
-            "Use these interests in your explanations, metaphors, and question scenarios."
-        )
+    interests_text = _build_interests_block(interests or [])
 
     style_modifier = STYLE_MODIFIERS.get(style, "")
-    style_text = f"\n\n{style_modifier}" if style_modifier else ""
+    # Persona block prepended at the TOP of the system prompt (before all other instructions)
+    style_prefix = f"{style_modifier}\n\n" if style_modifier else ""
+    style_text = ""  # no longer appended at the bottom
 
     # Build available-images block so the LLM knows which indices to assign
     images_block = ""
@@ -896,7 +910,7 @@ def build_cards_system_prompt(
     }
     domain_block = _DOMAIN_NOTES.get(section_domain, "")
 
-    base_prompt = f"""You are ADA, an adaptive math tutor for children. You create interactive learning cards.
+    base_prompt = f"""{style_prefix}You are ADA, an adaptive math tutor for children. You create interactive learning cards.
 
 Your job is to take textbook sub-sections and transform them into an engaging sequence of typed learning cards.
 
@@ -1179,7 +1193,12 @@ def _build_user_prompt_profile_block(
         lang_name = LANGUAGE_NAMES.get(language, language)
         lines.append(f"- Language: Write ALL content (titles, explanations, questions, options) in {lang_name}")
     if interests:
-        lines.append(f"- Interests: {', '.join(interests[:3])} — weave these into examples and analogies")
+        first = interests[0]
+        joined = ", ".join(interests[:3])
+        lines.append(
+            f"- Interests: {joined} — HARD REQUIREMENT: ALL examples, analogies, and MCQ scenarios "
+            f"MUST be framed using {first} context. Generic examples (apples, marbles) are invalid."
+        )
     if style and style != "default":
         lines.append(f"- Style: {style} persona — match the vocabulary and tone throughout every card")
     comp = getattr(learning_profile, "comprehension", None) if learning_profile else None
@@ -1410,16 +1429,12 @@ def build_assistant_system_prompt(
     """Build the system prompt for the AI assistant sidebar."""
 
     style_modifier = STYLE_MODIFIERS.get(style, "")
-    style_text = f"\n\n{style_modifier}" if style_modifier else ""
+    style_prefix = f"{style_modifier}\n\n" if style_modifier else ""
+    style_text = ""  # no longer appended at bottom
 
-    interests_text = ""
-    if interests:
-        interests_text = (
-            f"\nThe student likes: {', '.join(interests)}. "
-            "Use these in your examples when helpful."
-        )
+    interests_text = _build_interests_block(interests or [])
 
-    return f"""You are ADA, a friendly and patient math tutor for children.
+    return f"""{style_prefix}You are ADA, a friendly and patient math tutor for children.
 
 YOUR ROLE:
 - You are a supportive tutor sitting beside the student

@@ -12,6 +12,7 @@ import CompletionView from "../components/learning/CompletionView";
 import { trackEvent } from "../utils/analytics";
 import { AlertCircle, LogOut, MapPin } from "lucide-react";
 import { checkConceptReadiness } from "../api/concepts";
+import { getSession, getChunkList } from "../api/sessions";
 
 export default function LearningPage() {
   const { t } = useTranslation();
@@ -45,18 +46,49 @@ export default function LearningPage() {
       const urlStyle = searchParams.get("style");
       if (urlStyle) setStyle(urlStyle);
 
-      checkConceptReadiness(decodeURIComponent(conceptId), student.id)
+      const decodedConceptId = decodeURIComponent(conceptId);
+
+      const launchLesson = () => startLesson(decodedConceptId, null, []);
+
+      const tryResume = () => {
+        const savedSessionId = localStorage.getItem(`ada_session_${decodedConceptId}`);
+        if (savedSessionId) {
+          getSession(savedSessionId)
+            .then(res => {
+              const existing = res.data;
+              if (existing && existing.phase !== "DONE") {
+                // Restore session state then load chunk list to resume at SELECTING_CHUNK
+                dispatch({ type: "SESSION_CREATED", payload: existing });
+                return getChunkList(existing.id).then(chunkRes => {
+                  const chunkListData = chunkRes.data;
+                  if (chunkListData.chunks && chunkListData.chunks.length > 0) {
+                    dispatch({ type: "CHUNK_LIST_LOADED", payload: chunkListData });
+                  } else {
+                    launchLesson();
+                  }
+                });
+              } else {
+                launchLesson();
+              }
+            })
+            .catch(() => launchLesson());
+        } else {
+          launchLesson();
+        }
+      };
+
+      checkConceptReadiness(decodedConceptId, student.id)
         .then(res => {
           const data = res.data;
           if (!data.all_prerequisites_met && data.unmet_prerequisites.length > 0) {
             setPrereqWarning({ unmet: data.unmet_prerequisites });
           } else {
-            startLesson(decodeURIComponent(conceptId), null, []);
+            tryResume();
           }
         })
         .catch((err) => {
           console.error("[LearningPage] prereq check failed:", err);
-          startLesson(decodeURIComponent(conceptId), null, []);
+          launchLesson();
         });
     }
   }, [conceptId, phase, prereqChecked]);
@@ -258,6 +290,33 @@ export default function LearningPage() {
       await startChunk(chunkId, chunkStyle, chunkInterests);
     };
 
+    // Mode badge helpers
+    const firstUncompletedIdx = visibleChunks.findIndex(
+      (c) => c.chunk_type !== "exercise_gate" && !(c.chunk_id in (chunkProgress || {}))
+    );
+
+    const modeBadgeStyle = (mode, predicted = false) => ({
+      display: "inline-block",
+      fontSize: "10px",
+      fontWeight: 600,
+      padding: "1px 6px",
+      borderRadius: "10px",
+      marginLeft: "6px",
+      opacity: predicted ? 0.6 : 1,
+      border: predicted ? "1px dashed currentColor" : "none",
+      background: predicted ? "transparent" : (
+        mode === "STRUGGLING" ? "#fbbf24" :
+        mode === "FAST" ? "#22c55e" : "#60a5fa"
+      ),
+      color: predicted ? (
+        mode === "STRUGGLING" ? "#d97706" :
+        mode === "FAST" ? "#16a34a" : "#2563eb"
+      ) : "#fff",
+    });
+
+    const modeBadgeLabel = (mode) =>
+      mode === "STRUGGLING" ? "Struggling" : mode === "FAST" ? "Fast" : "Normal";
+
     return (
       <div style={{
         maxWidth: "700px",
@@ -420,6 +479,17 @@ export default function LearningPage() {
                       lineHeight: 1.4,
                     }}>
                       {chunk.heading}
+                      {/* Mode badge: shown for completed chunks (actual mode) or first uncompleted (predicted) */}
+                      {isDone && chunkProgress?.[chunk.chunk_id]?.mode_used && (
+                        <span style={modeBadgeStyle(chunkProgress[chunk.chunk_id].mode_used, false)}>
+                          {modeBadgeLabel(chunkProgress[chunk.chunk_id].mode_used)}
+                        </span>
+                      )}
+                      {!isDone && chunk.chunk_type !== "exercise_gate" && idx === firstUncompletedIdx && currentChunkMode && (
+                        <span style={modeBadgeStyle(currentChunkMode, true)}>
+                          {modeBadgeLabel(currentChunkMode)}
+                        </span>
+                      )}
                     </span>
                     <div style={{ display: "flex", gap: "6px", marginTop: "2px", flexWrap: "wrap" }}>
                       {isDone && score != null && (

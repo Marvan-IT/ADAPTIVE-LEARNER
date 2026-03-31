@@ -641,11 +641,6 @@ async def switch_style(
     session = await db.get(TeachingSession, session_id)
     if not session:
         raise HTTPException(404, "Session not found")
-    if session.phase not in ("PRESENTING",):
-        raise HTTPException(
-            status_code=409,
-            detail="Style cannot be changed once the lesson has started. Exit and restart the lesson to apply new settings."
-        )
     if session.phase == "COMPLETED":
         raise HTTPException(400, "Cannot switch style on a completed session")
 
@@ -667,15 +662,37 @@ async def update_session_interests(
     session = await db.get(TeachingSession, session_id)
     if not session:
         raise HTTPException(404, "Session not found")
-    if session.phase not in ("PRESENTING",):
-        raise HTTPException(
-            status_code=409,
-            detail="Style cannot be changed once the lesson has started. Exit and restart the lesson to apply new settings."
-        )
     session.lesson_interests = [i[:50] for i in req.interests[:10]]
     await db.commit()
     logger.info("session=%s interests updated count=%d", session_id, len(session.lesson_interests))
     return {"session_id": str(session_id), "lesson_interests": session.lesson_interests}
+
+
+@router.get("/sessions/resume", response_model=SessionResponse)
+@limiter.limit("30/minute")
+async def resume_session(
+    request: Request,
+    student_id: UUID,
+    concept_id: str,
+    book_slug: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Find the most recent non-DONE session for student+concept. Returns 404 if none."""
+    result = await db.execute(
+        select(TeachingSession)
+        .where(
+            TeachingSession.student_id == student_id,
+            TeachingSession.concept_id == concept_id,
+            TeachingSession.book_slug == book_slug,
+            TeachingSession.phase != "DONE",
+        )
+        .order_by(TeachingSession.created_at.desc())
+        .limit(1)
+    )
+    session = result.scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail="No active session found")
+    return session
 
 
 @router.get("/sessions/{session_id}", response_model=SessionResponse)
@@ -1182,7 +1199,8 @@ async def list_chunks(
 
         # Inject synthetic exam gate if the section has no exercise_gate chunk
         visible_for_exam = [s for s in summaries if s.chunk_type != "exam_question_source"]
-        if visible_for_exam and visible_for_exam[-1].chunk_type != "exercise_gate":
+        has_exercise_gate = any(s.chunk_type == "exercise_gate" for s in summaries)
+        if visible_for_exam and not has_exercise_gate:
             from uuid import uuid5, NAMESPACE_DNS
             synthetic_id = str(uuid5(NAMESPACE_DNS, f"exam_gate:{concept_id}"))
             summaries.append(ChunkSummary(

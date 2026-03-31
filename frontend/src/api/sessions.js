@@ -66,6 +66,11 @@ export const switchStyle = (sessionId, style) =>
 export const getSession = (sessionId) =>
   api.get(`/api/v2/sessions/${sessionId}`);
 
+export const resumeSession = (studentId, conceptId, bookSlug) =>
+  api.get(`/api/v2/sessions/resume`, {
+    params: { student_id: studentId, concept_id: conceptId, book_slug: bookSlug },
+  });
+
 export const assistStudent = (sessionId, cardIndex, message, trigger = "user") =>
   api.post(`/api/v2/sessions/${sessionId}/assist`, {
     card_index: cardIndex,
