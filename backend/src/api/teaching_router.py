@@ -138,6 +138,20 @@ teaching_svc = None
 chunk_ksvc = None  # ChunkKnowledgeService — injected by main.py lifespan
 
 
+def _require_services():
+    """Raise 503 if the backend services were not yet injected by lifespan.
+
+    Prevents AttributeError crashes ('NoneType' has no attribute ...) when
+    stale uvicorn processes or a mid-restart request reaches an endpoint before
+    main.py lifespan has finished initialising teaching_svc / chunk_ksvc.
+    """
+    if not chunk_ksvc or not teaching_svc:
+        raise HTTPException(
+            status_code=503,
+            detail="Service not ready — backend is still starting up, please retry in a moment",
+        )
+
+
 # ═══════════════════════════════════════════════════════════════════
 # STUDENTS
 # ═══════════════════════════════════════════════════════════════════
@@ -441,21 +455,20 @@ async def update_student_progress(
 @limiter.limit("30/minute")
 async def start_session(request: Request, req: StartSessionRequest, db: AsyncSession = Depends(get_db)):
     """Start a new teaching session for a student + concept."""
-    student = await db.get(Student, req.student_id)
-    if not student:
-        raise HTTPException(404, "Student not found")
-    active_books = await chunk_ksvc.get_active_books(db)
-    if req.book_slug not in active_books:
-        raise HTTPException(400, f"Book '{req.book_slug}' not loaded. Available: {sorted(active_books)}")
-
-    concept_detail = await chunk_ksvc.get_concept_detail(db, req.concept_id, req.book_slug)
-    if not concept_detail:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Concept '{req.concept_id}' not found in book '{req.book_slug}'"
-        )
-
     try:
+        _require_services()
+        student = await db.get(Student, req.student_id)
+        if not student:
+            raise HTTPException(404, "Student not found")
+        active_books = await chunk_ksvc.get_active_books(db)
+        if req.book_slug not in active_books:
+            raise HTTPException(400, f"Book '{req.book_slug}' not loaded. Available: {sorted(active_books)}")
+        concept_detail = await chunk_ksvc.get_concept_detail(db, req.concept_id, req.book_slug)
+        if not concept_detail:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Concept '{req.concept_id}' not found in book '{req.book_slug}'"
+            )
         session = await teaching_svc.start_session(
             db, req.student_id, req.concept_id, req.book_slug, req.style, req.lesson_interests
         )
@@ -885,6 +898,7 @@ async def generate_chunk_cards(
     Returns interleaved content+MCQ cards for the given chunk_id, along with
     position metadata (chunk_index, total_chunks, is_last_chunk).
     """
+    _require_services()
     session = await db.get(TeachingSession, session_id)
     if not session:
         raise HTTPException(404, "Session not found")
@@ -934,6 +948,7 @@ async def generate_chunk_recovery_card(
     Called when student fails the same MCQ twice in a row.
     Returns a single LessonCard with is_recovery=True.
     """
+    _require_services()
     session = await db.get(TeachingSession, session_id)
     if not session:
         raise HTTPException(404, "Session not found")
@@ -1105,90 +1120,99 @@ async def list_chunks(
     An empty chunks list signals a ChromaDB-path session — the frontend must
     fall back to the legacy POST /sessions/{id}/cards flow.
     """
-    session = await db.get(TeachingSession, session_id)
-    if not session:
-        raise HTTPException(404, "Session not found")
+    try:
+        _require_services()
+        session = await db.get(TeachingSession, session_id)
+        if not session:
+            raise HTTPException(404, "Session not found")
 
-    book_slug = session.book_slug or DEFAULT_BOOK_SLUG
-    concept_id = session.concept_id
+        book_slug = session.book_slug or DEFAULT_BOOK_SLUG
+        concept_id = session.concept_id
 
-    # Fetch all chunks in textbook order
-    result = await db.execute(
-        select(ConceptChunk)
-        .where(ConceptChunk.book_slug == book_slug, ConceptChunk.concept_id == concept_id)
-        .order_by(ConceptChunk.order_index)
-    )
-    chunks = [c for c in result.scalars().all() if (c.text or "").strip()]
-
-    if not chunks:
-        # ChromaDB-path signal: return empty list
-        logger.info(
-            "[chunks] no chunks found — ChromaDB path: session_id=%s concept_id=%s",
-            session_id, concept_id,
+        # Fetch all chunks in textbook order
+        result = await db.execute(
+            select(ConceptChunk)
+            .where(ConceptChunk.book_slug == book_slug, ConceptChunk.concept_id == concept_id)
+            .order_by(ConceptChunk.order_index)
         )
+        chunks = [c for c in result.scalars().all() if (c.text or "").strip()]
+
+        if not chunks:
+            # ChromaDB-path signal: return empty list
+            logger.info(
+                "[chunks] no chunks found — ChromaDB path: session_id=%s concept_id=%s",
+                session_id, concept_id,
+            )
+            return ChunkListResponse(
+                concept_id=concept_id,
+                section_title="",
+                chunks=[],
+                current_chunk_index=session.chunk_index or 0,
+            )
+
+        # Check image existence per chunk in a single batch query
+        chunk_ids = [c.id for c in chunks]
+        img_result = await db.execute(
+            select(ChunkImage.chunk_id)
+            .where(ChunkImage.chunk_id.in_(chunk_ids))
+            .distinct()
+        )
+        chunks_with_images: set = {row[0] for row in img_result.fetchall()}
+
+        # chunk_progress is JSONB — guard against non-dict values (e.g. from DB corruption)
+        raw_progress = session.chunk_progress
+        progress: dict = raw_progress if isinstance(raw_progress, dict) else {}
+
+        summaries = [
+            ChunkSummary(
+                chunk_id=str(c.id),
+                order_index=c.order_index,
+                heading=c.heading or "",
+                has_images=c.id in chunks_with_images,
+                has_mcq=_heading_has_mcq(c.heading or ""),
+                chunk_type=_get_chunk_type(c.heading or ""),
+                completed=str(c.id) in progress,
+                score=progress.get(str(c.id), {}).get("score"),
+                mode_used=progress.get(str(c.id), {}).get("mode"),
+            )
+            for c in chunks
+        ]
+
+        section_title = chunks[0].section if chunks else ""
+
+        # Inject synthetic exam gate if the section has no exercise_gate chunk
+        visible_for_exam = [s for s in summaries if s.chunk_type != "exam_question_source"]
+        if visible_for_exam and visible_for_exam[-1].chunk_type != "exercise_gate":
+            from uuid import uuid5, NAMESPACE_DNS
+            synthetic_id = str(uuid5(NAMESPACE_DNS, f"exam_gate:{concept_id}"))
+            summaries.append(ChunkSummary(
+                chunk_id=synthetic_id,
+                order_index=(summaries[-1].order_index + 1) if summaries else 0,
+                heading="Section Exam",
+                has_images=False,
+                has_mcq=False,
+                chunk_type="exercise_gate",
+                completed=False,
+                score=None,
+                mode_used=None,
+            ))
+
+        logger.info(
+            "[chunks] session_id=%s concept_id=%s total=%d current_index=%d",
+            session_id, concept_id, len(summaries), session.chunk_index or 0,
+        )
+
         return ChunkListResponse(
             concept_id=concept_id,
-            section_title="",
-            chunks=[],
+            section_title=section_title,
+            chunks=summaries,
             current_chunk_index=session.chunk_index or 0,
         )
-
-    # Check image existence per chunk in a single batch query
-    chunk_ids = [c.id for c in chunks]
-    img_result = await db.execute(
-        select(ChunkImage.chunk_id)
-        .where(ChunkImage.chunk_id.in_(chunk_ids))
-        .distinct()
-    )
-    chunks_with_images: set = {row[0] for row in img_result.fetchall()}
-
-    progress = session.chunk_progress or {}
-
-    summaries = [
-        ChunkSummary(
-            chunk_id=str(c.id),
-            order_index=c.order_index,
-            heading=c.heading,
-            has_images=c.id in chunks_with_images,
-            has_mcq=_heading_has_mcq(c.heading),
-            chunk_type=_get_chunk_type(c.heading),
-            completed=str(c.id) in progress,
-            score=progress.get(str(c.id), {}).get("score"),
-            mode_used=progress.get(str(c.id), {}).get("mode"),
-        )
-        for c in chunks
-    ]
-
-    section_title = chunks[0].section if chunks else ""
-
-    # Inject synthetic exam gate if the section has no exercise_gate chunk
-    visible_for_exam = [s for s in summaries if s.chunk_type != "exam_question_source"]
-    if visible_for_exam and visible_for_exam[-1].chunk_type != "exercise_gate":
-        from uuid import uuid5, NAMESPACE_DNS
-        synthetic_id = str(uuid5(NAMESPACE_DNS, f"exam_gate:{concept_id}"))
-        summaries.append(ChunkSummary(
-            chunk_id=synthetic_id,
-            order_index=(summaries[-1].order_index + 1) if summaries else 0,
-            heading="Section Exam",
-            has_images=False,
-            has_mcq=False,
-            chunk_type="exercise_gate",
-            completed=False,
-            score=None,
-            mode_used=None,
-        ))
-
-    logger.info(
-        "[chunks] session_id=%s concept_id=%s total=%d current_index=%d",
-        session_id, concept_id, len(summaries), session.chunk_index or 0,
-    )
-
-    return ChunkListResponse(
-        concept_id=concept_id,
-        section_title=section_title,
-        chunks=summaries,
-        current_chunk_index=session.chunk_index or 0,
-    )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("[chunks] unhandled error: session_id=%s", session_id)
+        raise HTTPException(500, f"Failed to load chunks: {exc}")
 
 
 # ═══════════════════════════════════════════════════════════════════

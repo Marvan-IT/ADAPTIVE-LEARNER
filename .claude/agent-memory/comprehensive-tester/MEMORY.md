@@ -7,6 +7,7 @@
 - No `@pytest.mark.asyncio` needed — all async test methods work automatically
 - `conftest.py` inserts `backend/src` into sys.path; test files duplicate this with `sys.path.insert(0, ...parent.parent/"src")` for direct execution safety
 - Test files live in `backend/tests/`; run from repo root with `pytest backend/tests/`
+- **Patching locally-imported names**: When a function does `from config import OUTPUT_DIR` INSIDE the function body (not at module level), patch `config.OUTPUT_DIR` — NOT `api.teaching_service.OUTPUT_DIR`. Python re-executes the local import on each call, so the patch on the source module is picked up correctly.
 
 ### Adaptive Engine Module (backend/src/adaptive/)
 - `schemas.py` — Pydantic v2 models: AnalyticsSummary, LearningProfile, GenerationProfile, AdaptiveLesson, RemediationInfo, AdaptiveLessonCard, AdaptiveLessonContent
@@ -147,6 +148,27 @@ req = Request({"type":"http","method":"POST","path":"/...","query_string":b"","h
 - `one_or_none()` should return `None` explicitly (not a `MagicMock`) when the test expects "no result found".
 - Service async methods called via `await` in router handlers must be `AsyncMock`, not plain `MagicMock`. Forgetting this produces: `TypeError: object MagicMock can't be used in 'await' expression`.
 
+### Chunk-Based Architecture (extraction/chunk_parser.py + api/chunk_knowledge_service.py)
+- `ParsedChunk` dataclass: `book_slug, concept_id, section, order_index, heading, text, latex=[], image_urls=[]`
+- `parse_book_mmd(mmd_path, book_slug)` returns deduplicated list — 300–600 chunks for prealgebra
+- Dedup key: `(concept_id, heading)` — winner is highest word-count copy (removes 3x Mathpix copies)
+- `_MAX_REAL_SECTION_IN_CHAPTER = 10`; section numbers > 10 in a chapter are figure refs, skipped
+- Noise headings (EXAMPLE, TRY IT, Solution, HOW TO, etc.) are body content, NOT chunk split boundaries
+- `ChunkKnowledgeService._chunk_to_dict()` always sets `images=[]` (populated via `get_chunk_images()`)
+- UUID validation guard: `get_chunk(db, malformed)` → `None` without querying DB (ValueError caught)
+- Synthetic mmd tests use pytest `tmp_path` fixture — no real book.mmd needed for unit tests
+- `build_chunk_card_prompt()` returns a SINGLE string (not a tuple like `build_adaptive_prompt()`)
+- Image block trigger string: `"IMAGES IN THIS CHUNK"` — only present when `images` list is non-empty
+
+### LessonCard / CardMCQ Schema (chunk-based architecture)
+- `CardMCQ` fields: `text` (NOT `question`), `options` (NOT `choices`), `correct_index` (NOT `correct`), `explanation`, `difficulty`
+- `options` must be exactly 4 items (min_length=4, max_length=4); `correct_index` must be 0–3
+- `LessonCard` fields: `index, title, content, image_url, caption, question, chunk_id, is_recovery`
+- Legacy fields ABSENT: `card_type`, `image_indices`, `images`, `question2`
+- New chunk schemas: `ChunkCardsRequest` (chunk_id), `ChunkCardsResponse` (cards, chunk_id, chunk_index, total_chunks, is_last_chunk)
+- `RecoveryCardRequest`: `chunk_id`, `card_index=0`, `wrong_answers=[]`
+- `SocraticExamResult`: `score, passed, total_questions, correct_count, failed_chunk_ids, attempt`
+
 ### _parse_sub_sections Test File
 `backend/tests/test_parse_sub_sections.py` — 22 tests across 7 classes (all passing).
 See `parse-sub-sections-tests.md` for edge-case notes (LaTeX guard, whitespace stripping, false-positive scope).
@@ -157,3 +179,17 @@ Key patterns:
 - Static method import: `from api.teaching_service import TeachingService as _TS; _fn = _TS._method`
 - `inspect.signature(fn).parameters["param"].default` to assert no hardcoded values
 - `object.__new__(KnowledgeService)` to bypass `__init__` (avoids ChromaDB/file I/O)
+
+### ChromaDB → PostgreSQL Migration Tests (test_chromadb_migration.py)
+- 76 tests across 10 classes — all passing; file at `backend/tests/test_chromadb_migration.py`
+- ChunkKnowledgeService is fully sync for graph methods (no DB); async only for concept_detail/query_similar
+- Real graph.json: 60 nodes, 49 edges; prealgebra_1.1 is a root (no predecessors), prealgebra_1.2 has prealgebra_1.1 as pred
+- Root nodes (11 total) are unlocked with empty mastery; prealgebra_1.1 and 10 others have no incoming edges
+- `_skip_no_graph` marker: `pytest.mark.skipif(not graph_json_path.exists(), reason=...)` — graph tests self-skip without real output dir
+- AnalyticsSummary fields: `student_id, concept_id, time_spent_sec, expected_time_sec, attempts, wrong_attempts, hints_used, revisits, recent_dropoffs, skip_rate, quiz_score, last_7d_sessions` (NOT error_rate/avg_time_ratio/hint_count)
+- `AnalyticsSummary` model_validator: `wrong_attempts <= attempts` enforced
+- `get_concept_detail()` mock pattern: needs TWO side_effect execute() returns — first for chunks, second for images
+- `/health` post-migration: must have `chunk_count`, `graph_nodes`, `graph_edges`; must NOT have `collection_count`
+- `find_remediation_prereq()` new signature: `(concept_id, chunk_ksvc, book_slug, mastery_store)` — calls `chunk_ksvc.get_predecessors()`, NOT `graph.predecessors()`
+- `start_session` book validation: calls `chunk_ksvc.get_active_books(db)` async; returns HTTP 400 with book_slug name in detail if not in active set
+- `_build_main_test_app()` returns `(app, mock_ksvc)` tuple — remember to destructure it in fixtures

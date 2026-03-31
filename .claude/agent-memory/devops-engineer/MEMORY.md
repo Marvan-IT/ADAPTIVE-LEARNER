@@ -6,6 +6,9 @@
 - **Test markers**: `unit`, `integration`, `e2e` registered in `conftest.py` via `pytest_configure`
 - **sys.path setup**: `conftest.py` inserts `backend/src` at index 0 so tests import project source without an editable install
 - **Test location**: `backend/tests/` — `pytest.ini` sets `testpaths = tests`
+- **Async fixture decorator**: new async fixtures use `@pytest_asyncio.fixture`; existing `db_session` uses plain `@pytest.fixture` (works under `asyncio_mode=auto` — leave as-is to avoid churn)
+- **DB factory fixtures**: `test_chunk` and `test_chunk_image` in `conftest.py` create live rows for integration tests; both auto-skip if DB is unavailable (inherit from `db_session`)
+- **Model imports in fixtures**: lazy-imported inside the fixture body (`from db.models import ConceptChunk`) — `sys.path` is already set by the module-level insert so `db.models` resolves correctly
 
 ## Alembic Setup
 
@@ -34,7 +37,7 @@
 | `backend/alembic/versions/003_add_xp_streak_and_indices.py` | students.xp, students.streak, three FK indexes |
 | `backend/alembic/versions/004_add_socratic_remediation_fields.py` | TeachingSession remediation columns + 3 new indexes |
 | `backend/alembic/versions/0001_initial_schema.py` | Baseline: SELECT 1 no-op + ck_session_phase + ck_check_score_range CHECK constraints (idempotent) |
-| `backend/alembic/versions/006_chunk_architecture.py` | pgvector extension + concept_chunks (HNSW index) + chunk_images + 5 TeachingSession exam columns |
+| `backend/alembic/versions/006_chunk_architecture.py` | pgvector extension + concept_chunks (HNSW index) + chunk_images + 5 TeachingSession exam columns — verified complete; no 007 needed |
 | `backend/alembic/__init__.py` | Empty init file for alembic package |
 | `backend/Dockerfile` | Multi-stage: python:3.11-slim, non-root user ada, port 8889 |
 | `frontend/Dockerfile` | Multi-stage: node:20-alpine builder → nginx:alpine, port 80 |
@@ -88,6 +91,20 @@ All endpoints in `teaching_router.py` use `@limiter.limit()`. The `adaptive_rout
 | college_algebra | 7 cross-chapter edges (Ch2→Ch5, Ch3→Ch4, Ch3→Ch6, Ch5→Ch7, etc.) | Missing inter-chapter prerequisite links |
 | elementary_algebra | `ELEMALG.C2.S7` → `ELEMALG.C3.S1.USE_A_PROBLEM_SOLVING_STRATEGY` | Isolated node fix |
 | intermediate_algebra | `INTERALG.C9.S8` → `INTERALG.C10.S1.FINDING_COMPOSITE_AND_INVERSE_FUNCTIONS` | Isolated node fix |
+
+## graph_builder.py Notes
+
+- `psql` binary is at `C:/Program Files/PostgreSQL/18/bin/psql.exe` on this machine (not in PATH)
+- When running graph_builder.py directly, use `PYTHONPATH=backend/src python backend/src/extraction/graph_builder.py --book <slug>`
+- **Bug fixed 2026-03-28**: `SELECT DISTINCT ... ORDER BY order_index` fails in PostgreSQL when `order_index` is not in the SELECT list. Fixed by removing `.order_by(ConceptChunk.order_index)` — the numeric re-sort on `_section_sort_key` at line 96 gives correct chapter/section ordering anyway.
+- Prealgebra graph: 60 nodes, 49 edges (60 sections - 11 chapters = 49 sequential edges, one per chapter boundary)
+- Concept ID format in graph.json: `{book_slug}_{chapter}.{section}` e.g. `prealgebra_1.1`
+
+## concept_chunks Cleanup (2026-03-28)
+
+- Prealgebra had 70 spurious concept_ids (exercise problem numbers like `prealgebra_2.9`); reparented 10 of them to their parent sections
+- After cleanup: 60 distinct concept_ids, 1063 total chunks preserved (no data deleted)
+- Rows updated per statement: 2.9+2.10→2.1 (8 rows), 3.7+3.8→3.1 (12 rows), 6.6+6.10→6.1 (6 rows), 6.7→6.2 (11 rows), 10.9→10.4 (19 rows), 11.7+11.8→11.1 (11 rows)
 
 ## Notes
 

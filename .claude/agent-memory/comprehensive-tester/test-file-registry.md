@@ -85,6 +85,45 @@ type: project
 - Fix 12 (4): parse_card_image_ref strips [CARD:N]; out-of-bounds → None
 - Fix 13 (3): base_url default is `""` not `localhost:8000`
 
+### test_chunk_parser.py — 59 tests (7 groups)
+- `TestIsNoiseHeading` (16), `TestExtractLatex` (7), `TestExtractImageUrls` (4), `TestWordCount` (4), `TestParsedChunkDataclass` (2), `TestParseBookMmdWithSyntheticContent` (13) — all unit, always run
+- `TestChunkParserIntegration` (10) — requires `output/prealgebra/book.mmd`; auto-skipped when absent
+- Synthetic tests write temp .mmd files via `tmp_path` fixture; no real book needed
+- Key parser facts: `_MAX_REAL_SECTION_IN_CHAPTER = 10`; sections > 10 skipped as figure refs
+- Dedup key: `(concept_id, heading)` — winner is highest word count copy
+
+### test_lesson_card_schema.py — 31 tests (2 groups)
+- `TestCardMCQSchema` (13), `TestLessonCardSchema` (18)
+- CardMCQ fields: `text`, `options` (exactly 4), `correct_index` (0–3), `explanation`, `difficulty`
+- LessonCard fields: `index`, `title`, `content`, `image_url`, `caption`, `question`, `chunk_id`, `is_recovery`
+- Legacy fields NOT present: `card_type`, `image_indices`, `images`, `question2`
+
+### test_chunk_knowledge_service.py — 26 tests (6 groups)
+- `TestChunkToDictUnit` (6), `TestGetChunkUUIDValidationUnit` (4), `TestGetChunkImagesUnit` (2), `TestGetChunksForConceptUnit` (3), `TestGetActiveBooksUnit` (3), `TestGetChunkCountUnit` (4) — all unit, always run
+- `TestChunkKnowledgeServiceIntegration` (4) — marked `@pytest.mark.integration`; requires live DB
+- `_chunk_to_dict()` always returns `images=[]` (populated separately via `get_chunk_images()`)
+- UUID validation: `get_chunk(db, bad_uuid)` returns None without querying DB
+- Added: `test_get_chunks_for_concept_returns_order_index_asc` — verifies ascending order preservation
+
+### test_get_chunks_endpoint.py — 20 tests (8 groups)
+- `TestChunksReturnedInTextbookOrder` (2), `TestChunksEmptyForChromaDBSession` (2), `TestHasImagesFlagReflectsDb` (3), `TestCurrentChunkIndexFromSession` (3), `TestSessionNotFound` (1), `TestSectionTitle` (2), `TestHasMcqFlag` (4), `TestChunkSummarySchema` (3)
+- Uses `_MockDb` class with `_execute_call_count` counter: call 1 returns ConceptChunk scalars, call 2 returns ChunkImage chunk_ids via fetchall
+- `session.chunk_index=None` is handled by `session.chunk_index or 0` — returns 0
+- `_heading_has_mcq()` returns False for: learning objectives, key terms, key concepts, summary, chapter review, review exercises, practice test
+
+### test_exam_endpoints.py — 33 tests (3 groups)
+- `TestExamStart` (7), `TestExamSubmit` (12), `TestExamRetry` (10)
+- `CHUNK_EXAM_PASS_RATE = 0.65` — pass threshold is inclusive (>=)
+- `retry_options = ["targeted", "full_redo"] if new_attempt < 3 else ["full_redo"]` — targeted blocked at attempt==3
+- exam/retry returns `exam_attempt=current_attempt` (NOT incremented; submit increments it)
+- `_ExamMockDb`: `scalar_one_or_none()` for StudentMastery race-condition guard; `db.add()` used for new mastery row
+- `_RetryMockDb`: handles ChunkImage distinct query in retry handler via `fetchall() → []`
+
+### test_prompt_builder_chunk.py — 30 tests (6 groups)
+- `TestContentInclusion` (4), `TestStudentMode` (7), `TestPersonalization` (6), `TestLanguage` (4), `TestImageBlock` (7), `TestOutputFormatInstruction` (3), `TestDeterminism` (2)
+- `build_chunk_card_prompt()` returns a single string (not a tuple); no image block when `images=[]`
+- Image block key string: `"IMAGES IN THIS CHUNK"` followed by indexed URLs
+
 ### test_universal_cards.py — 40 tests (6 groups)
 - `textwrap.dedent()` required before `ast.parse(inspect.getsource(...))`
 - `_CARDS_CACHE_VERSION=21` (verify via source regex — local var, not importable)
@@ -112,3 +151,16 @@ type: project
 
 ### test_concept_enrichment.py — 17 tests (3 groups)
 - `store_concept_blocks`, `annotate_image`, `KnowledgeService._get_latex`, `get_concept_images`
+
+### test_card_generation_fixes.py — 21 tests (4 groups)
+- `TestImageToDataUrl` (4), `TestNonTeachingPatterns` (9), `TestBuildChunkCardPromptFinalInstruction` (2), `TestModeDeliveryBlocks` (6)
+- Fix 6: `_image_to_data_url` uses `find()` — full URLs tested; patch target is `config.OUTPUT_DIR` (NOT `api.teaching_service.OUTPUT_DIR`) because it's imported locally inside the function body
+- Fix 3: `_NO_TEACHING_PATTERNS` is a local var inside `generate_per_chunk()` — replicated in test file as module-level constant with `_should_skip()` helper
+- Fix 5/8: `build_chunk_card_prompt()` final instruction must contain "every step" and "genuinely teach"; `_CARD_MODE_DELIVERY["FAST"]` imported directly from `adaptive.prompt_builder`
+
+### test_generate_per_chunk.py — 5 tests (4 groups)
+- `TestGeneratePerChunkRaisesOnEmptyOutput` (1), `TestGeneratePerChunkSystemPromptSourceRule` (1), `TestGeneratePerChunkModeDeliveryInjection` (2), `TestGeneratePerChunkUpdatesSessionMode` (1)
+- `build_blended_analytics` is called with `await` inside `generate_per_chunk` → mock must be `AsyncMock`, not just `return_value=dict`
+- Patch target: `"adaptive.adaptive_engine.build_blended_analytics"` (local import inside method → patches the module attribute at call time)
+- `_build_service()` replaces `svc.openai` and `svc._chunk_ksvc`; `mock_db.get = AsyncMock(return_value=_make_student())`
+- STRUGGLING delivery block phrases: `"age 8"` and `"Numbered steps: ALWAYS"`; FAST phrase: `"technical terminology"`

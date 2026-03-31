@@ -501,6 +501,9 @@ export function SessionProvider({ children }) {
     if (err.response?.status === 401) {
       return "Authentication failed — check API key config.";
     }
+    if (err.response?.status === 503) {
+      return err.response?.data?.detail || "Service not ready — please wait a moment and try again.";
+    }
     if (err.response?.status >= 400) {
       return err.response?.data?.detail || `Server error (${err.response.status})`;
     }

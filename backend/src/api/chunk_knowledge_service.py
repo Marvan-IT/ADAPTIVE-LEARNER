@@ -283,7 +283,7 @@ class ChunkKnowledgeService:
         chunks = result.scalars().all()
         if not chunks:
             return None
-        primary = max(chunks, key=lambda c: len(c.text))
+        primary = max(chunks, key=lambda c: len(c.text or ""))
         all_latex = [expr for c in chunks for expr in (c.latex or [])]
         chunk_ids = [c.id for c in chunks]
         img_result = await db.execute(
@@ -293,7 +293,7 @@ class ChunkKnowledgeService:
         )
         images = [
             {"image_url": img.image_url, "caption": img.caption,
-             "url": img.image_url, "filename": img.image_url.split("/")[-1],
+             "url": img.image_url, "filename": (img.image_url or "").split("/")[-1],
              "width": 0, "height": 0, "image_type": "figure",
              "page": 0, "description": img.caption or "", "relevance": "relevant"}
             for img in img_result.scalars().all()

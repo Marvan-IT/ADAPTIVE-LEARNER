@@ -5,7 +5,23 @@ FastAPI async backend for ADA adaptive learning platform.
 Working dir: `c:\files\Desktop\ADA\`
 Backend source root: `c:\files\Desktop\ADA\backend\src\`
 sys.path convention: `sys.path.insert(0, str(Path(__file__).resolve().parent.parent))` so all imports
-inside `backend/src/` use bare package names (`from api.knowledge_service import ...`, `from db.models import ...`).
+inside `backend/src/` use bare package names (`from api.chunk_knowledge_service import ...`, `from db.models import ...`).
+
+## ChromaDB → PostgreSQL Migration (completed 2026-03-28)
+`KnowledgeService` (ChromaDB) is DELETED. All data comes from PostgreSQL + `graph.json`.
+- `api/knowledge_service.py` — DELETED
+- `storage/chroma_store.py` — DELETED
+- `chromadb` removed from `requirements.txt`
+- `ChunkKnowledgeService` (`api/chunk_knowledge_service.py`) now handles ALL knowledge queries
+- Graph methods (`get_predecessors`, `get_concept_node`, etc.) added to `ChunkKnowledgeService` (sync, graph.json-backed)
+- `get_concept_detail(db, concept_id, book_slug)` is ASYNC — callers must `await` it
+- `find_remediation_prereq(concept_id, chunk_ksvc, book_slug, mastery_store)` — new signature
+- `generate_adaptive_lesson(chunk_ksvc, book_slug, db, ...)` — new signature
+- `generate_recovery_card(chunk_ksvc, book_slug, db, ...)` — new signature
+- `generate_next_card(chunk_ksvc, book_slug, ...)` — new signature
+- `adaptive_router` global: `adaptive_chunk_ksvc` (injected from main.py); old `adaptive_knowledge_services` removed
+- Image URLs from DB are: `http://localhost:8889/images/{book_slug}/images_downloaded/{hash}.jpg`
+  Output dir `OUTPUT_DIR/prealgebra/` is mounted at `/images/prealgebra/`
 
 ## Key Architectural Decisions
 
