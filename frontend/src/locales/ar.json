@@ -8,6 +8,7 @@
   "nav.conceptMap": "خريطة المفاهيم",
   "nav.switch": "تبديل",
   "nav.greeting": "مرحبا، {{name}}!",
+  "nav.backToSubsections": "العودة إلى الأقسام الفرعية",
   "welcome.title": "من يتعلم اليوم؟",
   "welcome.subtitle": "اختر ملفك الشخصي للمتابعة، أو أنشئ ملفا جديدا.",
   "welcome.noStudents": "لا يوجد طلاب بعد. أنشئ طالبا للبدء!",

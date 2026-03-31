@@ -8,6 +8,7 @@
   "nav.conceptMap": "Concept Map",
   "nav.switch": "Switch",
   "nav.greeting": "Hi, {{name}}!",
+  "nav.backToSubsections": "Back to subsections",
   "welcome.title": "Who's learning today?",
   "welcome.subtitle": "Select your profile to continue, or create a new one.",
   "welcome.noStudents": "No students yet. Create one to get started!",

@@ -576,20 +576,40 @@ export function SessionProvider({ children }) {
         return;
       }
 
-      // CASE A2: second MCQ fail → RECAP card from explanation, then advance
+      // CASE A2: second MCQ fail → API recovery card (with inline fallback), then advance
       if (signals?.wrongAttempts >= 2) {
         const currentCard = state.cards[state.currentCardIndex];
-        if (currentCard?.question?.explanation) {
-          const recapCard = {
-            index: state.currentCardIndex + 0.5,
-            title: `Recap: ${currentCard.title || "Key Rule"}`,
-            content: `**Key rule:** ${currentCard.question.explanation}`,
-            image_url: null,
-            caption: null,
-            question: null,
-            is_recovery: true,
-          };
-          dispatch({ type: "INSERT_RECOVERY_CARD", payload: recapCard });
+        const _makeRecap = (card) => ({
+          index: state.currentCardIndex + 0.5,
+          title: `Recap: ${card.title || "Key Rule"}`,
+          content: `**Key rule:** ${card.question?.explanation || "Review this topic."}`,
+          image_url: null, caption: null, question: null, is_recovery: true,
+        });
+        if (currentCard?.chunk_id && signals?.reExplainCardTitle) {
+          dispatch({ type: "ADAPTIVE_CALL_STARTED" });
+          try {
+            const res = await generateChunkRecoveryCard(
+              state.session.id,
+              currentCard.chunk_id,
+              state.currentCardIndex,
+              signals?.wrongAnswer ? [signals.wrongAnswer] : [],
+            );
+            if (res?.recovery_card) {
+              dispatch({ type: "INSERT_RECOVERY_CARD", payload: res.recovery_card });
+            } else if (currentCard?.question?.explanation) {
+              dispatch({ type: "INSERT_RECOVERY_CARD", payload: _makeRecap(currentCard) });
+            }
+          } catch (err) {
+            console.error("[SessionContext] recovery card fetch failed:", err);
+            if (currentCard?.question?.explanation) {
+              dispatch({ type: "INSERT_RECOVERY_CARD", payload: _makeRecap(currentCard) });
+            }
+            dispatch({ type: "ADAPTIVE_CARD_ERROR" });
+          } finally {
+            dispatch({ type: "ADAPTIVE_CALL_DONE" });
+          }
+        } else if (currentCard?.question?.explanation) {
+          dispatch({ type: "INSERT_RECOVERY_CARD", payload: _makeRecap(currentCard) });
         }
         dispatch({ type: "NEXT_CARD" });
         return;

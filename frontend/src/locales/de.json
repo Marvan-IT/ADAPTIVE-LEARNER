@@ -8,6 +8,7 @@
   "nav.conceptMap": "Konzeptkarte",
   "nav.switch": "Wechseln",
   "nav.greeting": "Hallo, {{name}}!",
+  "nav.backToSubsections": "Zurück zu den Unterabschnitten",
   "welcome.title": "Wer lernt heute?",
   "welcome.subtitle": "Wähle dein Profil aus, um fortzufahren, oder erstelle ein neues.",
   "welcome.noStudents": "Noch keine Schüler. Erstelle einen, um loszulegen!",

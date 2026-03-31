@@ -404,7 +404,7 @@ export default function CardLearningView({ remediationMode = false }) {
               hintsUsed:           hintsUsedRef.current,
               idleTriggers:        idleTriggerCount,
               // Anti-loop: don't request recovery for a recovery card
-              reExplainCardTitle:  !card?.is_recovery ? (card?.title ?? null) : null,
+              reExplainCardTitle:  card?.title ?? null,
               wrongQuestion:       mcq?.question || null,
               wrongAnswerText:     mcq?.options?.[selectedWrongOptionRef.current] || null,
             });

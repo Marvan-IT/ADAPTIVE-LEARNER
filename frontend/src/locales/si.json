@@ -8,6 +8,7 @@
   "nav.conceptMap": "සංකල්ප සිතියම",
   "nav.switch": "මාරු කරන්න",
   "nav.greeting": "ආයුබෝවන්, {{name}}!",
+  "nav.backToSubsections": "උප කොටස් වෙත ආපසු",
   "welcome.title": "අද ඉගෙන ගන්නේ කවුද?",
   "welcome.subtitle": "ඉදිරියට යාමට ඔබේ පැතිකඩ තෝරන්න, නැතිනම් අලුත් එකක් සාදන්න.",
   "welcome.noStudents": "තවම සිසුන් නැත. ආරම්භ කිරීමට එකක් සාදන්න!",

@@ -8,6 +8,7 @@
   "nav.conceptMap": "Carte des concepts",
   "nav.switch": "Changer",
   "nav.greeting": "Salut, {{name}} !",
+  "nav.backToSubsections": "Retour aux sous-sections",
   "welcome.title": "Qui apprend aujourd'hui ?",
   "welcome.subtitle": "Sélectionne ton profil pour continuer, ou crée un nouveau.",
   "welcome.noStudents": "Aucun élève pour le moment. Crée un profil pour commencer !",

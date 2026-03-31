@@ -8,6 +8,7 @@
   "nav.conceptMap": "知识地图",
   "nav.switch": "切换",
   "nav.greeting": "你好，{{name}}！",
+  "nav.backToSubsections": "返回子节",
   "welcome.title": "今天谁来学习？",
   "welcome.subtitle": "选择你的档案继续学习，或创建一个新档案。",
   "welcome.noStudents": "还没有学生，创建一个开始吧！",

@@ -8,6 +8,7 @@
   "nav.conceptMap": "개념 지도",
   "nav.switch": "전환",
   "nav.greeting": "안녕, {{name}}!",
+  "nav.backToSubsections": "하위 섹션으로 돌아가기",
   "welcome.title": "오늘 누가 공부할까요?",
   "welcome.subtitle": "프로필을 선택해서 계속하거나 새 프로필을 만들어 보세요.",
   "welcome.noStudents": "아직 학생이 없어요. 하나 만들어서 시작하세요!",

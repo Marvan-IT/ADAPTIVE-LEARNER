@@ -8,6 +8,7 @@
   "nav.conceptMap": "コンセプトマップ",
   "nav.switch": "切り替え",
   "nav.greeting": "こんにちは、{{name}}！",
+  "nav.backToSubsections": "サブセクションに戻る",
   "welcome.title": "今日は誰が学ぶ？",
   "welcome.subtitle": "プロフィールを選んで続けるか、新しいプロフィールを作ろう。",
   "welcome.noStudents": "まだ生徒がいません。作成して始めましょう！",

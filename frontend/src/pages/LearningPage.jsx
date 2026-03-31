@@ -235,7 +235,7 @@ export default function LearningPage() {
   // ── Subsection picker ──────────────────────────────────────────────────────
   if (phase === "SELECTING_CHUNK") {
     const visibleChunks = (chunkList || []).filter(
-      (c) => c.chunk_type !== "exam_question_source"
+      (c) => c.chunk_type !== "exam_question_source" && (c.has_mcq || c.chunk_type === "exercise_gate")
     );
 
     const handleStartClick = (chunkId) => {
@@ -634,7 +634,7 @@ export default function LearningPage() {
 
   return (
     <div style={{
-      maxWidth: isCardPhase ? "1100px" : "800px",
+      maxWidth: "800px",
       margin: "0 auto",
       padding: "1.5rem 1.5rem 3rem",
     }}>
@@ -835,48 +835,46 @@ export default function LearningPage() {
 
       {/* Primary learning phases */}
       {phase === "CARDS" && (
-        chunkList?.length > 0 ? (
-          <div style={{ display: "flex", gap: 0 }}>
-            <SubsectionNav
-              chunkList={chunkList}
-              chunkProgress={chunkProgress}
-              currentChunkId={currentChunkId}
-              allStudyComplete={allStudyComplete}
-              currentMode={currentChunkMode}
-              onExamClick={() => startExamFlow?.()}
-              onExitSubsection={() => dispatch({ type: "RETURN_TO_PICKER" })}
-            />
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <CardLearningView />
+        <div>
+          {chunkList?.length > 0 && (
+            <div style={{ marginBottom: "0.75rem" }}>
+              <button
+                onClick={() => dispatch({ type: "RETURN_TO_PICKER" })}
+                style={{
+                  background: "none", border: "none", cursor: "pointer",
+                  color: "var(--color-primary, #7c3aed)", fontSize: "0.875rem",
+                  padding: "0.25rem 0.5rem", display: "flex", alignItems: "center", gap: "0.25rem",
+                }}
+              >
+                ← {t("nav.backToSubsections", "Back to subsections")}
+              </button>
             </div>
-          </div>
-        ) : (
+          )}
           <CardLearningView />
-        )
+        </div>
       )}
       {phase === "CHECKING" && <SocraticChat />}
       {phase === "COMPLETED" && <CompletionView />}
 
       {/* Remediation phases — cards with remediation banner */}
       {(phase === "REMEDIATING" || phase === "REMEDIATING_2") && (
-        chunkList?.length > 0 ? (
-          <div style={{ display: "flex", gap: 0 }}>
-            <SubsectionNav
-              chunkList={chunkList}
-              chunkProgress={chunkProgress}
-              currentChunkId={currentChunkId}
-              allStudyComplete={allStudyComplete}
-              currentMode={currentChunkMode}
-              onExamClick={() => startExamFlow?.()}
-              onExitSubsection={() => dispatch({ type: "RETURN_TO_PICKER" })}
-            />
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <CardLearningView remediationMode={true} />
+        <div>
+          {chunkList?.length > 0 && (
+            <div style={{ marginBottom: "0.75rem" }}>
+              <button
+                onClick={() => dispatch({ type: "RETURN_TO_PICKER" })}
+                style={{
+                  background: "none", border: "none", cursor: "pointer",
+                  color: "var(--color-primary, #7c3aed)", fontSize: "0.875rem",
+                  padding: "0.25rem 0.5rem", display: "flex", alignItems: "center", gap: "0.25rem",
+                }}
+              >
+                ← {t("nav.backToSubsections", "Back to subsections")}
+              </button>
             </div>
-          </div>
-        ) : (
+          )}
           <CardLearningView remediationMode={true} />
-        )
+        </div>
       )}
 
       {/* Re-check phases — Socratic chat with recheck banner */}

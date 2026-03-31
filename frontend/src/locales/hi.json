@@ -8,6 +8,7 @@
   "nav.conceptMap": "अवधारणा मानचित्र",
   "nav.switch": "बदलें",
   "nav.greeting": "नमस्ते, {{name}}!",
+  "nav.backToSubsections": "उपखंडों पर वापस जाएं",
   "welcome.title": "आज कौन सीखेगा?",
   "welcome.subtitle": "जारी रखने के लिए अपनी प्रोफ़ाइल चुनो, या नई बनाओ।",
   "welcome.noStudents": "अभी कोई छात्र नहीं है। शुरू करने के लिए एक बनाओ!",
