@@ -148,14 +148,8 @@ export const getChunkList = (sessionId) =>
 export const completeChunk = (sessionId, payload) =>
   api.post(`/api/v2/sessions/${sessionId}/complete-chunk`, payload);
 
-export const startExam = (sessionId, data) =>
-  api.post(`/api/v2/sessions/${sessionId}/exam/start`, data, { timeout: 60000 });
-
-export const submitExam = (sessionId, data) =>
-  api.post(`/api/v2/sessions/${sessionId}/exam/submit`, data, { timeout: 120000 });
-
-export const retryExam = (sessionId, data) =>
-  api.post(`/api/v2/sessions/${sessionId}/exam/retry`, data, { timeout: 30000 });
+export const evaluateChunkAnswers = (sessionId, chunkId, data) =>
+  api.post(`/api/v2/sessions/${sessionId}/chunks/${chunkId}/evaluate`, data, { timeout: 60000 });
 
 export const getBooks = async () => {
   const res = await api.get("/api/v2/books");

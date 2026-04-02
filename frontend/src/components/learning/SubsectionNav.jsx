@@ -2,31 +2,26 @@ import React from "react";
 import { useTranslation } from "react-i18next";
 
 /**
- * SubsectionNav — sidebar list of teaching subsections + EXAM button.
+ * SubsectionNav — sidebar list of teaching subsections.
  *
  * Props:
  *   chunkList      — ChunkSummary[] from backend (all chunks for current section)
  *   chunkProgress  — { chunk_id: { score, mode_used } } from SessionContext
  *   currentChunkId — UUID string of the chunk currently being studied
- *   allStudyComplete — bool: true when exam button unlocks
- *   onExamClick    — callback for when student clicks EXAM button
  *   currentMode    — "STRUGGLING" | "NORMAL" | "FAST"
  */
 export default function SubsectionNav({
   chunkList = [],
   chunkProgress = {},
   currentChunkId,
-  allStudyComplete = false,
-  onExamClick,
   currentMode = "NORMAL",
   onExitSubsection = null,
 }) {
   const { t } = useTranslation();
 
-  // Filter: only show teaching, practice, exercise_gate in nav
-  // exam_question_source chunks are HIDDEN (used only for exam questions internally)
+  // Hide exam_question_source chunks (internal only)
   const visibleChunks = chunkList.filter(
-    (c) => c.chunk_type !== "exam_question_source"
+    (c) => c.chunk_type !== "exam_question_source" && c.chunk_type !== "exercise_gate"
   );
 
   const modeColors = {
@@ -78,52 +73,11 @@ export default function SubsectionNav({
       </div>
 
       {visibleChunks.map((chunk, idx) => {
-        if (chunk.chunk_type === "exercise_gate") {
-          const locked = !allStudyComplete;
-          return (
-            <div
-              key={chunk.chunk_id}
-              onClick={locked ? undefined : onExamClick}
-              role={locked ? undefined : "button"}
-              tabIndex={locked ? undefined : 0}
-              onKeyDown={locked ? undefined : (e) => {
-                if (e.key === "Enter" || e.key === " ") onExamClick?.();
-              }}
-              aria-label={locked
-                ? t("subsectionNav.locked", "Complete previous subsections first")
-                : t("subsectionNav.exam", "Exam")}
-              style={{
-                margin: "8px 12px 0",
-                padding: "10px 12px",
-                borderRadius: "8px",
-                background: locked ? "#f1f5f9" : "#7c3aed",
-                color: locked ? "#94a3b8" : "#fff",
-                cursor: locked ? "not-allowed" : "pointer",
-                fontSize: "13px",
-                fontWeight: 600,
-                display: "flex",
-                alignItems: "center",
-                gap: "6px",
-                border: locked ? "1px dashed #cbd5e1" : "none",
-              }}
-            >
-              <span aria-hidden="true">📝</span>
-              <span>{t("subsectionNav.exam", "Exam")}</span>
-              {locked && (
-                <span style={{ fontSize: "10px", marginLeft: "auto", color: "#94a3b8" }}>
-                  {t("subsectionNav.lockedShort", "Locked")}
-                </span>
-              )}
-            </div>
-          );
-        }
-
         const isCurrent = chunk.chunk_id === currentChunkId;
         const isDone = chunk.chunk_id in chunkProgress;
         const score = chunkProgress[chunk.chunk_id]?.score;
         const isOptional = chunk.chunk_type === "practice";
-        const isLocked = chunk.chunk_type !== "exercise_gate"
-          && idx > 0
+        const isLocked = idx > 0
           && !(visibleChunks[idx - 1]?.chunk_id in (chunkProgress || {}));
 
         return (

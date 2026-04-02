@@ -15,9 +15,7 @@ import {
   generateChunkRecoveryCard,
   getChunkList,
   completeChunk,
-  startExam,
-  submitExam,
-  retryExam,
+  evaluateChunkAnswers,
   switchStyle,
   updateSessionInterests,
 } from "../api/sessions";
@@ -86,11 +84,9 @@ const initialState = {
   currentChunkMode: "NORMAL",
   allStudyComplete: false,
   modeJustChanged: false,
-  // Exam state
-  examPhase: null,
-  examQuestions: [],
-  examAttempt: 0,
-  examScores: null,
+  // Per-chunk Q&A state
+  chunkQuestions: [],
+  chunkEvalResult: null,
 };
 
 // Valid phases: IDLE, LOADING, SELECTING_CHUNK, CARDS, CHECKING, COMPLETED,
@@ -280,12 +276,15 @@ function sessionReducer(state, action) {
         nextChunkCards: null,
         nextChunkInFlight: false,
         loading: false,
+        chunkEvalResult: null,
+        chunkQuestions: [],
       };
 
     case "CHUNK_CARDS_LOADED_NEW":
       return {
         ...state,
         cards: action.payload.cards,
+        chunkQuestions: action.payload.questions ?? [],
         currentCardIndex: 0,
         maxReachedIndex: 0,
         chunkIndex: action.payload.chunk_index_after ?? state.chunkIndex,
@@ -318,24 +317,28 @@ function sessionReducer(state, action) {
         hasMoreConcepts: (state.chunkIndex + 1) < state.chunkList.length - 1,
       };
 
-    case "EXAM_STARTED":
-      return {
-        ...state,
-        examPhase: "exam",
-        examQuestions: action.payload.questions,
-        examAttempt: action.payload.exam_attempt ?? 0,
-      };
+    case "SHOW_CHUNK_QUESTIONS":
+      return { ...state, phase: "CHUNK_QUESTIONS", chunkEvalResult: null };
 
-    case "EXAM_SUBMITTED":
-      return { ...state, examPhase: "submitted", examScores: action.payload };
-
-    case "EXAM_RETRY_SET":
-      return {
-        ...state,
-        examPhase: action.payload.exam_phase,
-        chunkList: action.payload.retry_chunks ?? state.chunkList,
-        chunkIndex: 0,
-      };
+    case "CHUNK_EVAL_RESULT": {
+      const { passed, all_study_complete, chunk_progress, ...rest } = action.payload;
+      let newState = { ...state, chunkEvalResult: { passed, all_study_complete, ...rest }, loading: false };
+      if (passed) {
+        if (chunk_progress) {
+          newState.chunkProgress = { ...state.chunkProgress, ...chunk_progress };
+        }
+        newState.allStudyComplete = all_study_complete;
+        if (all_study_complete) {
+          if (state.session?.concept_id) {
+            localStorage.removeItem(`ada_session_${state.session.concept_id}`);
+          }
+          newState.phase = "COMPLETED";
+        } else {
+          newState.phase = "CHUNK_QUESTIONS";
+        }
+      }
+      return newState;
+    }
 
     case "ADAPTIVE_CARD_ERROR":
       return {
@@ -582,6 +585,7 @@ export function SessionProvider({ children }) {
           type: "CHUNK_CARDS_LOADED_NEW",
           payload: {
             cards: res.cards,
+            questions: res.questions ?? [],
             chunk_index_after: res.chunk_index,
             chunk_id: chunkId,
           },
@@ -724,7 +728,6 @@ export function SessionProvider({ children }) {
   // Finish cards → transition to Socratic chat for mastery
   const finishCards = useCallback(async (signals) => {
     if (!state.session) return;
-    dispatch({ type: "TRANSITION_LOADING" });
     const correctCount = Object.values(state.cardAnswers).filter((a) => a.correct).length;
     trackEvent("cards_completed", {
       answers_correct: correctCount,
@@ -733,19 +736,34 @@ export function SessionProvider({ children }) {
       concept_title: state.conceptTitle,
     });
     try {
-      // 0. Save the last card's interaction (not recorded via goToNextCard)
       if (signals) {
         await recordCardInteraction(state.session.id, signals).catch((err) => console.error("[SessionContext] card interaction failed:", err));
       }
-      // 1. Complete cards (phase → CARDS_DONE)
       await completeCards(state.session.id);
-      // 2. Begin Socratic check (phase → CHECKING)
-      const checkRes = await beginCheck(state.session.id);
-      dispatch({ type: "CHECKING_STARTED", payload: checkRes.data });
     } catch (err) {
-      dispatch({ type: "ERROR", payload: friendlyError(err) });
+      console.error("[SessionContext] finishCards error:", err);
     }
-  }, [state.session, state.cardAnswers, state.conceptTitle]);
+    // If questions were generated for this chunk, show Q&A phase
+    if (state.chunkQuestions.length > 0) {
+      dispatch({ type: "SHOW_CHUNK_QUESTIONS" });
+    } else {
+      // No exam questions (info chunks, exercise chunks) — auto-complete at 100%
+      if (state.currentChunkId) {
+        try {
+          const res = await completeChunk(state.session.id, {
+            chunk_id: state.currentChunkId,
+            correct: 1,
+            total: 1,
+            mode_used: state.currentChunkMode || "NORMAL",
+          });
+          dispatch({ type: "CHUNK_COMPLETED", payload: res.data });
+        } catch (err) {
+          console.error("[finishCards] auto-complete chunk failed:", err);
+        }
+      }
+      dispatch({ type: "RETURN_TO_PICKER" });
+    }
+  }, [state.session, state.cardAnswers, state.conceptTitle, state.chunkQuestions, state.currentChunkId, state.currentChunkMode]);
 
   // Send answer during Socratic chat (CHECKING or RECHECKING/RECHECKING_2)
   const sendAnswer = useCallback(
@@ -828,42 +846,27 @@ export function SessionProvider({ children }) {
     dispatch({ type: "RETURN_TO_PICKER" });
   }, []);
 
-  const startExamFlow = useCallback(async () => {
+  const submitChunkAnswers = useCallback(async (chunkId, questions, answers, modeUsed) => {
     if (!state.session) return;
-    dispatch({ type: "START_LOADING" });
+    dispatch({ type: "TRANSITION_LOADING" });
     try {
-      const res = await startExam(state.session.id, { concept_id: state.session.concept_id });
-      dispatch({ type: "EXAM_STARTED", payload: res.data });
-    } catch (err) {
-      console.error("[exam] start failed:", err);
-      dispatch({ type: "ERROR", payload: "Failed to start exam" });
-    }
-  }, [state.session]);
-
-  const submitExamAnswers = useCallback(async (answers) => {
-    if (!state.session) return;
-    try {
-      const res = await submitExam(state.session.id, { answers });
-      dispatch({ type: "EXAM_SUBMITTED", payload: res.data });
+      const res = await evaluateChunkAnswers(state.session.id, chunkId, {
+        questions,
+        answers,
+        mode_used: modeUsed || "NORMAL",
+      });
+      dispatch({ type: "CHUNK_EVAL_RESULT", payload: res.data });
       if (res.data.passed) {
-        await refreshMastery();
+        refreshMastery();
+        if (!res.data.all_study_complete) {
+          setTimeout(() => dispatch({ type: "RETURN_TO_PICKER" }), 2000);
+        }
       }
     } catch (err) {
-      console.error("[exam] submit failed:", err);
-      dispatch({ type: "ERROR", payload: "Failed to submit exam" });
+      console.error("[SessionContext] submitChunkAnswers failed:", err);
+      dispatch({ type: "ERROR", payload: friendlyError(err) });
     }
-  }, [state.session]);
-
-  const retryExamFlow = useCallback(async (retryType, failedChunkIds = []) => {
-    if (!state.session) return;
-    try {
-      const res = await retryExam(state.session.id, { retry_type: retryType, failed_chunk_ids: failedChunkIds });
-      dispatch({ type: "EXAM_RETRY_SET", payload: res.data });
-    } catch (err) {
-      console.error("[exam] retry failed:", err);
-      dispatch({ type: "ERROR", payload: "Failed to set up retry" });
-    }
-  }, [state.session]);
+  }, [state.session, refreshMastery]);
 
   const completeChunkAction = useCallback(async (chunkId, correct, total, modeUsed) => {
     if (!state.session?.id) return;
@@ -904,9 +907,7 @@ export function SessionProvider({ children }) {
         loadChunkCards,
         goToNextChunk,
         completeChunkAction,
-        startExamFlow,
-        submitExamAnswers,
-        retryExamFlow,
+        submitChunkAnswers,
         currentChunkIndex: state.currentChunkIndex,
         totalChunks: state.totalChunks,
         // Chunk navigation
@@ -919,11 +920,9 @@ export function SessionProvider({ children }) {
         currentChunkMode: state.currentChunkMode,
         allStudyComplete: state.allStudyComplete,
         modeJustChanged: state.modeJustChanged,
-        // Exam
-        examPhase: state.examPhase,
-        examQuestions: state.examQuestions,
-        examAttempt: state.examAttempt,
-        examScores: state.examScores,
+        // Per-chunk Q&A
+        chunkQuestions: state.chunkQuestions,
+        chunkEvalResult: state.chunkEvalResult,
       }}
     >
       {children}

@@ -1458,11 +1458,21 @@ class TeachingService:
                 "is_recovery": False,
             }]
 
-        # exercise_gate chunks (SECTION X.X EXERCISES) are shown as EXAM buttons in the
-        # frontend — they never generate study cards.
         _chunk_heading = (chunk.get("heading") or "") if isinstance(chunk, dict) else getattr(chunk, "heading", "")
-        if re.match(r"^section\s+\d+\.\d+", _chunk_heading.lower()):
-            return []
+
+        # Learning-objective chunks → single polished info card, no LLM call needed
+        _INFO_HEADINGS = ("learning objectives", "key terms", "key concepts", "summary")
+        if any(p in _chunk_heading.lower() for p in _INFO_HEADINGS):
+            return [{
+                "index": 0,
+                "title": _chunk_heading,
+                "content": chunk_text,
+                "image_url": None,
+                "caption": None,
+                "question": None,
+                "chunk_id": chunk_id,
+                "is_recovery": False,
+            }]
 
         try:
             images = await self._chunk_ksvc.get_chunk_images(db, chunk_id)

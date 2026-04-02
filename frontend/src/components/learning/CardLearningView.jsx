@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import { useAdaptiveStore } from "../../store/adaptiveStore";
 import { updateStudentProgress } from "../../api/students";
-import { regenerateMCQ, submitExam } from "../../api/sessions";
+import { regenerateMCQ } from "../../api/sessions";
 import { useStudent } from "../../context/StudentContext";
 import XPBurst from "../game/XPBurst";
 import StreakMeter from "../game/StreakMeter";
@@ -139,14 +139,6 @@ export default function CardLearningView({ remediationMode = false }) {
     nextChunkInFlight,
     nextChunkCards,
     goToNextChunk,
-    startExamFlow,
-    submitExamAnswers,
-    retryExamFlow,
-    // Exam state
-    examPhase,
-    examQuestions,
-    examAttempt,
-    examScores,
     // Chunk completion
     completeChunkAction,
     currentChunkMode,
@@ -181,39 +173,6 @@ export default function CardLearningView({ remediationMode = false }) {
 
   // Assistant panel reveal: hidden until first answer submitted
   const [showAssistant, setShowAssistant] = useState(true);
-
-  // Exam local state
-  const [examAnswers, setExamAnswers] = useState([]);
-  const [currentExamQ, setCurrentExamQ] = useState(0);
-
-  const updateExamAnswer = useCallback((idx, value) => {
-    setExamAnswers((prev) => {
-      const next = [...prev];
-      next[idx] = value;
-      return next;
-    });
-  }, []);
-
-  const handleExamNext = useCallback(async () => {
-    if (currentExamQ < examQuestions.length - 1) {
-      setCurrentExamQ((q) => q + 1);
-    } else {
-      // Last question — submit all answers
-      const answers = examQuestions.map((q, i) => ({
-        question_index: q.question_index,
-        answer_text: examAnswers[i] || "",
-      }));
-      await submitExamAnswers(answers);
-    }
-  }, [currentExamQ, examQuestions, examAnswers, submitExamAnswers]);
-
-  const handleRetry = useCallback(async (retryType) => {
-    const failedChunkIds = examScores?.failed_chunks?.map((c) => c.chunk_id) ?? [];
-    await retryExamFlow(retryType, failedChunkIds);
-    // After retry setup, reset exam local state for a fresh attempt
-    setExamAnswers([]);
-    setCurrentExamQ(0);
-  }, [examScores, retryExamFlow]);
 
   // Per-card signal tracking state (for AdaptiveSignalTracker display)
   const [wrongAttemptsDisplay, setWrongAttemptsDisplay] = useState(0);
@@ -570,174 +529,6 @@ export default function CardLearningView({ remediationMode = false }) {
     );
   }
 
-  // ── Exam phase: render exam UI instead of cards ──────────────────────────────
-  if (examPhase === "exam" && examQuestions.length > 0) {
-    const currentQ = examQuestions[currentExamQ];
-    return (
-      <div style={{ maxWidth: 700, margin: "0 auto", padding: "2rem" }}>
-        <div style={{ marginBottom: "0.5rem", color: "var(--text-secondary, var(--color-text-muted))", fontSize: "0.85rem" }}>
-          {t("exam.question")} {currentExamQ + 1} / {examQuestions.length}
-        </div>
-        {currentQ?.chunk_heading && (
-          <h3 style={{ margin: "0 0 0.75rem", fontSize: "1rem", fontWeight: 700, color: "var(--color-text)" }}>
-            {currentQ.chunk_heading}
-          </h3>
-        )}
-        <p style={{ fontSize: "1.05rem", lineHeight: 1.6, color: "var(--color-text)", marginBottom: "1rem" }}>
-          {currentQ?.question_text}
-        </p>
-        <label
-          htmlFor={`exam-answer-${currentExamQ}`}
-          style={{ display: "block", fontWeight: 600, fontSize: "0.9rem", marginBottom: "0.4rem", color: "var(--color-text)" }}
-        >
-          {t("exam.yourAnswer")}
-        </label>
-        <textarea
-          id={`exam-answer-${currentExamQ}`}
-          value={examAnswers[currentExamQ] || ""}
-          onChange={(e) => updateExamAnswer(currentExamQ, e.target.value)}
-          placeholder={t("exam.yourAnswer")}
-          rows={4}
-          style={{
-            width: "100%",
-            borderRadius: 8,
-            padding: "0.75rem",
-            fontSize: "1rem",
-            border: "2px solid var(--color-border)",
-            backgroundColor: "var(--color-surface)",
-            color: "var(--color-text)",
-            fontFamily: "inherit",
-            boxSizing: "border-box",
-            resize: "vertical",
-          }}
-        />
-        <div style={{ marginTop: "1rem", display: "flex", justifyContent: "flex-end" }}>
-          <button
-            onClick={handleExamNext}
-            disabled={!examAnswers[currentExamQ]?.trim()}
-            style={{
-              padding: "0.7rem 1.5rem",
-              borderRadius: 12,
-              border: "none",
-              backgroundColor: examAnswers[currentExamQ]?.trim() ? "var(--color-primary)" : "var(--color-border)",
-              color: examAnswers[currentExamQ]?.trim() ? "#fff" : "var(--color-text-muted)",
-              fontWeight: 700,
-              fontSize: "0.95rem",
-              cursor: examAnswers[currentExamQ]?.trim() ? "pointer" : "not-allowed",
-              fontFamily: "inherit",
-            }}
-          >
-            {currentExamQ < examQuestions.length - 1 ? t("exam.next") : t("exam.submit")}
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  if (examPhase === "submitted" && examScores) {
-    return (
-      <div style={{ maxWidth: 700, margin: "0 auto", padding: "2rem", textAlign: "center" }}>
-        <div style={{ fontSize: "2.5rem", color: examScores.passed ? "#16a34a" : "#dc2626", marginBottom: "0.5rem" }}>
-          {examScores.passed ? "✓" : "✗"}
-        </div>
-        <h2 style={{ fontSize: "1.5rem", fontWeight: 800, color: "var(--color-text)", margin: "0 0 0.5rem" }}>
-          {examScores.passed ? t("exam.passed") : t("exam.failed")}
-        </h2>
-        <p style={{ color: "var(--color-text-muted)", fontSize: "1rem", marginBottom: "1.5rem" }}>
-          {t("exam.score")}: {examScores.total_correct}/{examScores.total_questions} ({Math.round(examScores.score * 100)}%)
-        </p>
-
-        {!examScores.passed && (
-          <>
-            {examScores.failed_chunks?.length > 0 && (
-              <>
-                <h4 style={{ fontWeight: 700, color: "var(--color-text)", marginBottom: "0.5rem" }}>
-                  {t("exam.failedSections")}
-                </h4>
-                <ul style={{ listStyle: "none", padding: 0, marginBottom: "1.5rem" }}>
-                  {examScores.failed_chunks.map((c) => (
-                    <li key={c.chunk_id} style={{
-                      padding: "0.4rem 0.75rem",
-                      marginBottom: "0.35rem",
-                      borderRadius: 8,
-                      backgroundColor: "rgba(239,68,68,0.07)",
-                      border: "1px solid rgba(239,68,68,0.2)",
-                      color: "var(--color-text)",
-                      fontSize: "0.9rem",
-                    }}>
-                      {c.heading}
-                    </li>
-                  ))}
-                </ul>
-              </>
-            )}
-            <div style={{ display: "flex", gap: "1rem", justifyContent: "center", marginTop: "1rem", flexWrap: "wrap" }}>
-              <button
-                onClick={() => handleRetry("targeted")}
-                disabled={examAttempt >= 3}
-                style={{
-                  padding: "0.7rem 1.4rem",
-                  borderRadius: 12,
-                  border: "none",
-                  backgroundColor: examAttempt >= 3 ? "var(--color-border)" : "var(--color-primary)",
-                  color: examAttempt >= 3 ? "var(--color-text-muted)" : "#fff",
-                  fontWeight: 700,
-                  fontSize: "0.9rem",
-                  cursor: examAttempt >= 3 ? "not-allowed" : "pointer",
-                  fontFamily: "inherit",
-                }}
-              >
-                {t("exam.reviewFailed")}
-              </button>
-              <button
-                onClick={() => handleRetry("full_redo")}
-                style={{
-                  padding: "0.7rem 1.4rem",
-                  borderRadius: 12,
-                  border: "2px solid var(--color-border)",
-                  backgroundColor: "var(--color-surface)",
-                  color: "var(--color-text)",
-                  fontWeight: 700,
-                  fontSize: "0.9rem",
-                  cursor: "pointer",
-                  fontFamily: "inherit",
-                }}
-              >
-                {t("exam.startOver")}
-              </button>
-            </div>
-            {examAttempt >= 3 && (
-              <p style={{ color: "var(--color-text-muted)", fontSize: "0.85rem", marginTop: "1rem" }}>
-                {t("exam.maxAttemptsReached")}
-              </p>
-            )}
-          </>
-        )}
-
-        {examScores.passed && (
-          <button
-            onClick={() => finishCards(null)}
-            style={{
-              padding: "0.7rem 1.8rem",
-              borderRadius: 12,
-              border: "none",
-              backgroundColor: "var(--color-success)",
-              color: "#fff",
-              fontWeight: 700,
-              fontSize: "1rem",
-              cursor: "pointer",
-              fontFamily: "inherit",
-              boxShadow: "0 4px 12px rgba(34,197,94,0.3)",
-              marginTop: "0.5rem",
-            }}
-          >
-            {t("exam.continue")}
-          </button>
-        )}
-      </div>
-    );
-  }
-
   if (!card) {
     if (cards.length === 0) {
       return (
@@ -1020,7 +811,6 @@ export default function CardLearningView({ remediationMode = false }) {
           onPrev={goToPrevCard}
           onNext={handleNextCard}
           onNextChunk={handleNextChunk}
-          onStartExam={startExamFlow}
           onFinish={handleFinish}
           remediationMode={remediationMode}
           t={t}
@@ -1117,13 +907,12 @@ function RemediationBanner() {
 function NavButtons({
   currentCardIndex, maxReachedIndex, isLastCard, isLastCardOfNonFinalChunk,
   canProceed, loading, nextChunkInFlight, nextChunkCards,
-  onPrev, onNext, onNextChunk, onStartExam, onFinish, remediationMode, t,
+  onPrev, onNext, onNextChunk, onFinish, remediationMode, t,
 }) {
   // Determine which primary action to show on the right side
   const showNextSection = isLastCardOfNonFinalChunk && canProceed;
-  const showStartExam = isLastCard && canProceed && !remediationMode;
-  const showFinish = isLastCard && canProceed && remediationMode;
-  const showNextCard = !showNextSection && !showStartExam && !showFinish;
+  const showFinish = isLastCard && canProceed;
+  const showNextCard = !showNextSection && !showFinish;
 
   return (
     <div style={{
@@ -1170,34 +959,6 @@ function NavButtons({
           ) : (
             <>
               {t("learning.nextSection")} <ChevronRight size={18} />
-            </>
-          )}
-        </button>
-      )}
-
-      {showStartExam && (
-        <button
-          onClick={onStartExam}
-          disabled={loading}
-          style={{
-            display: "flex", alignItems: "center", gap: "0.4rem",
-            padding: "0.7rem 1.5rem", borderRadius: "12px", border: "none",
-            backgroundColor: loading ? "var(--color-border)" : "var(--color-success)",
-            color: "#fff", fontWeight: 700, fontSize: "0.95rem",
-            cursor: loading ? "not-allowed" : "pointer",
-            fontFamily: "inherit",
-            boxShadow: loading ? "none" : "0 4px 12px rgba(34,197,94,0.3)",
-          }}
-        >
-          {loading ? (
-            <>
-              <Loader size={18} style={{ animation: "spin 1s linear infinite" }} />
-              {t("learning.startingChat")}
-            </>
-          ) : (
-            <>
-              <Flag size={18} />
-              {t("learning.startExam")}
             </>
           )}
         </button>

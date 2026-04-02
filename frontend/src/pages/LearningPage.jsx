@@ -1,12 +1,10 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useParams, useNavigate, useSearchParams } from "react-router-dom";
+import { useParams, useNavigate } from "react-router-dom";
 import { useSession } from "../context/SessionContext";
-import { useTheme } from "../context/ThemeContext";
 import { useStudent } from "../context/StudentContext";
 import ProgressBar from "../components/learning/ProgressBar";
 import CardLearningView from "../components/learning/CardLearningView";
-import SubsectionNav from "../components/learning/SubsectionNav";
 import SocraticChat from "../components/learning/SocraticChat";
 import CompletionView from "../components/learning/CompletionView";
 import { trackEvent } from "../utils/analytics";
@@ -18,21 +16,20 @@ export default function LearningPage() {
   const { t } = useTranslation();
   const { conceptId } = useParams();
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
   const {
     phase, startLesson, error, reset,
     session, conceptTitle, currentCardIndex,
     cards, cardAnswers, messages,
     checkScore, bestScore,
     chunkList, chunkProgress, currentChunkId, currentChunkMode,
-    allStudyComplete, startExamFlow,
+    allStudyComplete, submitChunkAnswers, chunkQuestions, chunkEvalResult,
     startChunk, dispatch, loading,
   } = useSession();
-  const { setStyle } = useTheme();
   const { student } = useStudent();
 
   const [prereqWarning, setPrereqWarning] = useState(null);
   const [prereqChecked, setPrereqChecked] = useState(false);
+  const [chunkAnswers, setChunkAnswers] = useState({});
 
   // Per-chunk picker state
   const [selectedChunkId, setSelectedChunkId] = useState(null);
@@ -43,9 +40,6 @@ export default function LearningPage() {
   useEffect(() => {
     if (conceptId && phase === "IDLE" && !prereqChecked) {
       setPrereqChecked(true);
-      const urlStyle = searchParams.get("style");
-      if (urlStyle) setStyle(urlStyle);
-
       const decodedConceptId = decodeURIComponent(conceptId);
 
       const launchLesson = () => startLesson(decodedConceptId, null, []);
@@ -270,9 +264,11 @@ export default function LearningPage() {
 
   // ── Subsection picker ──────────────────────────────────────────────────────
   if (phase === "SELECTING_CHUNK") {
-    const visibleChunks = (chunkList || []).filter(
-      (c) => c.chunk_type !== "exam_question_source" && (c.has_mcq || c.chunk_type === "exercise_gate")
-    );
+    const visibleChunks = (chunkList || []).slice().sort((a, b) => {
+      if (a.chunk_type === "chapter_review" && b.chunk_type !== "chapter_review") return 1;
+      if (b.chunk_type === "chapter_review" && a.chunk_type !== "chapter_review") return -1;
+      return (a.order_index ?? 0) - (b.order_index ?? 0);
+    });
 
     const handleStartClick = (chunkId) => {
       if (selectedChunkId === chunkId) {
@@ -292,7 +288,9 @@ export default function LearningPage() {
 
     // Mode badge helpers
     const firstUncompletedIdx = visibleChunks.findIndex(
-      (c) => c.chunk_type !== "exercise_gate" && !(c.chunk_id in (chunkProgress || {}))
+      (c) => c.chunk_type !== "exercise_gate"
+        && c.chunk_type !== "learning_objective"
+        && !(c.chunk_id in (chunkProgress || {}))
     );
 
     const modeBadgeStyle = (mode, predicted = false) => ({
@@ -398,49 +396,19 @@ export default function LearningPage() {
 
         <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
           {visibleChunks.map((chunk, idx) => {
-            if (chunk.chunk_type === "exercise_gate") {
-              const locked = !allStudyComplete;
-              return (
-                <div
-                  key={chunk.chunk_id}
-                  onClick={locked ? undefined : () => startExamFlow?.()}
-                  role={locked ? undefined : "button"}
-                  tabIndex={locked ? undefined : 0}
-                  onKeyDown={locked ? undefined : (e) => {
-                    if (e.key === "Enter" || e.key === " ") startExamFlow?.();
-                  }}
-                  style={{
-                    padding: "14px 16px",
-                    borderRadius: "12px",
-                    background: locked ? "var(--color-surface)" : "var(--color-primary)",
-                    color: locked ? "var(--color-text-muted)" : "#fff",
-                    cursor: locked ? "not-allowed" : "pointer",
-                    border: locked ? "1px dashed var(--color-border)" : "none",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "8px",
-                    fontWeight: 600,
-                    fontSize: "14px",
-                  }}
-                >
-                  <span aria-hidden="true">📝</span>
-                  <span>{t("subsectionNav.exam", "Exam")}</span>
-                  {locked && (
-                    <span style={{ fontSize: "11px", marginLeft: "auto", color: "var(--color-text-muted)" }}>
-                      {t("subsectionNav.lockedShort", "Locked")}
-                    </span>
-                  )}
-                </div>
-              );
-            }
-
             const isDone = chunk.chunk_id in (chunkProgress || {});
             const score = chunkProgress?.[chunk.chunk_id]?.score;
-            const isOptional = chunk.chunk_type === "practice";
+            const isOptional = chunk.is_optional === true;
+            const isInfoPanel = chunk.chunk_type === "learning_objective";
+            const isReview = chunk.chunk_type === "chapter_review";
             const isExpanded = selectedChunkId === chunk.chunk_id;
-            const isLocked = chunk.chunk_type !== "exercise_gate"
-              && idx > 0
-              && !(visibleChunks[idx - 1]?.chunk_id in (chunkProgress || {}));
+            // Only lock against previous non-info chunks
+            const prevRequired = visibleChunks.slice(0, idx).filter(
+              (c) => c.chunk_type !== "learning_objective"
+            );
+            const isLocked = !isInfoPanel
+              && prevRequired.length > 0
+              && !(prevRequired[prevRequired.length - 1]?.chunk_id in (chunkProgress || {}));
 
             return (
               <div
@@ -485,7 +453,7 @@ export default function LearningPage() {
                           {modeBadgeLabel(chunkProgress[chunk.chunk_id].mode_used)}
                         </span>
                       )}
-                      {!isDone && chunk.chunk_type !== "exercise_gate" && idx === firstUncompletedIdx && currentChunkMode && (
+                      {!isDone && !isInfoPanel && chunk.chunk_type !== "exercise_gate" && idx === firstUncompletedIdx && currentChunkMode && (
                         <span style={modeBadgeStyle(currentChunkMode, true)}>
                           {modeBadgeLabel(currentChunkMode)}
                         </span>
@@ -503,13 +471,40 @@ export default function LearningPage() {
                       )}
                       {isOptional && (
                         <span style={{
-                          fontSize: "11px",
+                          fontSize: "10px",
                           color: "#92400e",
                           background: "#fef3c7",
                           padding: "1px 6px",
                           borderRadius: "4px",
+                          fontWeight: 600,
                         }}>
                           {t("subsectionNav.optional", "Optional")}
+                        </span>
+                      )}
+                      {isReview && (
+                        <span style={{
+                          display: "inline-block",
+                          padding: "1px 6px",
+                          borderRadius: "4px",
+                          fontSize: "11px",
+                          fontWeight: 600,
+                          backgroundColor: "#dbeafe",
+                          color: "#1e40af",
+                        }}>
+                          {t("subsectionNav.review", "Review")}
+                        </span>
+                      )}
+                      {isInfoPanel && (
+                        <span style={{
+                          display: "inline-block",
+                          padding: "1px 6px",
+                          borderRadius: "4px",
+                          fontSize: "11px",
+                          fontWeight: 600,
+                          backgroundColor: "#f0fdf4",
+                          color: "#15803d",
+                        }}>
+                          {t("subsectionNav.info", "Info")}
                         </span>
                       )}
                       {isLocked && (
@@ -529,7 +524,11 @@ export default function LearningPage() {
                   {/* Start button */}
                   <button
                     disabled={loading || isLocked}
-                    onClick={isLocked ? undefined : () => handleStartClick(chunk.chunk_id)}
+                    onClick={isLocked ? undefined : () =>
+                      isInfoPanel
+                        ? handleStartLearning(chunk.chunk_id)
+                        : handleStartClick(chunk.chunk_id)
+                    }
                     style={{
                       padding: "6px 16px",
                       borderRadius: "8px",
@@ -551,7 +550,7 @@ export default function LearningPage() {
                 </div>
 
                 {/* Inline config panel */}
-                {isExpanded && (
+                {isExpanded && !isInfoPanel && (
                   <div style={{
                     padding: "12px 16px 16px",
                     borderTop: "1px solid var(--color-border)",
@@ -697,6 +696,147 @@ export default function LearningPage() {
               </div>
             );
           })}
+        </div>
+      </div>
+    );
+  }
+
+  // ── Per-chunk typed Q&A ────────────────────────────────────────────────────
+  if (phase === "CHUNK_QUESTIONS") {
+    const evalResult = chunkEvalResult;
+    const allAnswered = chunkQuestions.every((_, i) => (chunkAnswers[i] || "").trim().length > 0);
+
+    return (
+      <div style={{ maxWidth: "700px", margin: "0 auto", padding: "2rem 1.5rem 3rem" }}>
+        <h2 style={{ fontWeight: 800, fontSize: "1.3rem", color: "var(--color-text)", marginBottom: "0.25rem" }}>
+          {t("chunkQuestions.title", "Knowledge Check")}
+        </h2>
+        <p style={{ color: "var(--color-text-muted)", fontSize: "0.9rem", marginBottom: "1.5rem" }}>
+          {t("chunkQuestions.instruction", "Answer in your own words — no need to be exact.")}
+        </p>
+
+        {!evalResult && chunkQuestions.map((q, i) => (
+          <div key={q.index} style={{
+            marginBottom: "1.25rem",
+            padding: "1rem 1.25rem",
+            borderRadius: "10px",
+            border: "1px solid var(--color-border)",
+            backgroundColor: "var(--color-surface)",
+          }}>
+            <p style={{ fontWeight: 700, fontSize: "1rem", color: "var(--color-text)", marginBottom: "0.5rem", lineHeight: 1.5 }}>
+              Q{i + 1}. {q.text}
+            </p>
+            <textarea
+              value={chunkAnswers[i] || ""}
+              onChange={(e) => setChunkAnswers((prev) => ({ ...prev, [i]: e.target.value }))}
+              placeholder={t("chunkQuestions.placeholder", "Type your answer here...")}
+              rows={3}
+              style={{
+                width: "100%",
+                borderRadius: "8px",
+                padding: "0.75rem",
+                fontSize: "0.95rem",
+                border: "2px solid var(--color-border)",
+                backgroundColor: "var(--color-background, var(--color-surface))",
+                color: "var(--color-text)",
+                fontFamily: "inherit",
+                boxSizing: "border-box",
+                resize: "vertical",
+              }}
+            />
+          </div>
+        ))}
+
+        {evalResult && (
+          <div style={{
+            padding: "1.25rem",
+            borderRadius: "12px",
+            backgroundColor: evalResult.passed ? "rgba(22,163,74,0.07)" : "rgba(239,68,68,0.07)",
+            border: `1.5px solid ${evalResult.passed ? "rgba(22,163,74,0.3)" : "rgba(239,68,68,0.3)"}`,
+            marginBottom: "1.5rem",
+          }}>
+            <div style={{ fontSize: "1.3rem", fontWeight: 800, color: evalResult.passed ? "#16a34a" : "#dc2626", marginBottom: "0.3rem" }}>
+              {evalResult.passed
+                ? `✓ ${t("chunkQuestions.passed", "Passed")} ${Math.round(evalResult.score * 100)}%`
+                : `✗ ${Math.round(evalResult.score * 100)}% — ${t("chunkQuestions.failed", "Not quite — let's review")}`}
+            </div>
+            {evalResult.passed && (
+              <p style={{ color: "var(--color-text-muted)", fontSize: "0.9rem", margin: 0 }}>
+                {evalResult.all_study_complete
+                  ? t("chunkQuestions.completing", "Completing concept...")
+                  : t("chunkQuestions.continuing", "Continuing...")}
+              </p>
+            )}
+            {!evalResult.passed && evalResult.feedback?.length > 0 && (
+              <div style={{ marginTop: "1rem" }}>
+                {evalResult.feedback.map((fb, i) => (
+                  <div key={i} style={{
+                    marginBottom: "0.75rem",
+                    padding: "0.6rem 0.9rem",
+                    borderRadius: "8px",
+                    border: `1px solid ${fb.correct ? "rgba(22,163,74,0.2)" : "rgba(239,68,68,0.2)"}`,
+                    backgroundColor: fb.correct ? "rgba(22,163,74,0.04)" : "rgba(239,68,68,0.04)",
+                  }}>
+                    <span style={{ fontWeight: 700, color: fb.correct ? "#16a34a" : "#dc2626", marginRight: "6px" }}>
+                      {fb.correct
+                        ? `✓ ${t("chunkQuestions.correct", "Correct")}`
+                        : `✗ ${t("chunkQuestions.incorrect", "Incorrect")}`}
+                    </span>
+                    <span style={{ color: "var(--color-text)", fontSize: "0.9rem" }}>{fb.feedback}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        <div style={{ display: "flex", gap: "0.75rem", justifyContent: "flex-end", flexWrap: "wrap" }}>
+          {!evalResult && (
+            <button
+              disabled={!allAnswered || loading}
+              onClick={() => {
+                const answersPayload = chunkQuestions.map((q, i) => ({
+                  index: q.index,
+                  answer_text: chunkAnswers[i] || "",
+                }));
+                submitChunkAnswers(currentChunkId, chunkQuestions, answersPayload, currentChunkMode);
+              }}
+              style={{
+                padding: "0.75rem 2rem",
+                borderRadius: "10px",
+                border: "none",
+                backgroundColor: allAnswered && !loading ? "var(--color-primary)" : "var(--color-border)",
+                color: allAnswered && !loading ? "#fff" : "var(--color-text-muted)",
+                fontWeight: 700,
+                fontSize: "1rem",
+                cursor: allAnswered && !loading ? "pointer" : "not-allowed",
+                fontFamily: "inherit",
+              }}
+            >
+              {loading ? t("common.loading") : t("chunkQuestions.submit", "Submit Answers")}
+            </button>
+          )}
+          {evalResult && !evalResult.passed && (
+            <button
+              onClick={() => {
+                setChunkAnswers({});
+                dispatch({ type: "RETURN_TO_PICKER" });
+              }}
+              style={{
+                padding: "0.75rem 1.75rem",
+                borderRadius: "10px",
+                border: "none",
+                backgroundColor: "var(--color-primary)",
+                color: "#fff",
+                fontWeight: 700,
+                fontSize: "1rem",
+                cursor: "pointer",
+                fontFamily: "inherit",
+              }}
+            >
+              {t("chunkQuestions.restudy", "Re-study")}
+            </button>
+          )}
         </div>
       </div>
     );

@@ -392,12 +392,44 @@ class ChunkCardsRequest(BaseModel):
     chunk_id: str  # UUID of the ConceptChunk to generate cards for
 
 
+class ChunkExamQuestion(BaseModel):
+    index: int
+    text: str
+    chunk_id: str
+
+
 class ChunkCardsResponse(BaseModel):
     cards: list[LessonCard]
     chunk_id: str
     chunk_index: int
     total_chunks: int
     is_last_chunk: bool
+    questions: list["ChunkExamQuestion"] = []
+
+
+class ChunkAnswerItem(BaseModel):
+    index: int
+    answer_text: str
+
+
+class ChunkEvaluateRequest(BaseModel):
+    questions: list[dict]
+    answers: list[ChunkAnswerItem]
+    mode_used: str = "NORMAL"
+
+
+class ChunkEvaluateFeedback(BaseModel):
+    index: int
+    correct: bool
+    feedback: str
+
+
+class ChunkEvaluateResponse(BaseModel):
+    passed: bool
+    score: float
+    all_study_complete: bool
+    chunk_progress: dict
+    feedback: list[ChunkEvaluateFeedback]
 
 
 class CompleteChunkRequest(BaseModel):
@@ -448,7 +480,8 @@ class ChunkSummary(BaseModel):
     heading:     str         # e.g. "Use Addition Notation"
     has_images:  bool        # True if at least one chunk_images row exists
     has_mcq:     bool        # determined by heading rule (no MCQ for Learning Objectives etc.)
-    chunk_type:  str = "teaching"  # "teaching" | "practice" | "exam_question_source" | "exercise_gate"
+    chunk_type:  str = "teaching"  # "teaching"|"exercise"|"chapter_review"|"learning_objective"
+    is_optional: bool = False       # True only for "Writing Exercises"
     completed:   bool = False
     score:       int | None = None
     mode_used:   str | None = None

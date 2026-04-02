@@ -140,7 +140,12 @@
       "Bash(done)",
       "Bash(cmd.exe /C \"taskkill /F /PID 20616 /PID 34948 /PID 31860 /PID 11320 /PID 12328 /PID 31424 /PID 32788\")",
       "Bash(cmd.exe /C \"taskkill /F /PID 20616 & taskkill /F /PID 34948 & taskkill /F /PID 31860 & taskkill /F /PID 11320 & taskkill /F /PID 12328 & taskkill /F /PID 31424 & taskkill /F /PID 32788\")",
-      "Bash(grep -r \"S3\\\\|s3\\\\|AWS\\\\|aws\\\\|IMAGE_STORAGE\" c:/files/Desktop/ADA/backend/src/ --include=*.py)"
+      "Bash(grep -r \"S3\\\\|s3\\\\|AWS\\\\|aws\\\\|IMAGE_STORAGE\" c:/files/Desktop/ADA/backend/src/ --include=*.py)",
+      "Bash(.venv/Scripts/python.exe c:/tmp/update_locales.py)",
+      "Bash(.venv/Scripts/python.exe -c \":*)",
+      "Bash(~/.local/bin/rtk npm:*)",
+      "Bash(net start:*)",
+      "Bash(sc query:*)"
     ],
     "additionalDirectories": [
       "c:\\files\\Desktop\\ADA",

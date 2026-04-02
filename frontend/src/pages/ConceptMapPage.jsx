@@ -4,7 +4,6 @@ import { useTranslation } from "react-i18next";
 import { trackEvent } from "../utils/analytics";
 import { useConceptMap } from "../hooks/useConceptMap";
 import { useStudent } from "../context/StudentContext";
-import { useTheme } from "../context/ThemeContext";
 import ConceptGraph from "../components/conceptmap/ConceptGraph";
 import MapLegend from "../components/conceptmap/MapLegend";
 import { formatConceptTitle } from "../utils/formatConceptTitle";
@@ -12,9 +11,8 @@ import { getReviewDue } from "../api/students";
 import { getAvailableBooks } from "../api/concepts";
 import {
   Loader, Play, CheckCircle, Lock, BookOpen, Trophy, Target,
-  Skull, Rocket, Gamepad2, AlertTriangle, Heart, RefreshCw,
+  AlertTriangle, RefreshCw,
 } from "lucide-react";
-import { SUGGESTED_INTERESTS } from "../utils/constants";
 
 export default function ConceptMapPage() {
   const { t } = useTranslation();
@@ -22,10 +20,7 @@ export default function ConceptMapPage() {
   const [availableBooks, setAvailableBooks] = useState([]);
   const { nodes, edges, nodeStatuses, loading, error } = useConceptMap(selectedBook);
   const { student, masteredConcepts } = useStudent();
-  const { style: globalStyle } = useTheme();
   const [selectedNode, setSelectedNode] = useState(null);
-  const [lessonStyle, setLessonStyle] = useState(globalStyle);
-  const [lessonInterests, setLessonInterests] = useState([]);
   const [reviewDueConcepts, setReviewDueConcepts] = useState(new Set());
   const navigate = useNavigate();
 
@@ -49,13 +44,6 @@ export default function ConceptMapPage() {
       })
       .catch(() => {});
   }, [student?.id]);
-
-  const STYLE_OPTIONS = useMemo(() => [
-    { id: "default", icon: BookOpen, label: t("style.default"), color: "#3b82f6" },
-    { id: "pirate", icon: Skull, label: t("style.pirate"), color: "#d97706" },
-    { id: "astronaut", icon: Rocket, label: t("style.astronaut"), color: "#7c3aed" },
-    { id: "gamer", icon: Gamepad2, label: t("style.gamer"), color: "#22c55e" },
-  ], [t]);
 
   const { readyNodes, masteredNodes, lockedNodes } = useMemo(() => {
     const ready = [];
@@ -109,24 +97,12 @@ export default function ConceptMapPage() {
 
   const handleNodeSelect = (nodeId) => {
     setSelectedNode(nodeId);
-    setLessonStyle(globalStyle);
-    setLessonInterests([]);
     const nodeTitle = nodes.find((n) => n.concept_id === nodeId)?.title || formatConceptTitle(nodeId);
     trackEvent("concept_selected", { concept_id: nodeId, concept_title: nodeTitle, status: nodeStatuses[nodeId] });
   };
 
-  const toggleInterest = (interest) => {
-    setLessonInterests((prev) =>
-      prev.includes(interest)
-        ? prev.filter((i) => i !== interest)
-        : [...prev, interest]
-    );
-  };
-
   const buildLessonUrl = (conceptId) => {
-    const params = new URLSearchParams({ style: lessonStyle });
-    if (lessonInterests.length > 0) params.set("interests", lessonInterests.join(","));
-    return `/learn/${encodeURIComponent(conceptId)}?${params.toString()}`;
+    return `/learn/${encodeURIComponent(conceptId)}`;
   };
 
   const startLesson = (conceptId) => {
@@ -134,8 +110,6 @@ export default function ConceptMapPage() {
     trackEvent("lesson_started", {
       concept_id: conceptId,
       concept_title: nodeTitle,
-      style: lessonStyle,
-      interests: lessonInterests,
     });
     navigate(buildLessonUrl(conceptId));
   };
@@ -341,96 +315,19 @@ export default function ConceptMapPage() {
             </p>
 
             {nodeStatuses[selectedNode] === "ready" && (
-              <>
-                <div style={{
-                  fontSize: "0.75rem", fontWeight: 700, color: "var(--color-text-muted)",
-                  textTransform: "uppercase", letterSpacing: "0.04em",
-                  marginBottom: "0.4rem",
-                }}>
-                  {t("map.chooseStyle")}
-                </div>
-                <div style={{
-                  display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.35rem",
-                  marginBottom: "0.75rem",
-                }}>
-                  {STYLE_OPTIONS.map(({ id, icon: Icon, label, color }) => (
-                    <button
-                      key={id}
-                      onClick={() => setLessonStyle(id)}
-                      aria-label={t("aria.styleOption", { style: label })}
-                      style={{
-                        display: "flex", alignItems: "center", gap: "0.35rem",
-                        padding: "0.4rem 0.6rem",
-                        borderRadius: "8px",
-                        border: lessonStyle === id
-                          ? `2px solid ${color}`
-                          : "1.5px solid var(--color-border)",
-                        backgroundColor: lessonStyle === id ? `${color}15` : "transparent",
-                        color: lessonStyle === id ? color : "var(--color-text-muted)",
-                        fontSize: "0.8rem", fontWeight: 700,
-                        cursor: "pointer", fontFamily: "inherit",
-                        transition: "all 0.15s",
-                      }}
-                    >
-                      <Icon size={15} /> {label}
-                    </button>
-                  ))}
-                </div>
-
-                <div style={{
-                  fontSize: "0.75rem", fontWeight: 700, color: "var(--color-text-muted)",
-                  textTransform: "uppercase", letterSpacing: "0.04em",
-                  marginBottom: "0.3rem",
-                  display: "flex", alignItems: "center", gap: "0.3rem",
-                }}>
-                  <Heart size={12} /> {t("map.whatLike")}
-                </div>
-                <p style={{ fontSize: "0.68rem", color: "var(--color-text-muted)", marginBottom: "0.4rem" }}>
-                  {t("map.pickTopics")}
-                </p>
-                <div style={{
-                  display: "flex", flexWrap: "wrap", gap: "0.3rem",
-                  marginBottom: "0.75rem",
-                }}>
-                  {SUGGESTED_INTERESTS.map((interest) => {
-                    const selected = lessonInterests.includes(interest);
-                    return (
-                      <button
-                        key={interest}
-                        onClick={() => toggleInterest(interest)}
-                        aria-label={t("aria.toggleInterest", { interest: t("interest." + interest) })}
-                        aria-pressed={selected}
-                        style={{
-                          padding: "0.25rem 0.55rem",
-                          borderRadius: "20px",
-                          border: selected ? "1.5px solid var(--color-primary)" : "1.5px solid var(--color-border)",
-                          backgroundColor: selected ? "var(--color-primary)" : "transparent",
-                          color: selected ? "#fff" : "var(--color-text-muted)",
-                          fontSize: "0.72rem", fontWeight: 600,
-                          cursor: "pointer", fontFamily: "inherit",
-                          transition: "all 0.15s",
-                        }}
-                      >
-                        {t("interest." + interest)}
-                      </button>
-                    );
-                  })}
-                </div>
-
-                <button
-                  onClick={() => startLesson(selectedNode)}
-                  style={{
-                    display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem",
-                    width: "100%", padding: "0.65rem",
-                    borderRadius: "10px", border: "none",
-                    backgroundColor: "var(--color-primary)", color: "#fff",
-                    fontSize: "0.95rem", fontWeight: 700,
-                    cursor: "pointer", fontFamily: "inherit",
-                  }}
-                >
-                  <BookOpen size={18} /> {t("map.startLesson")}
-                </button>
-              </>
+              <button
+                onClick={() => startLesson(selectedNode)}
+                style={{
+                  display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem",
+                  width: "100%", padding: "0.65rem",
+                  borderRadius: "10px", border: "none",
+                  backgroundColor: "var(--color-primary)", color: "#fff",
+                  fontSize: "0.95rem", fontWeight: 700,
+                  cursor: "pointer", fontFamily: "inherit",
+                }}
+              >
+                <BookOpen size={18} /> {t("map.startLesson")}
+              </button>
             )}
 
             {nodeStatuses[selectedNode] === "mastered" && (
@@ -456,81 +353,6 @@ export default function ConceptMapPage() {
                     </span>
                   </div>
                 )}
-
-                <div style={{
-                  fontSize: "0.75rem", fontWeight: 700, color: "var(--color-text-muted)",
-                  textTransform: "uppercase", letterSpacing: "0.04em",
-                  marginBottom: "0.4rem",
-                }}>
-                  {t("map.chooseStyle")}
-                </div>
-                <div style={{
-                  display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.35rem",
-                  marginBottom: "0.75rem",
-                }}>
-                  {STYLE_OPTIONS.map(({ id, icon: Icon, label, color }) => (
-                    <button
-                      key={id}
-                      onClick={() => setLessonStyle(id)}
-                      aria-label={t("aria.styleOption", { style: label })}
-                      style={{
-                        display: "flex", alignItems: "center", gap: "0.35rem",
-                        padding: "0.4rem 0.6rem",
-                        borderRadius: "8px",
-                        border: lessonStyle === id
-                          ? `2px solid ${color}`
-                          : "1.5px solid var(--color-border)",
-                        backgroundColor: lessonStyle === id ? `${color}15` : "transparent",
-                        color: lessonStyle === id ? color : "var(--color-text-muted)",
-                        fontSize: "0.8rem", fontWeight: 700,
-                        cursor: "pointer", fontFamily: "inherit",
-                        transition: "all 0.15s",
-                      }}
-                    >
-                      <Icon size={15} /> {label}
-                    </button>
-                  ))}
-                </div>
-
-                <div style={{
-                  fontSize: "0.75rem", fontWeight: 700, color: "var(--color-text-muted)",
-                  textTransform: "uppercase", letterSpacing: "0.04em",
-                  marginBottom: "0.3rem",
-                  display: "flex", alignItems: "center", gap: "0.3rem",
-                }}>
-                  <Heart size={12} /> {t("map.whatLike")}
-                </div>
-                <p style={{ fontSize: "0.68rem", color: "var(--color-text-muted)", marginBottom: "0.4rem" }}>
-                  {t("map.pickTopics")}
-                </p>
-                <div style={{
-                  display: "flex", flexWrap: "wrap", gap: "0.3rem",
-                  marginBottom: "0.75rem",
-                }}>
-                  {SUGGESTED_INTERESTS.map((interest) => {
-                    const selected = lessonInterests.includes(interest);
-                    return (
-                      <button
-                        key={interest}
-                        onClick={() => toggleInterest(interest)}
-                        aria-label={t("aria.toggleInterest", { interest: t("interest." + interest) })}
-                        aria-pressed={selected}
-                        style={{
-                          padding: "0.25rem 0.55rem",
-                          borderRadius: "20px",
-                          border: selected ? "1.5px solid var(--color-primary)" : "1.5px solid var(--color-border)",
-                          backgroundColor: selected ? "var(--color-primary)" : "transparent",
-                          color: selected ? "#fff" : "var(--color-text-muted)",
-                          fontSize: "0.72rem", fontWeight: 600,
-                          cursor: "pointer", fontFamily: "inherit",
-                          transition: "all 0.15s",
-                        }}
-                      >
-                        {t("interest." + interest)}
-                      </button>
-                    );
-                  })}
-                </div>
 
                 <button
                   onClick={() => startLesson(selectedNode)}

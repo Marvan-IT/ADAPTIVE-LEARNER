@@ -59,6 +59,11 @@ from api.teaching_schemas import (
     CompleteCardRequest, CompleteCardResponse,
     NextCardRequest, NextCardResponse,
     ChunkCardsRequest, ChunkCardsResponse,
+    ChunkExamQuestion,
+    ChunkEvaluateRequest,
+    ChunkEvaluateResponse,
+    ChunkEvaluateFeedback,
+    ChunkAnswerItem,
     RecoveryCardRequest,
     CompleteChunkRequest, CompleteChunkResponse,
     ChunkSummary, ChunkListResponse,
@@ -72,18 +77,35 @@ logger = logging.getLogger(__name__)
 
 
 def _get_chunk_type(heading: str) -> str:
-    """Classify a chunk heading for SubsectionNav display and exam logic."""
-    h = heading.lower()
-    # "SECTION X.X EXERCISES" must be checked BEFORE the "(exercises)" suffix check
-    if re.match(r"^section\s+\d+\.\d+", h):
-        return "exercise_gate"
-    if "(exercises)" not in h:
-        return "teaching"
-    if "everyday math" in h or "writing exercises" in h:
-        return "practice"
-    if "practice makes perfect" in h:
-        return "exercise_gate"
-    return "exam_question_source"
+    """Classify a chunk heading into one of 4 canonical types.
+    Handles PDF-extraction artifacts (leading dashes, ALL CAPS) via normalisation.
+    General for all OpenStax books.
+    """
+    # Strip common PDF-extraction prefix artifacts (e.g. "- SECTION 5.4 EXERCISES")
+    raw = re.sub(r"^[-–—•\s]+", "", heading).strip()
+    h = raw.lower()
+
+    # ── Info panel: no Q&A, never required, Start → single content card ─────
+    if any(p in h for p in ("learning objectives", "key terms", "key concepts", "summary")):
+        return "learning_objective"
+
+    # ── Chapter review: teaching-prompt cards + Q&A, always sorted LAST ─────
+    # Pattern: "X.X Title Words" — section title heading (e.g. "1.2 Add Whole Numbers")
+    if (re.match(r"^\d+\.\d+\s+\w", h)
+            and not h.rstrip().endswith(":")
+            and "exercises" not in h):
+        return "chapter_review"
+
+    # ── Exercise chunks: exercise-prompt MCQ cards, no Q&A ───────────────────
+    if "(exercises)" in h:                                          # all "(Exercises)" suffix
+        return "exercise"
+    if re.match(r"^section\s+\d+\.\d+", h) and "exercises" in h:   # "SECTION 1.2 EXERCISES"
+        return "exercise"
+    if "review exercises" in h or "practice test" in h:             # standalone review/test
+        return "exercise"
+
+    # ── Default: teaching chunk ───────────────────────────────────────────────
+    return "teaching"
 
 
 router = APIRouter(prefix="/api/v2", tags=["teaching"])
@@ -930,6 +952,39 @@ async def generate_chunk_cards(
                 logger.warning("[chunk-cards] skipping invalid card dict: %s", _val_err)
         _chunks = await chunk_ksvc.get_chunks_for_concept(db, session.book_slug or DEFAULT_BOOK_SLUG, session.concept_id)
         chunk_index = next((i for i, c in enumerate(_chunks) if c["id"] == req.chunk_id), 0)
+
+        # Fetch the chunk object to determine type and get text for question generation
+        chunk = await chunk_ksvc.get_chunk(db, req.chunk_id)
+
+        # Generate 2-3 exam questions for teaching chunks
+        chunk_type = _get_chunk_type(chunk.heading if chunk else "")
+        questions: list[ChunkExamQuestion] = []
+        if chunk_type == "teaching" and chunk and (chunk.text or "").strip():
+            _q_system = (
+                "You are an exam question writer. Based on the content, generate exactly 2-3 short open-ended "
+                "exam questions that test understanding (not just recall). "
+                "Return ONLY valid JSON with no markdown: "
+                '{"questions": [{"index": 0, "text": "..."}, {"index": 1, "text": "..."}]}'
+            )
+            _q_user = f"Section: {chunk.heading}\n\n{(chunk.text or '')[:900]}"
+            try:
+                _q_result = await _call_llm_json(
+                    teaching_svc._openai_client,
+                    _q_system,
+                    _q_user,
+                    max_tokens=400,
+                )
+                for _qi, _q in enumerate((_q_result.get("questions") or [])[:3]):
+                    _qtext = (_q.get("text") or "").strip()
+                    if _qtext:
+                        questions.append(ChunkExamQuestion(
+                            index=_qi,
+                            text=_qtext,
+                            chunk_id=str(req.chunk_id),
+                        ))
+            except Exception as _qe:
+                logger.warning("[chunk-cards] question generation skipped: %s", _qe)
+
         await db.commit()
         return ChunkCardsResponse(
             cards=cards,
@@ -937,6 +992,7 @@ async def generate_chunk_cards(
             chunk_index=chunk_index,
             total_chunks=len(_chunks),
             is_last_chunk=chunk_index == len(_chunks) - 1,
+            questions=questions,
         )
     except HTTPException:
         raise
@@ -1081,13 +1137,17 @@ async def complete_chunk(
         None,
     )
 
-    # all_study_complete: all teaching chunks are in chunk_progress
+    # all_study_complete: all required chunks (teaching, chapter_review, non-optional exercise) completed
     completed_ids = set(existing_progress.keys())
-    teaching_ids = {
+    required_ids = {
         str(c["id"]) for c in all_sorted
-        if _get_chunk_type(c.get("heading", "")) == "teaching"
+        if _get_chunk_type(c.get("heading", "")) in ("teaching", "chapter_review")
+        or (
+            _get_chunk_type(c.get("heading", "")) == "exercise"
+            and not _heading_is_optional(c.get("heading", ""))
+        )
     }
-    all_study_complete = bool(teaching_ids) and teaching_ids.issubset(completed_ids)
+    all_study_complete = bool(required_ids) and required_ids.issubset(completed_ids)
 
     await db.commit()
     return CompleteChunkResponse(
@@ -1096,6 +1156,122 @@ async def complete_chunk(
         next_mode=next_mode,
         next_chunk_id=str(next_teaching["id"]) if next_teaching else None,
         all_study_complete=all_study_complete,
+    )
+
+
+@router.post(
+    "/sessions/{session_id}/chunks/{chunk_id}/evaluate",
+    response_model=ChunkEvaluateResponse,
+    summary="Evaluate student answers for chunk exam gate and record completion if passed",
+)
+@limiter.limit("20/minute")
+async def evaluate_chunk_answers(
+    request: Request,
+    session_id: UUID,
+    chunk_id: str,
+    req: ChunkEvaluateRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Grade student open-ended answers for a chunk's exam gate using LLM.
+
+    If passed (>=70%), records chunk completion in session.chunk_progress and
+    computes all_study_complete. Returns per-question feedback.
+    """
+    session = await db.get(TeachingSession, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if not req.questions or not req.answers:
+        raise HTTPException(status_code=400, detail="questions and answers are required")
+
+    # Build grading prompt
+    qa_pairs = []
+    ans_by_index = {a.index: a.answer_text for a in req.answers}
+    for q in req.questions:
+        idx = q.get("index", 0) if isinstance(q, dict) else q.index
+        text = q.get("text", "") if isinstance(q, dict) else q.text
+        answer = ans_by_index.get(idx, "").strip()
+        qa_pairs.append(f"Q{idx + 1}: {text}\nStudent answer: {answer or '(no answer)'}")
+
+    grading_system = (
+        "You are a math tutor grading short answers. For each Q/A pair, determine if the student "
+        "demonstrates understanding of the concept (does not need to be word-perfect). "
+        "Return ONLY valid JSON: "
+        '{"results": [{"index": 0, "correct": true/false, "feedback": "brief 1-sentence feedback"}]}'
+    )
+    grading_user = "\n\n".join(qa_pairs)
+
+    try:
+        grade_result = await _call_llm_json(
+            teaching_svc._openai_client,
+            grading_system,
+            grading_user,
+            max_tokens=600,
+        )
+        results = grade_result.get("results") or []
+    except Exception as _ge:
+        logger.exception("[evaluate-chunk] LLM grading failed for chunk %s", chunk_id)
+        raise HTTPException(500, f"Grading failed: {_ge}")
+
+    # Calculate score
+    correct_count = sum(1 for r in results if r.get("correct"))
+    total = len(req.questions)
+    score_frac = correct_count / total if total > 0 else 0.0
+    passed = score_frac >= CHUNK_EXAM_PASS_RATE
+
+    # Build feedback list
+    feedback: list[ChunkEvaluateFeedback] = [
+        ChunkEvaluateFeedback(
+            index=r.get("index", i),
+            correct=bool(r.get("correct")),
+            feedback=r.get("feedback", ""),
+        )
+        for i, r in enumerate(results)
+    ]
+
+    chunk_progress_update: dict = {}
+    all_study_complete = False
+
+    if passed:
+        # Record chunk progress
+        existing_progress = dict(session.chunk_progress or {})
+        score_pct = round(score_frac * 100)
+        existing_progress[chunk_id] = {
+            "mode": req.mode_used,
+            "score": score_pct,
+            "correct": correct_count,
+            "total": total,
+        }
+        session.chunk_progress = existing_progress
+        chunk_progress_update = {chunk_id: {"score": score_pct, "mode_used": req.mode_used}}
+
+        # Compute all_study_complete (same logic as complete_chunk)
+        try:
+            all_chunks = await chunk_ksvc.get_chunks_for_concept(
+                db, session.book_slug or DEFAULT_BOOK_SLUG, session.concept_id
+            )
+            all_sorted = sorted(all_chunks, key=lambda c: c["order_index"])
+            required_ids = {
+                str(c["id"]) for c in all_sorted
+                if _get_chunk_type(c.get("heading", "")) in ("teaching", "chapter_review")
+                or (
+                    _get_chunk_type(c.get("heading", "")) == "exercise"
+                    and not _heading_is_optional(c.get("heading", ""))
+                )
+            }
+            completed_ids = set(existing_progress.keys())
+            all_study_complete = bool(required_ids) and required_ids.issubset(completed_ids)
+        except Exception:
+            logger.exception("[evaluate-chunk] all_study_complete check failed")
+
+        await db.commit()
+
+    return ChunkEvaluateResponse(
+        passed=passed,
+        score=score_frac,
+        all_study_complete=all_study_complete,
+        chunk_progress=chunk_progress_update,
+        feedback=feedback,
     )
 
 
@@ -1119,6 +1295,13 @@ def _heading_has_mcq(heading: str) -> bool:
     """Return False for non-teaching headings that the DLD marks as MCQ-free."""
     lower = heading.lower()
     return not any(pattern in lower for pattern in _NO_MCQ_HEADING_PATTERNS)
+
+
+_OPTIONAL_HEADING_PATTERNS = ("writing exercises",)
+
+def _heading_is_optional(heading: str) -> bool:
+    h = heading.lower()
+    return any(p in h for p in _OPTIONAL_HEADING_PATTERNS)
 
 
 @router.get(
@@ -1188,6 +1371,7 @@ async def list_chunks(
                 has_images=c.id in chunks_with_images,
                 has_mcq=_heading_has_mcq(c.heading or ""),
                 chunk_type=_get_chunk_type(c.heading or ""),
+                is_optional=_heading_is_optional(c.heading or ""),
                 completed=str(c.id) in progress,
                 score=progress.get(str(c.id), {}).get("score"),
                 mode_used=progress.get(str(c.id), {}).get("mode"),
@@ -1196,24 +1380,6 @@ async def list_chunks(
         ]
 
         section_title = chunks[0].section if chunks else ""
-
-        # Inject synthetic exam gate if the section has no exercise_gate chunk
-        visible_for_exam = [s for s in summaries if s.chunk_type != "exam_question_source"]
-        has_exercise_gate = any(s.chunk_type == "exercise_gate" for s in summaries)
-        if visible_for_exam and not has_exercise_gate:
-            from uuid import uuid5, NAMESPACE_DNS
-            synthetic_id = str(uuid5(NAMESPACE_DNS, f"exam_gate:{concept_id}"))
-            summaries.append(ChunkSummary(
-                chunk_id=synthetic_id,
-                order_index=(summaries[-1].order_index + 1) if summaries else 0,
-                heading="Section Exam",
-                has_images=False,
-                has_mcq=False,
-                chunk_type="exercise_gate",
-                completed=False,
-                score=None,
-                mode_used=None,
-            ))
 
         logger.info(
             "[chunks] session_id=%s concept_id=%s total=%d current_index=%d",
