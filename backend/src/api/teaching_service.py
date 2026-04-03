@@ -1266,7 +1266,11 @@ class TeachingService:
             )
 
         # ── Step 7: Resolve available images ─────────────────────────────────────
-        cached_images = cached.get("_images", [])
+        try:
+            cached_images = await self._chunk_ksvc.get_chunk_images(db, str(req.chunk_id))
+        except Exception as _img_err:
+            logger.warning("[per-card] failed to load chunk images: %s", _img_err)
+            cached_images = []
         already_assigned = set(cached.get("assigned_image_indices", []))
         available_images_with_idx = [
             (i, img) for i, img in enumerate(cached_images) if i not in already_assigned
@@ -1311,10 +1315,26 @@ class TeachingService:
         )
 
         # ── Step 11: Call LLM ──────────────────────────────────────────────────
+        # Vision parts for per-card — same pattern as generate_per_chunk
+        _pc_book_slug = getattr(session, "book_slug", None) or DEFAULT_BOOK_SLUG
+        _pc_vision_parts = []
+        for _img in (content_piece_images or [])[:2]:   # cap at 2 per card for speed
+            _img_url = _img.get("image_url") or _img.get("url", "")
+            _data_url = _image_to_data_url(_img_url, _pc_book_slug)
+            if _data_url:
+                _pc_vision_parts.append({
+                    "type": "image_url",
+                    "image_url": {"url": _data_url, "detail": "low"},
+                })
+        _pc_user_content = (
+            [{"type": "text", "text": user_prompt}] + _pc_vision_parts
+            if _pc_vision_parts else user_prompt
+        )
+
         raw = await self._chat(
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
+                {"role": "user", "content": _pc_user_content},
             ],
             max_tokens=NEXT_CARD_MAX_TOKENS,
             model="mini",
@@ -1356,9 +1376,11 @@ class TeachingService:
         card_position = len(cached.get("cards", []))
         card_dict = _normalise_per_card(parsed, chunk_id=next_piece.get("id") or session.concept_id)
 
-        # ── Step 13: Resolve image from per-card LLM response ────────────────
+        # ── Step 13: Resolve image — image_indices first, then LLM image_url match ──
         new_assigned: set[int] = set()
         resolved_image = None
+
+        # Path A: LLM returned image_indices (future schema)
         for idx in (parsed.get("image_indices") or []):
             if 0 <= idx < len(content_piece_images):
                 resolved_image = content_piece_images[idx]
@@ -1366,9 +1388,22 @@ class TeachingService:
                 if orig_idx is not None:
                     new_assigned.add(orig_idx)
                 break
+
+        # Path B: match LLM's image_url string to content_piece_images by filename
+        if resolved_image is None and card_dict.get("image_url"):
+            llm_filename = card_dict["image_url"].split("/")[-1]
+            for pos, img in enumerate(content_piece_images):
+                img_url = img.get("image_url") or img.get("url", "")
+                if img_url and img_url.split("/")[-1] == llm_filename:
+                    resolved_image = img
+                    orig_idx = _cp_to_cached_idx.get(pos)
+                    if orig_idx is not None:
+                        new_assigned.add(orig_idx)
+                    break
+
         if resolved_image:
             card_dict["image_url"] = resolved_image.get("url") or resolved_image.get("image_url")
-            card_dict["caption"] = resolved_image.get("caption") or resolved_image.get("description")
+            card_dict["caption"]   = resolved_image.get("caption") or resolved_image.get("description")
 
         # ── Step 14: Update cache and flush ──────────────────────────────────
         cached["concepts_queue"] = concepts_queue
@@ -1745,15 +1780,33 @@ class TeachingService:
             except Exception as _norm_err:
                 logger.warning("[per-chunk] skipping malformed card %d: %s", i, _norm_err)
 
-        # If chunk has images but LLM assigned none, distribute across cards
+        # If chunk has images but LLM assigned none, distribute by keyword relevance
         if images:
             assigned_urls = {c.get("image_url") for c in cards if c.get("image_url")}
-            remaining_imgs = [img for img in images if img["image_url"] not in assigned_urls]
-            for card in cards:
-                if not card.get("image_url") and remaining_imgs:
-                    img = remaining_imgs.pop(0)
-                    card["image_url"] = img["image_url"]
-                    card["caption"] = img.get("caption")
+            remaining_imgs = [img for img in images if img.get("image_url") not in assigned_urls]
+
+            if remaining_imgs:
+                _STOP = {"a","an","the","is","in","of","to","and","or","for","with","this","that","it","its"}
+
+                def _overlap(img_desc: str, card: dict) -> int:
+                    img_words  = set(img_desc.lower().split()) - _STOP
+                    card_words = set(
+                        (card.get("content","") + " " + card.get("title","")).lower().split()
+                    ) - _STOP
+                    return len(img_words & card_words)
+
+                for img in remaining_imgs:
+                    desc = img.get("description") or img.get("caption") or ""
+                    best_card, best_score = None, -1
+                    for card in cards:
+                        if card.get("image_url"):
+                            continue
+                        score = _overlap(desc, card)
+                        if score > best_score:
+                            best_score, best_card = score, card
+                    if best_card is not None:
+                        best_card["image_url"] = img.get("image_url")
+                        best_card["caption"]   = img.get("caption") or img.get("description")
 
         # Final fallback: synthetic card from chunk content so student never sees a 500
         if not cards:
@@ -1794,6 +1847,7 @@ class TeachingService:
         chunk_images: list[dict],
         card_index: int = 0,
         wrong_answers: list[str] | None = None,
+        is_exercise: bool = False,
     ) -> dict | None:
         """Generate a single recovery TEACH card for a chunk the student failed.
 
@@ -1826,22 +1880,40 @@ class TeachingService:
                 "Re-explain specifically to correct these misconceptions.\n"
             )
 
-        system_prompt = (
-            "You are ADA, an adaptive math tutor. Generate ONE recovery TEACH card.\n"
-            "The student struggled with this chunk twice. Re-explain in the SIMPLEST way.\n"
-            "RULES:\n"
-            "- Title MUST start exactly with: Let's Try Again — \n"
-            "- Language: age 8-10 reading level. Define every term.\n"
-            "- Open with a real-world analogy BEFORE any formula.\n"
-            "- Use numbered step-by-step explanation.\n"
-            "- End with ONE easy MCQ — confidence-building.\n"
-            "- Return ONLY valid JSON matching the schema below. No markdown fences.\n"
-            'SCHEMA: {"index": ' + str(card_index) + ', "title": "Let\'s Try Again — <topic>", '
-            '"content": "<markdown>", "image_url": null, "caption": null, '
-            '"question": {"text": "<question>", "options": ["A","B","C","D"], '
-            '"correct_index": 0, "explanation": "<why>", "difficulty": "EASY"}, '
-            '"is_recovery": true}'
-        )
+        if is_exercise:
+            system_prompt = (
+                "You are ADA, an adaptive math tutor. Generate ONE recovery TEACH card.\n"
+                "The student struggled with this exercise. Show HOW TO SOLVE this type of problem.\n"
+                "RULES:\n"
+                "- Title MUST start exactly with: Let's Try Again — \n"
+                "- Show the METHOD step-by-step (Step 1, Step 2, ...).\n"
+                "- Include ONE fully worked example similar to the problem the student got wrong.\n"
+                "- Use simple language, age 8–10 reading level.\n"
+                "- End with ONE easy version of the same problem type as MCQ — confidence-building.\n"
+                "- Return ONLY valid JSON matching the schema below. No markdown fences.\n"
+                'SCHEMA: {"index": ' + str(card_index) + ', "title": "Let\'s Try Again — <topic>", '
+                '"content": "<markdown step-by-step solution>", "image_url": null, "caption": null, '
+                '"question": {"text": "<easy version of problem>", "options": ["A","B","C","D"], '
+                '"correct_index": 0, "explanation": "<why>", "difficulty": "EASY"}, '
+                '"is_recovery": true}'
+            )
+        else:
+            system_prompt = (
+                "You are ADA, an adaptive math tutor. Generate ONE recovery TEACH card.\n"
+                "The student struggled with this chunk twice. Re-explain in the SIMPLEST way.\n"
+                "RULES:\n"
+                "- Title MUST start exactly with: Let's Try Again — \n"
+                "- Language: age 8-10 reading level. Define every term.\n"
+                "- Open with a real-world analogy BEFORE any formula.\n"
+                "- Use numbered step-by-step explanation.\n"
+                "- End with ONE easy MCQ — confidence-building.\n"
+                "- Return ONLY valid JSON matching the schema below. No markdown fences.\n"
+                'SCHEMA: {"index": ' + str(card_index) + ', "title": "Let\'s Try Again — <topic>", '
+                '"content": "<markdown>", "image_url": null, "caption": null, '
+                '"question": {"text": "<question>", "options": ["A","B","C","D"], '
+                '"correct_index": 0, "explanation": "<why>", "difficulty": "EASY"}, '
+                '"is_recovery": true}'
+            )
 
         image_note = ""
         if chunk_images:

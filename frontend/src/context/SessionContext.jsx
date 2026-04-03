@@ -15,6 +15,7 @@ import {
   generateChunkRecoveryCard,
   getChunkList,
   completeChunk,
+  completeChunkItem as completeChunkItemAPI,
   evaluateChunkAnswers,
   switchStyle,
   updateSessionInterests,
@@ -256,14 +257,23 @@ function sessionReducer(state, action) {
     case "CHUNK_LOADING":
       return { ...state, loading: true, error: null, phase: "LOADING" };
 
-    case "CHUNK_LIST_LOADED":
+    case "CHUNK_LIST_LOADED": {
+      // Restore chunkProgress from completed chunks (needed for session resume)
+      const _restored = {};
+      for (const _ch of (action.payload.chunks || [])) {
+        if (_ch.completed) {
+          _restored[_ch.chunk_id] = { score: _ch.score ?? null, mode_used: _ch.mode_used ?? null };
+        }
+      }
       return {
         ...state,
         chunkList: action.payload.chunks,
         chunkIndex: action.payload.current_chunk_index,
+        chunkProgress: { ...state.chunkProgress, ..._restored },
         phase: "SELECTING_CHUNK",
         loading: false,
       };
+    }
 
     case "RETURN_TO_PICKER":
       return {
@@ -485,6 +495,29 @@ function sessionReducer(state, action) {
     case "MODE_CHANGE_ACKNOWLEDGED":
       return { ...state, modeJustChanged: false };
 
+    case "LANGUAGE_CHANGED":
+      // Replace chunk headings by index from translated_headings, clear card cache
+      return {
+        ...state,
+        chunkList: state.chunkList.map((chunk, i) => ({
+          ...chunk,
+          heading: action.payload.headings[i] ?? chunk.heading,
+        })),
+        cards: [],
+        currentCardIndex: 0,
+      };
+
+    case "CHUNK_ITEM_COMPLETE":
+      return {
+        ...state,
+        chunkList: state.chunkList.map((c) =>
+          c.chunk_id === action.payload.chunk_id
+            ? { ...c, completed: true }
+            : c
+        ),
+        allStudyComplete: action.payload.all_study_complete ?? state.allStudyComplete,
+      };
+
     case "RESET":
       if (state.session?.concept_id) {
         localStorage.removeItem(`ada_session_${state.session.concept_id}`);
@@ -517,12 +550,15 @@ export function SessionProvider({ children }) {
       return err.response?.data?.detail || "Service not ready — please wait a moment and try again.";
     }
     if (err.response?.status >= 400) {
-      return err.response?.data?.detail || `Server error (${err.response.status})`;
+      const detail = err.response?.data?.detail;
+      const detailStr = Array.isArray(detail) ? detail.map(d => d.msg || JSON.stringify(d)).join("; ") : (typeof detail === "string" ? detail : null);
+      return detailStr || `Server error (${err.response.status})`;
     }
     if (err.code === "ERR_NETWORK") {
       return i18n.t("error.network");
     }
-    return err.response?.data?.detail || err.message;
+    const detail = err.response?.data?.detail;
+    return (Array.isArray(detail) ? detail.map(d => d.msg || JSON.stringify(d)).join("; ") : detail) || err.message;
   };
 
   const startLesson = useCallback(
@@ -605,55 +641,24 @@ export function SessionProvider({ children }) {
         return;
       }
 
-      // CASE A2: second MCQ fail → API recovery card (with inline fallback), then advance
-      if (signals?.wrongAttempts >= 2) {
+      // CASE A: second MCQ fail → recovery card via chunk-recovery-card endpoint
+      if (signals?.wrongAttempts >= 2 && signals?.reExplainCardTitle) {
         const currentCard = state.cards[state.currentCardIndex];
-        const _makeRecap = (card) => ({
-          index: state.currentCardIndex + 0.5,
-          title: `Recap: ${card.title || "Key Rule"}`,
-          content: `**Key rule:** ${card.question?.explanation || "Review this topic."}`,
-          image_url: null, caption: null, question: null, is_recovery: true,
-        });
-        if (currentCard?.chunk_id && signals?.reExplainCardTitle) {
-          dispatch({ type: "ADAPTIVE_CALL_STARTED" });
-          try {
-            const res = await generateChunkRecoveryCard(
-              state.session.id,
-              currentCard.chunk_id,
-              state.currentCardIndex,
-              signals?.wrongAnswer ? [signals.wrongAnswer] : [],
-            );
-            if (res?.recovery_card) {
-              dispatch({ type: "INSERT_RECOVERY_CARD", payload: res.recovery_card });
-            } else if (currentCard?.question?.explanation) {
-              dispatch({ type: "INSERT_RECOVERY_CARD", payload: _makeRecap(currentCard) });
-            }
-          } catch (err) {
-            console.error("[SessionContext] recovery card fetch failed:", err);
-            if (currentCard?.question?.explanation) {
-              dispatch({ type: "INSERT_RECOVERY_CARD", payload: _makeRecap(currentCard) });
-            }
-            dispatch({ type: "ADAPTIVE_CARD_ERROR" });
-          } finally {
-            dispatch({ type: "ADAPTIVE_CALL_DONE" });
-          }
-        } else if (currentCard?.question?.explanation) {
-          dispatch({ type: "INSERT_RECOVERY_CARD", payload: _makeRecap(currentCard) });
+        // Anti-loop: if current card is already a recovery card, just advance — no nested recovery
+        if (currentCard?.is_recovery || currentCard?.card_type === "recovery") {
+          dispatch({ type: "NEXT_CARD" });
+          return;
         }
-        dispatch({ type: "NEXT_CARD" });
-        return;
-      }
-
-      // CASE A: first MCQ fail → recovery card via chunk-recovery-card endpoint
-      if (signals?.wrongAttempts >= 1 && signals?.reExplainCardTitle) {
+        const chunkMeta = state.chunkList?.find(c => c.chunk_id === state.currentChunkId);
+        const isExercise = chunkMeta?.chunk_type === "exercise";
         dispatch({ type: "ADAPTIVE_CALL_STARTED" });
         try {
-          const currentCard = state.cards[state.currentCardIndex];
           const res = await generateChunkRecoveryCard(
             state.session.id,
             currentCard?.chunk_id,
             state.currentCardIndex,
-            signals?.wrongAnswer ? [signals.wrongAnswer] : []
+            signals?.wrongAnswer ? [signals.wrongAnswer] : [],
+            isExercise
           );
           if (res?.recovery_card) {
             dispatch({ type: "INSERT_RECOVERY_CARD", payload: res.recovery_card });
@@ -884,6 +889,17 @@ export function SessionProvider({ children }) {
     }
   }, [state.session?.id]);
 
+  const completeChunkItem = useCallback(async (chunkId) => {
+    if (!state.session?.id) return;
+    try {
+      const res = await completeChunkItemAPI(state.session.id, chunkId);
+      dispatch({ type: "CHUNK_ITEM_COMPLETE", payload: res.data });
+      return res.data;
+    } catch (err) {
+      console.error("[SessionContext] completeChunkItem failed:", err);
+    }
+  }, [state.session?.id]);
+
   const reset = useCallback(() => {
     dispatch({ type: "RESET" });
   }, []);
@@ -907,6 +923,7 @@ export function SessionProvider({ children }) {
         loadChunkCards,
         goToNextChunk,
         completeChunkAction,
+        completeChunkItem,
         submitChunkAnswers,
         currentChunkIndex: state.currentChunkIndex,
         totalChunks: state.totalChunks,

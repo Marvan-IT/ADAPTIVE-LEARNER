@@ -141,7 +141,9 @@ export default function CardLearningView({ remediationMode = false }) {
     goToNextChunk,
     // Chunk completion
     completeChunkAction,
+    completeChunkItem,
     currentChunkMode,
+    currentChunkId,
     modeJustChanged,
     dispatch,
   } = useSession();
@@ -172,7 +174,7 @@ export default function CardLearningView({ remediationMode = false }) {
   const feedbackTimerRef = useRef(null);
 
   // Assistant panel reveal: hidden until first answer submitted
-  const [showAssistant, setShowAssistant] = useState(true);
+  const [showAssistant, setShowAssistant] = useState(false);
 
   // Per-card signal tracking state (for AdaptiveSignalTracker display)
   const [wrongAttemptsDisplay, setWrongAttemptsDisplay] = useState(0);
@@ -345,13 +347,11 @@ export default function CardLearningView({ remediationMode = false }) {
           "user"
         );
 
-        const isSecondAttempt = !!cs.replacementMcq; // replacementMcq present = already regenerated once
-
+        const isSecondAttempt = !!cs.replacementMcq;
         feedbackTimerRef.current = setTimeout(async () => {
           if (feedbackTimerRef.current === null) return;   // stale guard — cleared by handleNextCard
-          feedbackTimerRef.current = null;                  // self-clear before any await
+          feedbackTimerRef.current = null;
           if (isSecondAttempt) {
-            // Wrong twice — pass signals so backend switches mode + generates recovery card
             const elapsedSec = cardStartTimeRef.current !== null
               ? (performance.now() - cardStartTimeRef.current) / 1000
               : 120;
@@ -362,14 +362,13 @@ export default function CardLearningView({ remediationMode = false }) {
               selectedWrongOption: selectedWrongOptionRef.current ?? null,
               hintsUsed:           hintsUsedRef.current,
               idleTriggers:        idleTriggerCount,
-              // Anti-loop: don't request recovery for a recovery card
               reExplainCardTitle:  card?.title ?? null,
               wrongQuestion:       mcq?.question || null,
               wrongAnswerText:     mcq?.options?.[selectedWrongOptionRef.current] || null,
             });
             return;
           }
-          // First wrong — call regenerate API for a new question
+          // 1st wrong — regenerate MCQ only
           try {
             const { data } = await regenerateMCQ(session.id, {
               card_content: card.content,
@@ -815,6 +814,30 @@ export default function CardLearningView({ remediationMode = false }) {
           remediationMode={remediationMode}
           t={t}
         />
+
+        {/* Complete button — shown on last card when chunk has a currentChunkId */}
+        {currentCardIndex === cards.length - 1 && currentChunkId && completeChunkItem && (
+          <button
+            onClick={() => completeChunkItem(currentChunkId)}
+            style={{
+              width: "100%",
+              marginTop: "0.75rem",
+              padding: "0.75rem",
+              borderRadius: "12px",
+              border: "none",
+              background: "var(--color-success)",
+              color: "#fff",
+              fontWeight: 700,
+              fontSize: "0.95rem",
+              cursor: "pointer",
+              fontFamily: "inherit",
+              boxShadow: "0 4px 12px rgba(34,197,94,0.25)",
+              transition: "opacity 0.15s",
+            }}
+          >
+            ✓ {t("learning.completeChunk", "Complete Section")}
+          </button>
+        )}
       </div>
 
       {/* ─── Assistant Panel — slides in after first answer ─── */}

@@ -75,6 +75,12 @@ class StudentResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class StudentLanguageResponse(StudentResponse):
+    """Extended response from PATCH /students/{id}/language — includes translation side-effects."""
+    translated_headings: list[str] = Field(default_factory=list)
+    session_cache_cleared: bool = False
+
+
 class SessionResponse(BaseModel):
     id: UUID
     student_id: UUID
@@ -374,6 +380,11 @@ class NextCardRequest(BaseModel):
     wrong_attempts: int = Field(default=0, ge=0, description="Wrong MCQ attempts on the completed card")
     hints_used: int = Field(default=0, ge=0, description="Hints used on the completed card")
     idle_triggers: int = Field(default=0, ge=0, description="Idle assistant triggers on the completed card")
+    # Present when the request is for an exercise chunk (optional — defaults to None for teaching path)
+    chunk_id: str | None = Field(default=None, description="UUID of the exercise chunk being studied")
+    # Exercise failure context — present only when student answered an exercise MCQ wrong twice
+    failed_exercise_question: str | None = Field(default=None, max_length=500)
+    student_wrong_answer: str | None = Field(default=None, max_length=500)
 
 
 class NextCardResponse(BaseModel):
@@ -451,6 +462,7 @@ class RecoveryCardRequest(BaseModel):
     chunk_id: str
     card_index: int = 0         # the card that triggered recovery
     wrong_answers: list[str] = []  # what the student answered incorrectly
+    is_exercise: bool = False
 
 
 class SocraticExamStartRequest(BaseModel):
@@ -496,6 +508,19 @@ class ChunkListResponse(BaseModel):
     section_title:       str
     chunks:              list[ChunkSummary]
     current_chunk_index: int   # value of teaching_sessions.chunk_index
+    translated:          bool = False  # True when headings were just translated on language change
+
+
+class CompleteChunkItemRequest(BaseModel):
+    """Body for POST /sessions/{id}/chunks/{chunk_id}/complete.
+    No score required — this is a pure bookmark/completion call."""
+    pass
+
+
+class CompleteChunkItemResponse(BaseModel):
+    chunk_id:           str
+    next_chunk_id:      str | None  # None if this was the last study chunk
+    all_study_complete: bool        # True → unlock exam gate
 
 
 # ── Exam Schemas ───────────────────────────────────────────────────────────────

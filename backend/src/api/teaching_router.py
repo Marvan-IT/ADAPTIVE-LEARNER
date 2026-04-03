@@ -66,7 +66,9 @@ from api.teaching_schemas import (
     ChunkAnswerItem,
     RecoveryCardRequest,
     CompleteChunkRequest, CompleteChunkResponse,
+    CompleteChunkItemRequest, CompleteChunkItemResponse,
     ChunkSummary, ChunkListResponse,
+    StudentLanguageResponse,
     ExamStartRequest, ExamStartResponse, ExamQuestion,
     ExamSubmitRequest, ExamSubmitResponse, PerChunkScore,
     ExamRetryRequest, ExamRetryResponse,
@@ -76,36 +78,55 @@ from api.rate_limiter import limiter
 logger = logging.getLogger(__name__)
 
 
-def _get_chunk_type(heading: str) -> str:
-    """Classify a chunk heading into one of 4 canonical types.
-    Handles PDF-extraction artifacts (leading dashes, ALL CAPS) via normalisation.
-    General for all OpenStax books.
+def _get_chunk_type(heading: str, text: str = "") -> str:
+    """Classify a chunk heading into one of five canonical types.
+    Priority order (first match wins):
+      1. section_review  — matches ^\\d+\\.\\d+\\s+  (e.g. "1.2 Add Whole Numbers")
+      2. learning_objective — contains 'learning objectives', 'be prepared', 'key terms', 'key concepts', 'summary'
+      3. exercise (optional) — contains 'writing exercises'
+      4. exercise — contains 'practice makes perfect', 'everyday math', 'mixed practice'
+      5. section_review (exam source) — matches ^section \\d+ or contains '(exercises)'
+      6. teaching — everything else
+    Note: 'exercise_gate' is never returned here; it is only injected by list_chunks().
+    Returns: 'learning_objective' | 'section_review' | 'teaching' | 'exercise'
     """
-    # Strip common PDF-extraction prefix artifacts (e.g. "- SECTION 5.4 EXERCISES")
     raw = re.sub(r"^[-–—•\s]+", "", heading).strip()
     h = raw.lower()
 
-    # ── Info panel: no Q&A, never required, Start → single content card ─────
-    if any(p in h for p in ("learning objectives", "key terms", "key concepts", "summary")):
-        return "learning_objective"
-
-    # ── Chapter review: teaching-prompt cards + Q&A, always sorted LAST ─────
-    # Pattern: "X.X Title Words" — section title heading (e.g. "1.2 Add Whole Numbers")
+    # 1. Section title heading (e.g. "1.2 Add Whole Numbers") — classified as section_review
     if (re.match(r"^\d+\.\d+\s+\w", h)
             and not h.rstrip().endswith(":")
             and "exercises" not in h):
-        return "chapter_review"
+        chunk_type = "section_review"
 
-    # ── Exercise chunks: exercise-prompt MCQ cards, no Q&A ───────────────────
-    if "(exercises)" in h:                                          # all "(Exercises)" suffix
-        return "exercise"
-    if re.match(r"^section\s+\d+\.\d+", h) and "exercises" in h:   # "SECTION 1.2 EXERCISES"
-        return "exercise"
-    if "review exercises" in h or "practice test" in h:             # standalone review/test
-        return "exercise"
+    # 2. Info/objective panels — non-interactive, non-required
+    elif any(p in h for p in ("learning objectives", "be prepared", "key terms", "key concepts", "summary")):
+        chunk_type = "learning_objective"
 
-    # ── Default: teaching chunk ───────────────────────────────────────────────
-    return "teaching"
+    # 3. Optional writing exercise chunks
+    elif "writing exercises" in h:
+        chunk_type = "exercise"
+
+    # 4. Required exercise chunks (practice, everyday math, mixed practice)
+    elif any(p in h for p in ("practice makes perfect", "everyday math", "mixed practice")):
+        chunk_type = "exercise"
+
+    # 5. Review/exam-source chunks
+    elif "(exercises)" in h:
+        chunk_type = "exercise"
+    elif re.match(r"^section\s+\d+\.\d+", h) and "exercises" in h:
+        chunk_type = "exercise"
+    elif "review exercises" in h or "practice test" in h:
+        chunk_type = "exercise"
+
+    # 6. Default: teaching chunk
+    else:
+        chunk_type = "teaching"
+
+    # Only promote info/title chunks that have real content — never re-classify exercise types
+    if chunk_type in ("section_review", "learning_objective") and len((text or "").strip()) > 200:
+        return "teaching"
+    return chunk_type
 
 
 router = APIRouter(prefix="/api/v2", tags=["teaching"])
@@ -430,18 +451,124 @@ async def get_concept_readiness(
     )
 
 
-@router.patch("/students/{student_id}/language", response_model=StudentResponse)
+async def _translate_summaries_headings(
+    headings: list[str],
+    language: str,
+    client,
+) -> list[str]:
+    """Translate a list of chunk headings to the target language via a single LLM call.
+    Returns the original list unchanged on any error (timeout, parse failure).
+    """
+    import time
+    from api.prompts import LANGUAGE_NAMES
+    language_name = LANGUAGE_NAMES.get(language, "English")
+    system_prompt = (
+        f"You are a math education translator. Translate each heading in the JSON array to "
+        f"{language_name}. Return a JSON array of the same length in the same order. "
+        "Headings only — do not translate concept IDs or numbers."
+    )
+    user_prompt = json.dumps(headings)
+    t0 = time.monotonic()
+    try:
+        resp = await client.chat.completions.create(
+            model=OPENAI_MODEL_MINI,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user",   "content": user_prompt},
+            ],
+            max_tokens=500,
+            temperature=0.1,
+            timeout=10.0,
+        )
+        raw = (resp.choices[0].message.content or "").strip()
+        if raw.startswith("```"):
+            raw = re.sub(r"^```(?:json)?\s*", "", raw)
+            raw = re.sub(r"\s*```$", "", raw)
+        translated = json.loads(raw)
+        if isinstance(translated, list) and len(translated) == len(headings):
+            duration_ms = int((time.monotonic() - t0) * 1000)
+            logger.info(
+                "[lang-translate] lang=%s heading_count=%d duration_ms=%d",
+                language, len(headings), duration_ms,
+            )
+            return [str(h) for h in translated]
+        logger.warning("[lang-translate] unexpected response shape for lang=%s", language)
+    except Exception as exc:
+        logger.warning("[lang-translate] failed for lang=%s: %s", language, exc)
+    return headings
+
+
+@router.patch("/students/{student_id}/language", response_model=StudentLanguageResponse)
 @limiter.limit("30/minute")
 async def update_student_language(
     request: Request, student_id: UUID, req: UpdateLanguageRequest, db: AsyncSession = Depends(get_db)
 ):
-    """Update a student's preferred language."""
+    """Update a student's preferred language.
+    Also translates chunk headings for any active session and busts the card cache.
+    """
     student = await db.get(Student, student_id)
     if not student:
         raise HTTPException(404, "Student not found")
     student.preferred_language = req.language
-    await db.flush()
-    return student
+
+    translated_headings: list[str] = []
+    session_cache_cleared = False
+
+    # Find the most recent active session for this student
+    session_result = await db.execute(
+        select(TeachingSession)
+        .where(
+            TeachingSession.student_id == student_id,
+            TeachingSession.completed_at.is_(None),
+        )
+        .order_by(TeachingSession.started_at.desc())
+        .limit(1)
+    )
+    active_session = session_result.scalar_one_or_none()
+
+    if active_session and chunk_ksvc:
+        try:
+            raw_chunks = await chunk_ksvc.get_chunks_for_concept(
+                db, active_session.book_slug or DEFAULT_BOOK_SLUG, active_session.concept_id
+            )
+            headings = [c.get("heading", "") for c in sorted(raw_chunks, key=lambda c: c.get("order_index", 0))]
+            if headings:
+                translated_headings = await _translate_summaries_headings(
+                    headings, req.language, teaching_svc._openai_client
+                )
+
+            # Bust the card generation cache so cards regenerate in the new language
+            if active_session.presentation_text:
+                try:
+                    cache = json.loads(active_session.presentation_text)
+                    cache["cache_version"] = -1
+                    cache["cards"] = []
+                    active_session.presentation_text = json.dumps(cache)
+                except Exception:
+                    active_session.presentation_text = json.dumps({"cache_version": -1, "cards": []})
+            else:
+                active_session.presentation_text = json.dumps({"cache_version": -1, "cards": []})
+            session_cache_cleared = True
+            logger.info(
+                "[lang-translate] cache busted: session_id=%s student_id=%s new_lang=%s",
+                active_session.id, student_id, req.language,
+            )
+        except Exception as exc:
+            logger.warning("[lang-translate] session update failed: %s", exc)
+
+    await db.commit()
+    await db.refresh(student)
+
+    return StudentLanguageResponse(
+        id=student.id,
+        display_name=student.display_name,
+        interests=student.interests or [],
+        preferred_style=student.preferred_style,
+        preferred_language=student.preferred_language,
+        created_at=student.created_at,
+        translated_headings=translated_headings,
+        session_cache_cleared=session_cache_cleared,
+    )
 
 
 @router.patch("/students/{student_id}/progress", summary="Update XP and streak")
@@ -895,6 +1022,83 @@ async def get_next_adaptive_card(
     if not student:
         raise HTTPException(404, "Student not found")
 
+    # Exercise chunk branch — when chunk_id is provided and chunk is an exercise type
+    if req.chunk_id:
+        chunk = await chunk_ksvc.get_chunk(db, req.chunk_id)
+        if chunk and _get_chunk_type(chunk.get("heading", "")) == "exercise":
+            from adaptive.adaptive_engine import generate_exercise_recovery_card
+            from adaptive.prompt_builder import build_exercise_card_prompt
+            try:
+                if req.failed_exercise_question and req.wrong_attempts >= 2:
+                    # Recovery card branch
+                    card = await generate_exercise_recovery_card(
+                        failed_question=req.failed_exercise_question,
+                        wrong_answer=req.student_wrong_answer or "",
+                        chunk=chunk,
+                        language=student.preferred_language or "en",
+                        client=teaching_svc._openai_client,
+                    )
+                    await db.commit()
+                    logger.info(
+                        "[next-card] exercise recovery generated: session_id=%s chunk_id=%s",
+                        session_id, req.chunk_id,
+                    )
+                    return NextCardResponse(
+                        session_id=session.id,
+                        card=card,
+                        has_more_concepts=True,
+                        current_mode="NORMAL",
+                        concepts_covered_count=0,
+                        concepts_total=0,
+                    )
+                else:
+                    # Normal exercise card generation
+                    system_p, user_p = build_exercise_card_prompt(
+                        chunk=chunk,
+                        student_profile={
+                            "style": session.style or "default",
+                            "interests": student.interests or [],
+                            "language": student.preferred_language or "en",
+                        },
+                        language=student.preferred_language or "en",
+                    )
+                    from api.prompts import _extract_json_block
+                    import json as _json
+                    resp = await teaching_svc._openai_client.chat.completions.create(
+                        model=OPENAI_MODEL_MINI,
+                        messages=[
+                            {"role": "system", "content": system_p},
+                            {"role": "user",   "content": user_p},
+                        ],
+                        max_tokens=2000,
+                        temperature=0.5,
+                        timeout=30.0,
+                    )
+                    raw = (resp.choices[0].message.content or "").strip()
+                    raw = _extract_json_block(raw)
+                    cards_list = _json.loads(raw)
+                    if not isinstance(cards_list, list):
+                        cards_list = [cards_list]
+                    first_card = cards_list[0] if cards_list else {}
+                    first_card.setdefault("chunk_id", req.chunk_id)
+                    first_card.setdefault("is_recovery", False)
+                    await db.commit()
+                    logger.info(
+                        "[next-card] exercise card generated: session_id=%s chunk_id=%s card_count=%d",
+                        session_id, req.chunk_id, len(cards_list),
+                    )
+                    return NextCardResponse(
+                        session_id=session.id,
+                        card=LessonCard(**first_card),
+                        has_more_concepts=True,
+                        current_mode="NORMAL",
+                        concepts_covered_count=0,
+                        concepts_total=0,
+                    )
+            except Exception as exc:
+                logger.exception("[next-card] exercise generation failed: session_id=%s", session_id)
+                raise HTTPException(500, f"Exercise card generation failed: {exc}")
+
     try:
         result = await teaching_svc.generate_per_card(db, session, student, req)
     except ValueError as exc:
@@ -957,7 +1161,7 @@ async def generate_chunk_cards(
         chunk = await chunk_ksvc.get_chunk(db, req.chunk_id)
 
         # Generate 2-3 exam questions for teaching chunks
-        chunk_type = _get_chunk_type(chunk.heading if chunk else "")
+        chunk_type = _get_chunk_type(chunk.heading if chunk else "", chunk.text if chunk else "")
         questions: list[ChunkExamQuestion] = []
         if chunk_type == "teaching" and chunk and (chunk.text or "").strip():
             _q_system = (
@@ -982,8 +1186,26 @@ async def generate_chunk_cards(
                             text=_qtext,
                             chunk_id=str(req.chunk_id),
                         ))
-            except Exception as _qe:
-                logger.warning("[chunk-cards] question generation skipped: %s", _qe)
+            except Exception:
+                logger.exception("[chunk-cards] question generation failed on first try — retrying")
+                try:
+                    _q_result2 = await _call_llm_json(
+                        teaching_svc._openai_client,
+                        _q_system,
+                        _q_user,
+                        max_tokens=400,
+                    )
+                    for _qi, _q in enumerate((_q_result2.get("questions") or [])[:3]):
+                        _qtext = (_q.get("text") or "").strip()
+                        if _qtext:
+                            questions.append(ChunkExamQuestion(
+                                index=_qi,
+                                text=_qtext,
+                                chunk_id=str(req.chunk_id),
+                            ))
+                except Exception:
+                    logger.exception("[chunk-cards] question generation failed after retry — skipping exam")
+                    questions = []
 
         await db.commit()
         return ChunkCardsResponse(
@@ -1038,6 +1260,7 @@ async def generate_chunk_recovery_card(
         chunk_images=images,
         card_index=req.card_index,
         wrong_answers=req.wrong_answers,
+        is_exercise=req.is_exercise,
     )
 
     if not recovery:
@@ -1155,6 +1378,82 @@ async def complete_chunk(
         score=score,
         next_mode=next_mode,
         next_chunk_id=str(next_teaching["id"]) if next_teaching else None,
+        all_study_complete=all_study_complete,
+    )
+
+
+@router.post(
+    "/sessions/{session_id}/chunks/{chunk_id}/complete",
+    response_model=CompleteChunkItemResponse,
+    summary="Mark a chunk complete without requiring a score (exercise/teaching completion bookmark)",
+)
+@limiter.limit("60/minute")
+async def complete_chunk_item(
+    request: Request,
+    session_id: UUID,
+    chunk_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Bookmark a chunk as completed without recording a score.
+
+    Used when the student taps the Complete button on the last card of a chunk.
+    Idempotent — calling twice returns 200 with current state.
+    """
+    session = await db.get(TeachingSession, session_id)
+    if not session:
+        raise HTTPException(404, "Session not found")
+
+    # Verify chunk belongs to this session's concept
+    all_chunks = await chunk_ksvc.get_chunks_for_concept(
+        db, session.book_slug or DEFAULT_BOOK_SLUG, session.concept_id
+    )
+    all_sorted = sorted(all_chunks, key=lambda c: c.get("order_index", 0))
+    chunk_ids_in_concept = {str(c["id"]) for c in all_sorted}
+
+    if chunk_id not in chunk_ids_in_concept:
+        raise HTTPException(404, "Chunk not found in this session's concept")
+
+    # Record completion — idempotent
+    existing_progress = dict(session.chunk_progress or {})
+    if chunk_id not in existing_progress:
+        existing_progress[chunk_id] = {
+            "completed_at": datetime.utcnow().isoformat(),
+        }
+        session.chunk_progress = existing_progress
+
+    # Determine next study chunk
+    current_chunk = next((c for c in all_sorted if str(c["id"]) == chunk_id), None)
+    current_order = current_chunk.get("order_index", 0) if current_chunk else 0
+    next_chunk = next(
+        (c for c in all_sorted
+         if c.get("order_index", 0) > current_order
+         and _get_chunk_type(c.get("heading", "")) in ("teaching", "exercise", "section_review")),
+        None,
+    )
+
+    # Check all_study_complete (exclude optional exercise chunks)
+    completed_ids = set(existing_progress.keys())
+    required_ids = {
+        str(c["id"]) for c in all_sorted
+        if _get_chunk_type(c.get("heading", "")) in ("teaching", "section_review")
+        or (
+            _get_chunk_type(c.get("heading", "")) == "exercise"
+            and not _heading_is_optional(c.get("heading", ""))
+        )
+    }
+    all_study_complete = bool(required_ids) and required_ids.issubset(completed_ids)
+
+    session.phase = "SELECTING_CHUNK"
+    await db.commit()
+
+    logger.info(
+        "[complete_chunk_item] session_id=%s chunk_id=%s all_study_complete=%s",
+        session_id, chunk_id, all_study_complete,
+    )
+
+    return CompleteChunkItemResponse(
+        chunk_id=chunk_id,
+        next_chunk_id=str(next_chunk["id"]) if next_chunk else None,
         all_study_complete=all_study_complete,
     )
 
@@ -1380,6 +1679,34 @@ async def list_chunks(
         ]
 
         section_title = chunks[0].section if chunks else ""
+
+        # Inject synthetic exam gate if none exists in the DB chunks
+        already_has_gate = any(s.chunk_type == "exercise_gate" for s in summaries)
+        if not already_has_gate:
+            from uuid import uuid5, NAMESPACE_DNS
+            synthetic_id = str(uuid5(NAMESPACE_DNS, f"exam_gate:{concept_id}"))
+            max_order = max((s.order_index for s in summaries), default=0)
+            summaries.append(ChunkSummary(
+                chunk_id=synthetic_id,
+                order_index=max_order + 1,
+                heading="Section Exam",
+                has_images=False,
+                has_mcq=False,
+                chunk_type="exercise_gate",
+                is_optional=False,
+                completed=False,
+                score=None,
+                mode_used=None,
+            ))
+            logger.info(
+                "[chunks] exam gate injected: session_id=%s concept_id=%s",
+                session_id, concept_id,
+            )
+        else:
+            logger.debug(
+                "[chunks] exam gate already exists, skipping inject: session_id=%s concept_id=%s",
+                session_id, concept_id,
+            )
 
         logger.info(
             "[chunks] session_id=%s concept_id=%s total=%d current_index=%d",

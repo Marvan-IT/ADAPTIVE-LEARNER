@@ -133,10 +133,10 @@ export async function generateChunkCards(sessionId, chunkId) {
 }
 
 // Get recovery card after 2 MCQ failures
-export async function generateChunkRecoveryCard(sessionId, chunkId, cardIndex, wrongAnswers = []) {
+export async function generateChunkRecoveryCard(sessionId, chunkId, cardIndex, wrongAnswers = [], isExercise = false) {
   const { data } = await api.post(
     `/api/v2/sessions/${sessionId}/chunk-recovery-card`,
-    { chunk_id: chunkId, card_index: cardIndex, wrong_answers: wrongAnswers },
+    { chunk_id: chunkId, card_index: cardIndex, wrong_answers: wrongAnswers, is_exercise: isExercise },
     { timeout: LLM_TIMEOUT }
   );
   return data; // LessonCard
@@ -147,6 +147,9 @@ export const getChunkList = (sessionId) =>
 
 export const completeChunk = (sessionId, payload) =>
   api.post(`/api/v2/sessions/${sessionId}/complete-chunk`, payload);
+
+export const completeChunkItem = (sessionId, chunkId) =>
+  api.post(`/api/v2/sessions/${sessionId}/chunks/${chunkId}/complete`, {});
 
 export const evaluateChunkAnswers = (sessionId, chunkId, data) =>
   api.post(`/api/v2/sessions/${sessionId}/chunks/${chunkId}/evaluate`, data, { timeout: 60000 });
