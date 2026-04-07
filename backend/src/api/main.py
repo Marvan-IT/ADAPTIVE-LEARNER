@@ -29,9 +29,7 @@ from api.schemas import (
     ConceptQuery, ConceptQueryResponse, ConceptResult, PrerequisiteStatus,
     NextConceptsRequest, NextConceptsResponse,
     LearningPathRequest, LearningPathResponse, LearningPathStep,
-    TopologicalOrderItem,
-    ConceptDetailResponse, ConceptImage,
-    GraphInfoResponse, GraphNodeInfo,
+    ConceptDetailResponse, GraphInfoResponse,
 )
 from api.chunk_knowledge_service import ChunkKnowledgeService
 from api.teaching_router import router as teaching_router
@@ -40,14 +38,14 @@ import api.teaching_router as teaching_router_module
 from adaptive.adaptive_router import router as adaptive_router, cards_router as adaptive_cards_router
 import adaptive.adaptive_router as adaptive_router_module
 from db.connection import init_db, close_db
-from config import OUTPUT_DIR, OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, OPENAI_MODEL_MINI, validate_required_env_vars, DEFAULT_BOOK_SLUG
+from config import OUTPUT_DIR, OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL_MINI, validate_required_env_vars, DEFAULT_BOOK_SLUG
 from api.prompts import LANGUAGE_NAMES
 
 
 logger = logging.getLogger(__name__)
 
 # ── Rate limiter (shared via rate_limiter module to avoid circular imports) ─
-from api.rate_limiter import limiter
+from api.rate_limiter import limiter  # noqa: E402
 
 # ── Auth constants ─────────────────────────────────────────────────────
 _API_KEY = os.getenv("API_SECRET_KEY", "")

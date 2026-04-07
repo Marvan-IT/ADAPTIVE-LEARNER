@@ -1,3 +1,4 @@
+# ruff: noqa: E402
 """
 ADA Hybrid Engine Pipeline — Main Orchestrator
 
@@ -13,13 +14,11 @@ Two pipeline modes:
    section detection). Still available for testing or comparison.
 """
 
-import asyncio
 import logging
 import sys
 import os
 import time
 import argparse
-from pathlib import Path
 
 # Ensure src is on the Python path
 sys.path.insert(0, os.path.dirname(__file__))
@@ -41,7 +40,7 @@ from extraction.domain_models import PipelineOutput
 from extraction.pdf_reader import extract_all_pages
 from extraction.section_detector import detect_sections
 from extraction.concept_builder import build_concept_blocks, build_concept_blocks_from_mmd
-from extraction.mmd_parser import parse_mmd, MmdSection
+from extraction.mmd_parser import parse_mmd
 
 from images.mathpix_client import submit_pdf, wait_for_pdf_completion, download_pdf_mmd_zip
 
@@ -83,7 +82,7 @@ def run_whole_pdf_pipeline(
     start_time = time.time()
 
     print(f"\n{'='*60}")
-    print(f"ADA Whole-PDF Pipeline (Mathpix /v3/pdf)")
+    print("ADA Whole-PDF Pipeline (Mathpix /v3/pdf)")
     print(f"Processing: {book_code}")
     print(f"{'='*60}\n")
 
@@ -101,7 +100,7 @@ def run_whole_pdf_pipeline(
         raise FileNotFoundError(f"PDF not found: {pdf_path}")
 
     # ── Stage A: Mathpix whole-PDF submission ────────────────────────
-    print(f"\n[Stage A] Submitting PDF to Mathpix /v3/pdf...")
+    print("\n[Stage A] Submitting PDF to Mathpix /v3/pdf...")
     if mmd_cache.exists() and not force:
         logger.info("Using cached MMD: %s", mmd_cache)
         print(f"  Using cached MMD: {mmd_cache}")
@@ -110,12 +109,12 @@ def run_whole_pdf_pipeline(
         if pdf_id:
             # User supplied a pre-existing pdf_id — skip the upload entirely
             print(f"  Using supplied pdf_id: {pdf_id}")
-            print(f"  Skipping upload — polling until Mathpix job is complete...")
+            print("  Skipping upload — polling until Mathpix job is complete...")
         else:
             logger.info("Submitting %s to Mathpix /v3/pdf ...", slug)
             pdf_id = submit_pdf(pdf_path)
             print(f"  pdf_id: {pdf_id}")
-            print(f"  Polling Mathpix (may take 10–30 min for large books)...")
+            print("  Polling Mathpix (may take 10–30 min for large books)...")
         wait_for_pdf_completion(pdf_id)
         mmd_text = download_pdf_mmd_zip(pdf_id, image_dir)
         mmd_cache.write_text(mmd_text, encoding="utf-8")
@@ -125,7 +124,7 @@ def run_whole_pdf_pipeline(
     print(f"  MMD size: {len(mmd_text):,} characters")
 
     # ── Stage B: Parse MMD into sections ────────────────────────────
-    print(f"\n[Stage B] Parsing MMD into sections...")
+    print("\n[Stage B] Parsing MMD into sections...")
     sections = parse_mmd(
         mmd_text,
         section_pattern=config["section_pattern"],
@@ -147,10 +146,10 @@ def run_whole_pdf_pipeline(
     # ── Stage C: Images ─────────────────────────────────────────────
     # Images are Mathpix CDN URLs embedded inline in book.mmd.
     # chunk_builder.py downloads them and stores ChunkImage rows in PostgreSQL.
-    print(f"\n[Stage C] Images embedded in book.mmd by Mathpix.")
+    print("\n[Stage C] Images embedded in book.mmd by Mathpix.")
 
     # ── Stage D: Build concept blocks ───────────────────────────────
-    print(f"\n[Stage D] Building concept blocks...")
+    print("\n[Stage D] Building concept blocks...")
     concept_blocks = build_concept_blocks_from_mmd(sections, config)
     print(f"  Built {len(concept_blocks)} concept blocks")
     if concept_blocks:
@@ -159,7 +158,7 @@ def run_whole_pdf_pipeline(
         print(f"  Total words: {total_words:,}  (avg {avg_words}/block)")
 
     # ── Stage E: Build dependency graph ─────────────────────────────
-    print(f"\n[Stage E] Building dependency graph...")
+    print("\n[Stage E] Building dependency graph...")
     dependency_edges = build_dependency_edges(concept_blocks)
     total_edges = sum(len(e.prerequisites) for e in dependency_edges)
     graph = create_graph(concept_blocks, dependency_edges)
@@ -171,13 +170,13 @@ def run_whole_pdf_pipeline(
         print(f"  Issues: {len(graph_issues)}")
 
     # ── Stage F: Validate ────────────────────────────────────────────
-    print(f"\n[Stage F] Validating concept blocks...")
+    print("\n[Stage F] Validating concept blocks...")
     validation_results = validate_all_blocks(concept_blocks)
     summary = get_validation_summary(validation_results)
     print(f"  Valid: {summary['valid_blocks']}/{summary['total_blocks']} ({summary['validation_rate']}%)")
 
     # ── Stage G: Export outputs ──────────────────────────────────────
-    print(f"\n[Stage G] Exporting outputs...")
+    print("\n[Stage G] Exporting outputs...")
     output = PipelineOutput(
         concept_blocks=concept_blocks,
         dependency_edges=dependency_edges,
@@ -216,7 +215,7 @@ def run_pipeline(book_code: str, no_mathpix: bool = False, use_llm: bool = False
 
     # ── Step 0: Load configuration ──────────────────────────────────
     print(f"\n{'='*60}")
-    print(f"ADA Hybrid Engine Pipeline")
+    print("ADA Hybrid Engine Pipeline")
     print(f"Processing: {book_code}")
     print(f"{'='*60}\n")
 
@@ -230,12 +229,12 @@ def run_pipeline(book_code: str, no_mathpix: bool = False, use_llm: bool = False
         raise FileNotFoundError(f"PDF not found: {pdf_path}")
 
     # ── Step 1: Extract all pages ───────────────────────────────────
-    print(f"\n[Step 1/7] Extracting pages from PDF...")
+    print("\n[Step 1/7] Extracting pages from PDF...")
     pages = extract_all_pages(pdf_path)
     print(f"  Extracted {len(pages)} pages")
 
     # ── Step 2: Detect section boundaries ───────────────────────────
-    print(f"\n[Step 2/7] Detecting section boundaries...")
+    print("\n[Step 2/7] Detecting section boundaries...")
     sections = detect_sections(pages, book_config)
     print(f"  Found {len(sections)} instructional sections")
 
@@ -271,7 +270,7 @@ def run_pipeline(book_code: str, no_mathpix: bool = False, use_llm: bool = False
         print(f"  Total LaTeX expressions: {sum(len(b.latex) for b in concept_blocks)}")
 
     # ── Step 4: Build dependency graph ──────────────────────────────
-    print(f"\n[Step 4/7] Building dependency graph...")
+    print("\n[Step 4/7] Building dependency graph...")
     dependency_edges = build_dependency_edges(concept_blocks)
     total_edges = sum(len(e.prerequisites) for e in dependency_edges)
     print(f"  Created {len(dependency_edges)} edge entries ({total_edges} total prerequisite links)")
@@ -290,18 +289,18 @@ def run_pipeline(book_code: str, no_mathpix: bool = False, use_llm: bool = False
             print(f"    - {issue}")
 
     # ── Step 5: Validate concept blocks ─────────────────────────────
-    print(f"\n[Step 5/6] Validating concept blocks...")
+    print("\n[Step 5/6] Validating concept blocks...")
     validation_results = validate_all_blocks(concept_blocks)
     summary = get_validation_summary(validation_results)
     print(f"  Valid:   {summary['valid_blocks']}/{summary['total_blocks']} ({summary['validation_rate']}%)")
     print(f"  Invalid: {summary['invalid_blocks']}")
     if summary['issue_counts']:
-        print(f"  Issues:")
+        print("  Issues:")
         for issue_type, count in summary['issue_counts'].items():
             print(f"    - {issue_type}: {count}")
 
     # ── Step 6: Export outputs ──────────────────────────────────────
-    print(f"\n[Step 6/6] Exporting outputs...")
+    print("\n[Step 6/6] Exporting outputs...")
 
     output = PipelineOutput(
         concept_blocks=concept_blocks,

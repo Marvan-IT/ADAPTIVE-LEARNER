@@ -41,6 +41,9 @@ from adaptive.schemas import (
     AdaptiveLessonContent,
     AdaptiveLesson,
     RemediationInfo,
+    CardBehaviorSignals,
+    LearningProfile,
+    GenerationProfile,
 )
 from adaptive.profile_builder import build_learning_profile
 from adaptive.generation_profile import build_generation_profile
@@ -758,7 +761,7 @@ async def generate_next_card(
         raise ValueError(f"Concept not found: {concept_id}")
 
     # Determine engagement strategy, guarding against OVERWHELMED students getting challenge_bump
-    from adaptive.boredom_detector import select_engagement_strategy, detect_boredom_signal
+    from adaptive.boredom_detector import select_engagement_strategy
     _engagement_signal = getattr(signals, "engagement_signal", None)
     _strategy: str | None = None
     if _engagement_signal:

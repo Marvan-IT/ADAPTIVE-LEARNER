@@ -1455,7 +1455,7 @@ Card content the student is reading:
 
 # ── JSON helpers (importable by other modules) ────────────────────────────────
 
-import re as _re
+import re as _re  # noqa: E402
 
 def _extract_json_block(raw: str) -> str:
     """Strip markdown code fences from an LLM response, returning clean JSON text."""

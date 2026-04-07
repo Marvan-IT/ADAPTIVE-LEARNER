@@ -21,10 +21,6 @@ from openai import AsyncOpenAI
 from config import (
     OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, OPENAI_MODEL_MINI,
     MASTERY_THRESHOLD, MAX_SOCRATIC_EXCHANGES, SOCRATIC_MAX_ATTEMPTS,
-    CARDS_MID_SESSION_CHECK_INTERVAL, STARTER_PACK_MAX_SECTIONS, STARTER_PACK_INITIAL_SECTIONS,
-    CARDS_MAX_TOKENS_SLOW, CARDS_MAX_TOKENS_SLOW_FLOOR, CARDS_MAX_TOKENS_SLOW_PER_SECTION,
-    CARDS_MAX_TOKENS_NORMAL, CARDS_MAX_TOKENS_NORMAL_FLOOR, CARDS_MAX_TOKENS_NORMAL_PER_SECTION,
-    CARDS_MAX_TOKENS_FAST, CARDS_MAX_TOKENS_FAST_FLOOR, CARDS_MAX_TOKENS_FAST_PER_SECTION,
     DEFAULT_BOOK_SLUG, NEXT_CARD_MAX_TOKENS,
     CHUNK_MAX_TOKENS_STRUGGLING, CHUNK_MAX_TOKENS_NORMAL, CHUNK_MAX_TOKENS_FAST, CHUNK_MAX_TOKENS_RECOVERY,
 )
@@ -34,17 +30,15 @@ from api.prompts import (
     build_presentation_user_prompt,
     build_socratic_system_prompt,
     build_remediation_socratic_prompt,
-    build_cards_system_prompt,
     build_cards_user_prompt,
     build_assistant_system_prompt,
-    build_mid_session_checkin_card,
 )
 from db.models import TeachingSession, ConversationMessage, StudentMastery, Student, SpacedReview, CardInteraction, ConceptChunk
 from api.teaching_schemas import CardMCQ, RegenerateMCQRequest
 
 logger = logging.getLogger(__name__)
 
-import re as _re
+import re as _re  # noqa: E402
 
 # Module-level constant — used by generate_per_chunk() and teaching_router.py
 EXERCISE_HEADING_PATTERNS = (
@@ -608,7 +602,6 @@ class TeachingService:
         )
         concept_text = "\n\n".join(c["text"] for c in _chunks[:5]) if _chunks else ""
         concept_title = _chunks[0].get("heading", session.concept_id) if _chunks else session.concept_id
-        images: list = []
 
         # Query this session's card interaction stats for adaptive Socratic calibration
         session_card_stats = None
@@ -1348,7 +1341,7 @@ class TeachingService:
         parsed = _clean_card_string_fields(parsed)
 
         # Normalise to LessonCard shape
-        card_position = len(cached.get("cards", []))
+        len(cached.get("cards", []))
         card_dict = _normalise_per_card(parsed, chunk_id=next_piece.get("id") or session.concept_id)
 
         # ── Step 13: Resolve image — image_indices first, then LLM image_url match ──
@@ -1443,9 +1436,9 @@ class TeachingService:
         Each card has chunk_id stamped on it by _normalise_per_card().
         """
         try:
-            from adaptive.adaptive_engine import build_blended_analytics
-            from adaptive.prompt_builder import build_chunk_card_prompt, build_next_card_prompt, _CARD_MODE_DELIVERY
-            from adaptive.schemas import CardBehaviorSignals
+            from adaptive.adaptive_engine import build_blended_analytics  # noqa: F401
+            from adaptive.prompt_builder import build_chunk_card_prompt, build_next_card_prompt, _CARD_MODE_DELIVERY  # noqa: F401
+            from adaptive.schemas import CardBehaviorSignals  # noqa: F401
         except (ImportError, SyntaxError) as _imp_err:
             logger.error("[per-chunk] adaptive module import failed: %s", _imp_err)
             raise HTTPException(status_code=500, detail=f"Server configuration error: {_imp_err}")
@@ -1836,7 +1829,6 @@ class TeachingService:
         Targeted re-explanation in STRUGGLING mode using chunk text directly.
         Returns card dict with is_recovery=True and chunk_id stamped, or None on failure.
         """
-        student = None  # not needed — chunk text is self-contained
 
         chunk_id = chunk.get("id", "")
         topic_title = chunk.get("heading", "this topic")
@@ -2391,7 +2383,7 @@ class TeachingService:
         interests = []
         if student:
             interests = getattr(student, "interests", []) or []
-        language = getattr(student, "preferred_language", "en") or "en" if student else "en"
+        getattr(student, "preferred_language", "en") or "en" if student else "en"
 
         failed_text = ", ".join(failed_topics[:5])
         interests_text = f"\nStudent interests: {', '.join(interests)}." if interests else ""
