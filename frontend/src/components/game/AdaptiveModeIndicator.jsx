@@ -1,4 +1,5 @@
 import { useAdaptiveStore } from '../../store/adaptiveStore';
+import { motion, AnimatePresence } from 'framer-motion';
 
 const MODE_CONFIG = {
   NORMAL:     { emoji: '\uD83D\uDCD6', label: 'Normal',        color: '#6b7280', bg: 'rgba(107,114,128,0.12)' },
@@ -14,19 +15,31 @@ export default function AdaptiveModeIndicator({ compact = false }) {
   if (!cfg) return null;
 
   return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: '0.3rem',
-      padding: compact ? '0.15rem 0.5rem' : '0.25rem 0.65rem',
-      borderRadius: '9999px',
-      background: cfg.bg,
-      border: `1.5px solid ${cfg.color}`,
-      fontWeight: 700,
-      fontSize: compact ? '0.7rem' : '0.8rem',
-      color: cfg.color,
-      whiteSpace: 'nowrap',
-      transition: 'all 0.3s ease',
-    }}>
-      {cfg.emoji} {!compact && cfg.label}
-    </div>
+    <motion.div
+      layout
+      animate={{ backgroundColor: cfg.bg, borderColor: cfg.color, color: cfg.color }}
+      transition={{ duration: 0.3 }}
+      style={{
+        display: 'flex', alignItems: 'center', gap: '0.3rem',
+        padding: compact ? '0.15rem 0.5rem' : '0.25rem 0.65rem',
+        borderRadius: '9999px',
+        border: `1.5px solid ${cfg.color}`,
+        fontWeight: 700,
+        fontSize: compact ? '0.7rem' : '0.8rem',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      <AnimatePresence mode="wait">
+        <motion.span
+          key={mode}
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.15 }}
+        >
+          {cfg.emoji} {!compact && cfg.label}
+        </motion.span>
+      </AnimatePresence>
+    </motion.div>
   );
 }

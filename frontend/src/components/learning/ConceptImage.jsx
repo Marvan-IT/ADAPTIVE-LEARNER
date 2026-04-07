@@ -2,6 +2,7 @@ import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
+import { useTranslation } from "react-i18next";
 import { API_BASE_URL } from "../../utils/constants";
 
 /**
@@ -17,6 +18,7 @@ import { API_BASE_URL } from "../../utils/constants";
  *   className {string}  Optional extra class name on the outer wrapper
  */
 export default function ConceptImage({ img, maxWidth = "600px", className = "" }) {
+  const { t } = useTranslation();
   const [status, setStatus] = useState("loading"); // "loading" | "loaded" | "error"
 
   // Prefer enriched description; fall back to legacy caption
@@ -25,7 +27,7 @@ export default function ConceptImage({ img, maxWidth = "600px", className = "" }
   if (!img.url) return null;
   if (status === "error") return (
     <div style={{ padding: "0.5rem", color: "var(--color-text-muted)", fontSize: "0.8rem" }}>
-      [image unavailable]
+      {t("image.unavailable", "[image unavailable]")}
     </div>
   );
 
@@ -40,7 +42,7 @@ export default function ConceptImage({ img, maxWidth = "600px", className = "" }
           borderRadius: "10px",
           border: "1.5px solid var(--color-border)",
           overflow: "hidden",
-          backgroundColor: "#fff",
+          backgroundColor: "var(--color-surface)",
           maxWidth,
         }}
       >

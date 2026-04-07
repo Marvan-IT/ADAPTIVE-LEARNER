@@ -20,10 +20,10 @@ import {
   switchStyle,
   updateSessionInterests,
 } from "../api/sessions";
+import { useAdaptiveStore } from '../store/adaptiveStore';
 import { useStudent } from "./StudentContext";
 import { useTheme } from "./ThemeContext";
 import { trackEvent } from "../utils/analytics";
-import { useAdaptiveStore } from "../store/adaptiveStore";
 
 const SessionContext = createContext();
 
@@ -97,14 +97,14 @@ function sessionReducer(state, action) {
   switch (action.type) {
     case "START_LOADING":
       if (state.session?.concept_id) {
-        localStorage.removeItem(`ada_session_${state.session.concept_id}`);
+        localStorage.removeItem(`ada_session_${state.session.student_id}_${state.session.concept_id}`);
       }
       return { ...initialState, phase: "LOADING", loading: true };
     case "TRANSITION_LOADING":
       return { ...state, loading: true };
     case "SESSION_CREATED":
       if (action.payload?.concept_id) {
-        localStorage.setItem(`ada_session_${action.payload.concept_id}`, action.payload.id);
+        localStorage.setItem(`ada_session_${action.payload.student_id}_${action.payload.concept_id}`, action.payload.id);
       }
       return { ...state, session: action.payload };
     case "CARDS_LOADED":
@@ -252,6 +252,8 @@ function sessionReducer(state, action) {
         currentChunkIndex: action.payload.chunk_index,
         totalChunks: action.payload.total_chunks,
         nextCardInFlight: false,
+        cardAnswers: {},
+        chunkEvalResult: null,
       };
 
     case "CHUNK_LOADING":
@@ -288,6 +290,7 @@ function sessionReducer(state, action) {
         loading: false,
         chunkEvalResult: null,
         chunkQuestions: [],
+        cardAnswers: {},
       };
 
     case "CHUNK_CARDS_LOADED_NEW":
@@ -302,6 +305,8 @@ function sessionReducer(state, action) {
         phase: "CARDS",
         loading: false,
         hasMoreConcepts: (action.payload.chunk_index_after ?? state.chunkIndex) < state.chunkList.length - 1,
+        cardAnswers: {},
+        chunkEvalResult: null,
       };
 
     case "NEXT_CHUNK_FETCH_STARTED":
@@ -331,21 +336,27 @@ function sessionReducer(state, action) {
       return { ...state, phase: "CHUNK_QUESTIONS", chunkEvalResult: null };
 
     case "CHUNK_EVAL_RESULT": {
-      const { passed, all_study_complete, chunk_progress, ...rest } = action.payload;
-      let newState = { ...state, chunkEvalResult: { passed, all_study_complete, ...rest }, loading: false };
+      const { passed, all_study_complete, chunk_progress, next_mode, ...rest } = action.payload;
+      const newMode = next_mode || state.currentChunkMode;
+      let newState = {
+        ...state,
+        chunkEvalResult: { passed, all_study_complete, ...rest },
+        loading: false,
+        currentChunkMode: newMode,
+        modeJustChanged: newMode !== state.currentChunkMode,
+      };
       if (passed) {
         if (chunk_progress) {
           newState.chunkProgress = { ...state.chunkProgress, ...chunk_progress };
         }
-        newState.allStudyComplete = all_study_complete;
         if (all_study_complete) {
+          newState.allStudyComplete = true;
           if (state.session?.concept_id) {
-            localStorage.removeItem(`ada_session_${state.session.concept_id}`);
+            localStorage.removeItem(`ada_session_${state.session.student_id}_${state.session.concept_id}`);
           }
           newState.phase = "COMPLETED";
-        } else {
-          newState.phase = "CHUNK_QUESTIONS";
         }
+        // If not all_study_complete, stay in CHUNK_QUESTIONS to show result; RETURN_TO_PICKER fires after 1.5s
       }
       return newState;
     }
@@ -519,8 +530,13 @@ function sessionReducer(state, action) {
       };
 
     case "RESET":
+      // Memory-only reset — does NOT clear localStorage.
+      // Use SESSION_COMPLETED to clear localStorage on deliberate completion.
+      return initialState;
+
+    case "SESSION_COMPLETED":
       if (state.session?.concept_id) {
-        localStorage.removeItem(`ada_session_${state.session.concept_id}`);
+        localStorage.removeItem(`ada_session_${state.session.student_id}_${state.session.concept_id}`);
       }
       return initialState;
     case "ERROR":
@@ -657,11 +673,12 @@ export function SessionProvider({ children }) {
             state.session.id,
             currentCard?.chunk_id,
             state.currentCardIndex,
-            signals?.wrongAnswer ? [signals.wrongAnswer] : [],
+            signals?.wrongAnswerText ? [signals.wrongAnswerText] : [],
             isExercise
           );
-          if (res?.recovery_card) {
-            dispatch({ type: "INSERT_RECOVERY_CARD", payload: res.recovery_card });
+          const recoveryCard = res?.recovery_card ?? (res?.content || res?.title ? res : null);
+          if (recoveryCard) {
+            dispatch({ type: "INSERT_RECOVERY_CARD", payload: recoveryCard });
           }
           dispatch({ type: "NEXT_CARD" });   // advance past the failed card
           useAdaptiveStore.getState().awardXP(5);
@@ -752,16 +769,28 @@ export function SessionProvider({ children }) {
     if (state.chunkQuestions.length > 0) {
       dispatch({ type: "SHOW_CHUNK_QUESTIONS" });
     } else {
-      // No exam questions (info chunks, exercise chunks) — auto-complete at 100%
+      // No KC questions: exercise/info chunks auto-complete; teaching chunks degrade gracefully
+      const chunkMeta = state.chunkList?.find(c => c.chunk_id === state.currentChunkId);
+      const isTeaching = chunkMeta?.chunk_type === "teaching";
+      if (isTeaching) {
+        // Intentional console.error for monitoring — signals KC generation failure in backend
+        console.error("[finishCards] teaching chunk has no KC questions — auto-completing as fallback");
+      }
       if (state.currentChunkId) {
         try {
+          const _answers = Object.values(state.cardAnswers);
+          const _correct = _answers.filter(a => a.correct).length;
+          const _total = _answers.length > 0 ? _answers.length : 1;
           const res = await completeChunk(state.session.id, {
             chunk_id: state.currentChunkId,
-            correct: 1,
-            total: 1,
+            correct: _correct,
+            total: _total,
             mode_used: state.currentChunkMode || "NORMAL",
           });
           dispatch({ type: "CHUNK_COMPLETED", payload: res.data });
+          if (res.data.next_mode) {
+            useAdaptiveStore.getState().setMode(res.data.next_mode);
+          }
         } catch (err) {
           console.error("[finishCards] auto-complete chunk failed:", err);
         }
@@ -855,23 +884,36 @@ export function SessionProvider({ children }) {
     if (!state.session) return;
     dispatch({ type: "TRANSITION_LOADING" });
     try {
+      // Collect MCQ behavioral data from card phase
+      const _mcqAnswers = Object.values(state.cardAnswers);
+      const _mcqCorrect = _mcqAnswers.filter(a => a.correct).length;
+      const _mcqTotal = _mcqAnswers.length;
+
       const res = await evaluateChunkAnswers(state.session.id, chunkId, {
         questions,
         answers,
         mode_used: modeUsed || "NORMAL",
+        mcq_correct: _mcqCorrect,
+        mcq_total: _mcqTotal,
       });
       dispatch({ type: "CHUNK_EVAL_RESULT", payload: res.data });
       if (res.data.passed) {
         refreshMastery();
+        // Sync Zustand so AdaptiveModeIndicator reflects backend mode
+        if (res.data.next_mode) {
+          useAdaptiveStore.getState().setMode(res.data.next_mode);
+        }
+        // Only return to picker when concept is NOT complete
+        // When all_study_complete=true, CHUNK_EVAL_RESULT already sets phase="COMPLETED"
         if (!res.data.all_study_complete) {
-          setTimeout(() => dispatch({ type: "RETURN_TO_PICKER" }), 2000);
+          setTimeout(() => dispatch({ type: "RETURN_TO_PICKER" }), 1500);
         }
       }
     } catch (err) {
       console.error("[SessionContext] submitChunkAnswers failed:", err);
       dispatch({ type: "ERROR", payload: friendlyError(err) });
     }
-  }, [state.session, refreshMastery]);
+  }, [state.session, state.cardAnswers, refreshMastery]);
 
   const completeChunkAction = useCallback(async (chunkId, correct, total, modeUsed) => {
     if (!state.session?.id) return;

@@ -589,7 +589,6 @@ every formula, every worked-example step, every Try It problem. You are ADDING s
 around the original content, NEVER removing or summarising it.
 
 BEFORE each concept/formula:
-  - Open with a concrete real-world analogy (1–2 sentences) that a 9-year-old would understand.
   - Define EVERY math term in plain English before you use it.
 
 FORMULAS & LATEX:
@@ -635,10 +634,6 @@ ENHANCEMENTS YOU ADD:
   - A "why this works" note after key formulas (1–2 sentences).
   - Define terms on first use (inline, not a separate card).
 
-MANDATORY ENHANCEMENTS — NON-NEGOTIABLE:
-  - EVERY TEACH card MUST include exactly 1 real-world analogy. Not "when possible" — ALWAYS.
-  - EVERY TEACH card MUST include a "**Why this matters:**" sentence explaining the real-world
-    relevance of the concept. This sentence must appear before the worked example.
   - A VISUAL card MUST be generated whenever the chunk contains math notation (LaTeX, formulas,
     equations) or references a figure. Do NOT skip the VISUAL card for math-heavy content.
 
@@ -647,7 +642,7 @@ QUESTION hint: Concrete approach description (not the answer, but how to start).
 Numbered steps: for all worked examples.
 
 TONE: Clear, supportive. Natural high-school reading level.
-FUN: 1 real-world application hook or interesting connection per section where it fits naturally.
+FUN: 1 interesting connection per section where it fits naturally and is genuinely relevant.
 
 MANDATORY: ALL definitions, formulas, and worked-example steps MUST appear on every card.
 If a source section has 7 steps, the card has 7 steps. No exceptions.
@@ -711,7 +706,7 @@ ABSOLUTE RULES — THESE OVERRIDE EVERYTHING ELSE:
 
 5. MODE DIFFERENCES: Modes ONLY control what you ADD around the source content.
    - FAST: Add almost nothing. Faithful reproduction.
-   - NORMAL: Add clarifying transitions and 1 real-world hook per concept.
+   - NORMAL: Add clarifying transitions where helpful.
    - STRUGGLING: Add analogies, micro-step explanations, visual cues, encouragement.
    Modes NEVER control what you REMOVE. Nothing is ever removed.
 
@@ -1159,7 +1154,6 @@ OUTPUT FORMAT — respond with valid JSON only:
             "\n\nREMEDIATION RE-ATTEMPT — student previously failed these concepts:\n"
             f"{weak_list}\n"
             "For any card that covers these topics:\n"
-            "  • Open with a concrete real-world analogy\n"
             "  • Show at least one fully worked step-by-step example\n"
             "  • Use simpler language and shorter sentences\n"
             "All other sections still required — do NOT skip any section.\n"
@@ -1457,3 +1451,109 @@ CURRENT LESSON: {concept_title} → {card_title}
 Card content the student is reading:
 {card_content[:800]}
 {interests_text}{style_text}{_language_instruction(language)}"""
+
+
+# ── JSON helpers (importable by other modules) ────────────────────────────────
+
+import re as _re
+
+def _extract_json_block(raw: str) -> str:
+    """Strip markdown code fences from an LLM response, returning clean JSON text."""
+    m = _re.search(r"```(?:json)?\s*([\s\S]*?)```", raw)
+    return m.group(1).strip() if m else raw.strip()
+
+
+# ── Exercise Prompt Builders ─────────────────────────────────────────────────
+
+def build_exercise_card_system_prompt(language: str) -> str:
+    """System prompt for generating 2–3 MCQ cards from a real textbook exercise chunk."""
+    language_name = LANGUAGE_NAMES.get(language, "English")
+    return f"""You are an interactive math practice generator for the ADA learning platform.
+
+## YOUR TASK
+Given a textbook exercise chunk, generate 2–3 multiple-choice question (MCQ) cards.
+Each card tests one problem from the chunk.
+
+## RULES
+- Source problems ONLY from the chunk text provided — do not invent new problems
+- Each card has exactly one MCQ with 4 answer options (A, B, C, D)
+- One option must be correct; all others must be plausible common mistakes
+- Difficulty: MEDIUM. If the chunk contains 3+ problems, one card may be HARD.
+- Include a brief explanation (2–3 sentences) of why the correct answer is right
+- Card count: 2 unless chunk text contains 3+ clearly distinct problems, then 3
+
+## OUTPUT FORMAT (JSON array)
+[
+  {{
+    "index": 0,
+    "title": "<short title from problem>",
+    "content": "<problem statement in Markdown>",
+    "card_type": "QUESTION",
+    "question": {{
+      "text": "<question>",
+      "options": ["<A>", "<B>", "<C>", "<D>"],
+      "correct_index": 0,
+      "explanation": "<why correct>",
+      "difficulty": "MEDIUM"
+    }},
+    "chunk_id": "<chunk_id>",
+    "is_recovery": false
+  }}
+]
+
+## LANGUAGE
+Respond entirely in {language_name}."""
+
+
+def build_exercise_recovery_prompt(
+    failed_question: str,
+    wrong_answer: str,
+    chunk_heading: str,
+    chunk_text: str,
+    language: str,
+) -> tuple[str, str]:
+    """Build (system_prompt, user_prompt) for a step-by-step walkthrough recovery card."""
+    language_name = LANGUAGE_NAMES.get(language, "English")
+    system = f"""You are a supportive math tutor helping a student who answered incorrectly twice.
+
+## YOUR TASK
+Generate one recovery card that walks through the correct solution step by step,
+then ends with a simpler version of the same question to rebuild confidence.
+
+## RULES
+- Acknowledge the wrong answer without blame: start with
+  "Many students choose '{wrong_answer}' because..."
+- Show the correct approach in 3–5 numbered steps
+- Each step must be complete — no abbreviations or "as before"
+- End with a SIMPLIFIED MCQ (EASY difficulty) testing the same core concept
+
+## OUTPUT FORMAT (JSON — single card object)
+{{
+  "index": 0,
+  "title": "Let's work through this together",
+  "content": "<full step-by-step walkthrough in Markdown>",
+  "card_type": "TEACH",
+  "question": {{
+    "text": "<simplified question>",
+    "options": ["<A>", "<B>", "<C>", "<D>"],
+    "correct_index": 0,
+    "explanation": "<why correct>",
+    "difficulty": "EASY"
+  }},
+  "chunk_id": "<chunk_id>",
+  "is_recovery": true
+}}
+
+## LANGUAGE
+Respond entirely in {language_name}."""
+
+    user = f"""CHUNK HEADING: {chunk_heading}
+
+ORIGINAL QUESTION: {failed_question}
+
+STUDENT'S WRONG ANSWER: {wrong_answer}
+
+CHUNK TEXT (source material):
+{chunk_text[:1500]}"""
+
+    return system, user

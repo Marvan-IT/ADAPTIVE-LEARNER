@@ -53,9 +53,9 @@ FUN ENGAGEMENT: Add 1 real-world application hook to one card where it fits natu
 COMPLETENESS RULE: Write each definition, formula, and worked example out IN FULL. Never abbreviate, summarize, or say "as shown above." If a chunk contains a 3-step worked example, all 3 steps must appear on the card. Write as much as needed to genuinely teach — do not stop early.
 QUESTION hint: concrete approach description (not just 'try it').
 MCQ wrong-answer explanation: 2–3 sentence explanation of the correct approach — do NOT shorten card content.
-MANDATORY ENHANCEMENTS — NON-NEGOTIABLE:
-- EVERY TEACH card MUST include exactly 1 real-world analogy. Not optional — ALWAYS required.
-- EVERY TEACH card MUST include a "**Why this matters:**" sentence before the worked example.
+PROSE QUALITY — NON-NEGOTIABLE:
+- Weave 1 real-world analogy naturally into the explanation prose. Do NOT add a labeled section like "Real world analogy:" or "Real-world hook:" — integrate it seamlessly into the sentences.
+- Explain why the concept matters in 1–2 sentences woven into the content flow. Do NOT use a heading or label like "**Why this matters:**" or "Why this matters:" — just write it naturally as part of the paragraph.
 - A VISUAL card MUST be generated whenever the chunk contains math notation (LaTeX, formulas, equations) or references a figure. Do NOT skip the VISUAL card for math-heavy content.""",
 
     "FAST": """\
@@ -641,5 +641,45 @@ def build_next_card_prompt(
             "description. Prefer diagrams and formulas over decorative images.",
         ]
         user_content += "\n" + "\n".join(image_lines)
+
+    return system_prompt, user_content
+
+
+def build_exercise_card_prompt(
+    chunk: dict,
+    student_profile: dict,
+    language: str,
+) -> tuple[str, str]:
+    """Pure function. Builds (system_prompt, user_prompt) for exercise chunk card generation.
+
+    Delegates system prompt to build_exercise_card_system_prompt(language).
+    Returns (system_prompt, user_prompt).
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from api.prompts import build_exercise_card_system_prompt
+
+    system_prompt = build_exercise_card_system_prompt(language)
+
+    heading = chunk.get("heading", "")
+    text = (chunk.get("text") or "")[:2000]
+    style = student_profile.get("style", "default")
+    interests = student_profile.get("interests", [])
+
+    interests_line = ""
+    if interests:
+        interests_line = f"\nSTUDENT INTERESTS: {', '.join(interests[:5])}"
+
+    # Determine card count hint
+    distinct_problems = text.count("\n\n") + 1
+    card_count = 3 if distinct_problems >= 3 else 2
+
+    user_content = f"""CHUNK HEADING: {heading}
+
+CHUNK TEXT:
+{text}
+
+STUDENT STYLE: {style}{interests_line}
+
+CARD COUNT: Generate {card_count} cards."""
 
     return system_prompt, user_content

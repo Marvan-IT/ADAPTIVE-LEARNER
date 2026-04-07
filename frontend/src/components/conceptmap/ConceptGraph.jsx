@@ -2,9 +2,9 @@ import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import { formatConceptTitle } from "../../utils/formatConceptTitle";
 
 const STATUS_STYLES = {
-  mastered: { fill: "#dcfce7", border: "#22c55e", text: "#166534" },
-  ready: { fill: "#dbeafe", border: "#3b82f6", text: "#1e40af" },
-  locked: { fill: "#f1f5f9", border: "#94a3b8", text: "#64748b" },
+  mastered: { fill: "rgba(34,197,94,0.15)", border: "rgba(34,197,94,0.7)", text: "var(--color-success)" },
+  ready: { fill: "rgba(99,102,241,0.15)", border: "rgba(99,102,241,0.7)", text: "var(--color-primary)" },
+  locked: { fill: "rgba(148,163,184,0.08)", border: "rgba(148,163,184,0.4)", text: "var(--color-text-muted)" },
 };
 
 const BOX_W = 190;

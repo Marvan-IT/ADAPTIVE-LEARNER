@@ -16,7 +16,7 @@ class ErrorBoundary extends Component {
   render() {
     if (this.state.error) {
       return (
-        <div style={{ padding: "2rem", fontFamily: "monospace", color: "#ef4444", background: "#fff" }}>
+        <div style={{ padding: "2rem", fontFamily: "monospace", color: "var(--color-danger)", background: "var(--color-bg)" }}>
           <h2>Something crashed</h2>
           <pre style={{ whiteSpace: "pre-wrap", fontSize: "0.8rem" }}>{String(this.state.error)}</pre>
           <button onClick={() => { this.setState({ error: null }); window.location.href = "/"; }}

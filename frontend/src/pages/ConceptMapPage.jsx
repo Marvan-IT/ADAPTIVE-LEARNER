@@ -9,6 +9,7 @@ import MapLegend from "../components/conceptmap/MapLegend";
 import { formatConceptTitle } from "../utils/formatConceptTitle";
 import { getReviewDue } from "../api/students";
 import { getAvailableBooks } from "../api/concepts";
+import { motion, AnimatePresence } from "framer-motion";
 import {
   Loader, Play, CheckCircle, Lock, BookOpen, Trophy, Target,
   AlertTriangle, RefreshCw,
@@ -118,7 +119,7 @@ export default function ConceptMapPage() {
     return (
       <div style={{
         display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-        height: "calc(100vh - 64px)", gap: "1rem",
+        height: "100vh", gap: "1rem",
       }}>
         <Loader size={32} color="var(--color-primary)" style={{ animation: "spin 1s linear infinite" }} />
         <p style={{ color: "var(--color-text-muted)" }}>{t("map.loadingDashboard")}</p>
@@ -131,7 +132,7 @@ export default function ConceptMapPage() {
     return (
       <div style={{
         display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-        height: "calc(100vh - 64px)", gap: "1rem",
+        height: "100vh", gap: "1rem",
       }}>
         <div style={{ fontSize: "3rem" }}>&#128218;</div>
         <p style={{ fontSize: "1.2rem", fontWeight: 600 }}>{t("map.bookProcessing", "Textbook content is being prepared")}</p>
@@ -146,7 +147,7 @@ export default function ConceptMapPage() {
     return (
       <div style={{
         display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-        height: "calc(100vh - 64px)", gap: "1rem",
+        height: "100vh", gap: "1rem",
       }}>
         <p style={{ color: "var(--color-danger)", fontSize: "1.1rem" }}>{t("map.errorDashboard")}</p>
         <p style={{ color: "var(--color-text-muted)", fontSize: "0.9rem" }}>{error}</p>
@@ -159,7 +160,7 @@ export default function ConceptMapPage() {
     : null;
 
   return (
-    <div style={{ display: "flex", height: "calc(100vh - 64px)" }}>
+    <div style={{ display: "flex", height: "100vh" }}>
       {/* ─── Left Sidebar: Concept List ─── */}
       <div style={{
         width: "340px", minWidth: "340px",
@@ -213,16 +214,22 @@ export default function ConceptMapPage() {
           display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0.5rem",
           marginBottom: "1.25rem",
         }}>
-          <StatCard icon={Trophy} label={t("map.mastered")} count={masteredNodes.length} color="#22c55e" />
-          <StatCard icon={Target} label={t("map.readyToLearn")} count={readyNodes.length} color="#3b82f6" />
-          <StatCard icon={Lock} label={t("map.locked")} count={lockedNodes.length} color="#94a3b8" />
+          {[
+            { icon: Trophy, label: t("map.mastered"), count: masteredNodes.length, color: "var(--color-success)" },
+            { icon: Target, label: t("map.readyToLearn"), count: readyNodes.length, color: "var(--color-primary)" },
+            { icon: Lock, label: t("map.locked"), count: lockedNodes.length, color: "var(--color-text-muted)" },
+          ].map(({ icon, label, count, color }, i) => (
+            <motion.div key={label} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.08 }}>
+              <StatCard icon={icon} label={label} count={count} color={color} />
+            </motion.div>
+          ))}
         </div>
 
         {readyNodes.length > 0 && (
           <div style={{ marginBottom: "1.25rem" }}>
             <h3 style={{
-              fontSize: "0.85rem", fontWeight: 700, textTransform: "uppercase",
-              color: "#3b82f6", letterSpacing: "0.05em", marginBottom: "0.5rem",
+              fontSize: "0.7rem", fontWeight: 700, textTransform: "uppercase",
+              color: "var(--color-primary)", letterSpacing: "0.05em", marginBottom: "0.5rem",
               display: "flex", alignItems: "center", gap: "0.4rem",
             }}>
               <Play size={14} /> {t("map.readyToLearn")}
@@ -243,8 +250,8 @@ export default function ConceptMapPage() {
         {masteredNodes.length > 0 && (
           <div style={{ marginBottom: "1.25rem" }}>
             <h3 style={{
-              fontSize: "0.85rem", fontWeight: 700, textTransform: "uppercase",
-              color: "#22c55e", letterSpacing: "0.05em", marginBottom: "0.5rem",
+              fontSize: "0.7rem", fontWeight: 700, textTransform: "uppercase",
+              color: "var(--color-success)", letterSpacing: "0.05em", marginBottom: "0.5rem",
               display: "flex", alignItems: "center", gap: "0.4rem",
             }}>
               <CheckCircle size={14} /> {t("map.mastered")}
@@ -266,8 +273,8 @@ export default function ConceptMapPage() {
         {lockedNodes.length > 0 && (
           <div>
             <h3 style={{
-              fontSize: "0.85rem", fontWeight: 700, textTransform: "uppercase",
-              color: "#94a3b8", letterSpacing: "0.05em", marginBottom: "0.5rem",
+              fontSize: "0.7rem", fontWeight: 700, textTransform: "uppercase",
+              color: "var(--color-text-muted)", letterSpacing: "0.05em", marginBottom: "0.5rem",
               display: "flex", alignItems: "center", gap: "0.4rem",
             }}>
               <Lock size={14} /> {t("map.lockedCount", { count: lockedNodes.length })}
@@ -292,14 +299,20 @@ export default function ConceptMapPage() {
 
         <MapLegend />
 
+        <AnimatePresence>
         {selectedNodeData && (
-          <div style={{
+          <motion.div
+            initial={{ opacity: 0, x: 16, scale: 0.97 }}
+            animate={{ opacity: 1, x: 0, scale: 1 }}
+            exit={{ opacity: 0, x: 16 }}
+            transition={{ type: "spring", stiffness: 380, damping: 32 }}
+            style={{
             position: "absolute", top: "1rem", right: "1rem",
             width: "310px",
             backgroundColor: "var(--color-surface)",
             borderRadius: "14px",
             border: "2px solid var(--color-border)",
-            boxShadow: "0 8px 32px rgba(0,0,0,0.1)",
+            boxShadow: "0 8px 32px rgba(0,0,0,0.15)",
             padding: "1.25rem",
             zIndex: 10,
           }}>
@@ -335,7 +348,7 @@ export default function ConceptMapPage() {
                 <div style={{
                   display: "flex", alignItems: "center", justifyContent: "center", gap: "0.4rem",
                   padding: "0.4rem 0.8rem", borderRadius: "20px",
-                  backgroundColor: "#dcfce7", color: "#16a34a",
+                  backgroundColor: "rgba(34,197,94,0.12)", color: "var(--color-success)",
                   fontSize: "0.8rem", fontWeight: 700,
                   margin: "0 auto 0.75rem",
                   width: "fit-content",
@@ -348,7 +361,11 @@ export default function ConceptMapPage() {
                     display: "flex", alignItems: "center", justifyContent: "center",
                     marginBottom: "0.75rem",
                   }}>
-                    <span className="ml-2 px-1.5 py-0.5 rounded text-xs bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 border border-amber-300 dark:border-amber-700">
+                    <span style={{
+                      fontSize: "0.72rem", fontWeight: 700, padding: "0.15rem 0.5rem",
+                      borderRadius: "6px", background: "rgba(245,158,11,0.12)",
+                      color: "var(--color-warning)", border: "1px solid rgba(245,158,11,0.3)",
+                    }}>
                       {t("learning.reviewDueBadge")} {t("learning.reviewDue")}
                     </span>
                   </div>
@@ -360,7 +377,7 @@ export default function ConceptMapPage() {
                     display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem",
                     width: "100%", padding: "0.65rem",
                     borderRadius: "10px", border: "none",
-                    backgroundColor: "#22c55e", color: "#fff",
+                    backgroundColor: "var(--color-success)", color: "#fff",
                     fontSize: "0.95rem", fontWeight: 700,
                     cursor: "pointer", fontFamily: "inherit",
                   }}
@@ -404,8 +421,8 @@ export default function ConceptMapPage() {
                           <CheckCircle size={15} color="#22c55e" style={{ flexShrink: 0, marginLeft: "0.3rem" }} />
                         ) : pr.status === "ready" ? (
                           <span style={{
-                            fontSize: "0.68rem", fontWeight: 700, color: "#3b82f6",
-                            backgroundColor: "#dbeafe", padding: "0.1rem 0.4rem",
+                            fontSize: "0.68rem", fontWeight: 700, color: "var(--color-primary)",
+                            backgroundColor: "rgba(99,102,241,0.12)", padding: "0.1rem 0.4rem",
                             borderRadius: "6px", flexShrink: 0, marginLeft: "0.3rem",
                           }}>
                             {t("map.readyToLearn")}
@@ -429,8 +446,9 @@ export default function ConceptMapPage() {
                 </p>
               </div>
             )}
-          </div>
+          </motion.div>
         )}
+        </AnimatePresence>
       </div>
     </div>
   );
@@ -444,6 +462,7 @@ function StatCard({ icon: Icon, label, count, color }) {
       textAlign: "center", padding: "0.6rem 0.3rem",
       borderRadius: "10px", backgroundColor: "var(--color-bg)",
       border: "1px solid var(--color-border)",
+      borderLeft: `3px solid ${color}`,
     }}>
       <Icon size={18} color={color} style={{ marginBottom: "0.2rem" }} />
       <div style={{ fontSize: "1.3rem", fontWeight: 800, color }}>{count}</div>
@@ -459,14 +478,16 @@ function ConceptListItem({ node, status, selected, onClick, onLearn, reviewDue }
   const bgColor = selected ? "var(--color-primary-light)" : "transparent";
 
   return (
-    <div
+    <motion.div
       onClick={onClick}
+      whileHover={{ x: 2 }}
+      transition={{ duration: 0.1 }}
       style={{
         display: "flex", alignItems: "center", justifyContent: "space-between",
         padding: "0.6rem 0.75rem", marginBottom: "0.4rem",
         borderRadius: "10px", border: `1.5px solid ${borderColor}`,
         backgroundColor: bgColor,
-        cursor: "pointer", transition: "all 0.15s",
+        cursor: "pointer", transition: "border-color 0.15s, background-color 0.15s",
       }}
     >
       <div style={{ flex: 1, minWidth: 0 }}>
@@ -479,7 +500,11 @@ function ConceptListItem({ node, status, selected, onClick, onLearn, reviewDue }
         <div style={{ fontSize: "0.72rem", color: "var(--color-text-muted)", display: "flex", alignItems: "center", gap: "0.3rem" }}>
           Ch. {node.chapter} &middot; {node.section}
           {reviewDue && (
-            <span className="px-1.5 py-0.5 rounded text-xs bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 border border-amber-300 dark:border-amber-700">
+            <span style={{
+              fontSize: "0.68rem", fontWeight: 700, padding: "0.1rem 0.4rem",
+              borderRadius: "4px", background: "rgba(245,158,11,0.12)",
+              color: "var(--color-warning)", border: "1px solid rgba(245,158,11,0.3)",
+            }}>
               {t("learning.reviewDueBadge")} {t("learning.reviewDue")}
             </span>
           )}
@@ -507,7 +532,7 @@ function ConceptListItem({ node, status, selected, onClick, onLearn, reviewDue }
           style={{
             display: "flex", alignItems: "center", gap: "0.25rem",
             padding: "0.3rem 0.6rem", borderRadius: "8px", border: "none",
-            backgroundColor: "#dcfce7", color: "#16a34a",
+            backgroundColor: "rgba(34,197,94,0.12)", color: "var(--color-success)",
             fontSize: "0.75rem", fontWeight: 700,
             cursor: "pointer", fontFamily: "inherit", flexShrink: 0,
           }}
@@ -516,18 +541,18 @@ function ConceptListItem({ node, status, selected, onClick, onLearn, reviewDue }
         </button>
       )}
       {status === "mastered" && !onLearn && (
-        <CheckCircle size={18} color="#22c55e" style={{ flexShrink: 0 }} />
+        <CheckCircle size={18} color="var(--color-success)" style={{ flexShrink: 0 }} />
       )}
-    </div>
+    </motion.div>
   );
 }
 
 function StatusBadge({ status }) {
   const { t } = useTranslation();
   const config = {
-    mastered: { bg: "#dcfce7", color: "#16a34a", icon: CheckCircle, label: t("map.mastered") },
-    ready: { bg: "#dbeafe", color: "#2563eb", icon: Play, label: t("map.readyToLearn") },
-    locked: { bg: "#f1f5f9", color: "#64748b", icon: Lock, label: t("map.locked") },
+    mastered: { bg: "rgba(34,197,94,0.12)", color: "var(--color-success)", icon: CheckCircle, label: t("map.mastered") },
+    ready: { bg: "rgba(99,102,241,0.12)", color: "var(--color-primary)", icon: Play, label: t("map.readyToLearn") },
+    locked: { bg: "rgba(148,163,184,0.12)", color: "var(--color-text-muted)", icon: Lock, label: t("map.locked") },
   };
   const c = config[status] || config.locked;
   const Icon = c.icon;

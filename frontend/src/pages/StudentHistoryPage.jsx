@@ -1,5 +1,7 @@
-import { useState, useEffect, Fragment } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
+import { motion } from 'framer-motion';
 import { getCardHistory, getSessions, getSessionCardInteractions } from '../api/students';
 import { useStudent } from '../context/StudentContext';
 
@@ -21,6 +23,7 @@ function Sparkline({ points }) {
 export default function StudentHistoryPage() {
   const { student } = useStudent();
   const navigate = useNavigate();
+  const { t } = useTranslation();
   const [history, setHistory] = useState(null);
   const [sessions, setSessions] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -63,7 +66,7 @@ export default function StudentHistoryPage() {
       justifyContent: "center",
       color: "var(--color-text-muted)",
     }}>
-      Loading history...
+      {t("history.loading", "Loading history...")}
     </div>
   );
 
@@ -97,10 +100,10 @@ export default function StudentHistoryPage() {
   }
 
   const summaryStats = [
-    { label: 'Cards Completed', value: totalCards },
-    { label: 'Avg Time/Card', value: `${avgTime}s` },
-    { label: 'Total Wrong Attempts', value: totalWrong },
-    { label: 'Concepts Studied', value: concepts.length },
+    { label: t("history.cardsCompleted", "Cards Completed"), value: totalCards },
+    { label: t("history.avgTime", "Avg Time/Card"), value: `${avgTime}s` },
+    { label: t("history.totalWrong", "Total Wrong Attempts"), value: totalWrong },
+    { label: t("history.conceptsStudied", "Concepts Studied"), value: concepts.length },
   ];
 
   return (
@@ -111,32 +114,15 @@ export default function StudentHistoryPage() {
     }}>
       <div style={{ maxWidth: "960px", margin: "0 auto" }}>
         {/* Header */}
-        <div style={{ display: "flex", alignItems: "center", gap: "1rem", marginBottom: "1.5rem" }}>
+        <div style={{ borderLeft: "4px solid var(--color-primary)", paddingLeft: "var(--sp-4)", marginBottom: "1.5rem" }}>
           <button
             onClick={() => navigate(-1)}
-            style={{
-              background: "none",
-              border: "none",
-              cursor: "pointer",
-              color: "var(--color-text-muted)",
-              fontFamily: "inherit",
-              fontSize: "0.95rem",
-              fontWeight: 600,
-              padding: "0.25rem",
-              transition: "color var(--motion-fast)",
-            }}
-            onMouseEnter={(e) => (e.currentTarget.style.color = "var(--color-text)")}
-            onMouseLeave={(e) => (e.currentTarget.style.color = "var(--color-text-muted)")}
+            style={{ background: "none", border: "none", cursor: "pointer", color: "var(--color-text-muted)", fontFamily: "inherit", fontSize: "0.875rem", fontWeight: 600, padding: 0, marginBottom: "0.35rem", display: "block" }}
           >
-            ← Back
+            {t("history.back", "← Back")}
           </button>
-          <h1 style={{
-            fontSize: "1.5rem",
-            fontWeight: 800,
-            color: "var(--color-text)",
-            margin: 0,
-          }}>
-            Learning History
+          <h1 style={{ fontSize: "1.75rem", fontWeight: 800, color: "var(--color-text)", margin: 0, lineHeight: 1.2 }}>
+            {t("history.title", "Learning History")}
           </h1>
         </div>
 
@@ -147,34 +133,15 @@ export default function StudentHistoryPage() {
           gap: "1rem",
           marginBottom: "1.5rem",
         }}>
-          {summaryStats.map(stat => (
-            <div
-              key={stat.label}
-              style={{
-                backgroundColor: "var(--color-surface)",
-                border: "1.5px solid var(--color-border)",
-                borderRadius: "var(--radius-lg)",
-                padding: "1rem 1.25rem",
-                boxShadow: "var(--shadow-sm)",
-              }}
+          {summaryStats.map((stat, i) => (
+            <motion.div key={stat.label}
+              initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: i * 0.08 }}
+              style={{ backgroundColor: "var(--color-surface)", border: "1.5px solid var(--color-border)", borderLeft: "3px solid var(--color-primary)", borderRadius: "var(--radius-lg)", padding: "1rem 1.25rem", boxShadow: "var(--shadow-sm)" }}
             >
-              <div style={{
-                fontSize: "1.75rem",
-                fontWeight: 800,
-                color: "var(--color-primary)",
-                lineHeight: 1,
-              }}>
-                {stat.value}
-              </div>
-              <div style={{
-                fontSize: "0.75rem",
-                color: "var(--color-text-muted)",
-                marginTop: "0.3rem",
-                fontWeight: 600,
-              }}>
-                {stat.label}
-              </div>
-            </div>
+              <div style={{ fontSize: "1.75rem", fontWeight: 800, color: "var(--color-primary)", lineHeight: 1 }}>{stat.value}</div>
+              <div style={{ fontSize: "0.75rem", color: "var(--color-text-muted)", marginTop: "0.3rem", fontWeight: 600 }}>{stat.label}</div>
+            </motion.div>
           ))}
         </div>
 
@@ -194,7 +161,7 @@ export default function StudentHistoryPage() {
               color: "var(--color-text)",
               marginBottom: "0.75rem",
             }}>
-              Session Arcs by Concept
+              {t("history.sessionArcs", "Session Arcs by Concept")}
             </h2>
             <div style={{ display: "flex", flexWrap: "wrap", gap: "1rem" }}>
               {Object.entries(byConcept).map(([cid, items]) => (
@@ -245,128 +212,50 @@ export default function StudentHistoryPage() {
                 color: "var(--color-text)",
                 margin: 0,
               }}>
-                Session Outcomes
+                {t("history.sessionOutcomes", "Session Outcomes")}
               </h2>
             </div>
-            <div style={{ overflowX: "auto" }}>
-              <table style={{ width: "100%", fontSize: "0.875rem", borderCollapse: "collapse" }}>
-                <thead>
-                  <tr style={{ borderBottom: "1px solid var(--color-border)" }}>
-                    {['Concept', 'Score', 'Status', 'Date', ''].map(h => (
-                      <th
-                        key={h}
-                        style={{
-                          textAlign: "left",
-                          padding: "0.6rem 0.75rem",
-                          fontSize: "0.75rem",
-                          fontWeight: 700,
-                          color: "var(--color-text-muted)",
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {sessions.map((s, i) => {
-                    const score = s.check_score ?? null;
-                    const scoreColor = score === null
-                      ? "var(--color-text-muted)"
-                      : score >= 60 ? "#16a34a" : score >= 40 ? "#d97706" : "#dc2626";
-                    const scoreBg = score === null
-                      ? "color-mix(in srgb, var(--color-border) 40%, transparent)"
-                      : score >= 60
-                        ? "color-mix(in srgb, #16a34a 12%, transparent)"
-                        : score >= 40
-                          ? "color-mix(in srgb, #d97706 12%, transparent)"
-                          : "color-mix(in srgb, #dc2626 12%, transparent)";
-
-                    const statusBadge = s.phase === "COMPLETED"
-                      ? s.mastered
-                        ? <span style={{ color: "#16a34a", fontWeight: 700 }}>✓ Mastered</span>
-                        : <span style={{ color: "#dc2626", fontWeight: 700 }}>✗ Not Mastered</span>
-                      : s.phase === "CHECKING"
-                        ? <span style={{ color: "var(--color-primary)", fontWeight: 600 }}>💬 In Chat</span>
-                        : s.phase === "COMPLETED"
-                          ? <span style={{ color: "#d97706", fontWeight: 600 }}>📚 Cards Done</span>
-                          : <span style={{ color: "var(--color-text-muted)", fontWeight: 600 }}>🔄 In Progress</span>;
-
-                    const isExpanded = expandedSession === s.id;
-                    const cards = sessionCards[s.id];
-                    const rowBg = i % 2 === 0 ? "transparent" : "color-mix(in srgb, var(--color-bg) 50%, transparent)";
-
-                    return (
-                      <Fragment key={s.id}>
-                        <tr style={{ borderBottom: isExpanded ? "none" : "1px solid var(--color-border)", backgroundColor: rowBg }}>
-                          <td
-                            style={{ padding: "0.5rem 0.75rem", color: "var(--color-text)", maxWidth: "160px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: "0.8rem" }}
-                            title={s.concept_id}
-                          >
-                            {s.concept_id}
-                          </td>
-                          <td style={{ padding: "0.5rem 0.75rem" }}>
-                            <span style={{ display: "inline-block", padding: "0.15rem 0.5rem", borderRadius: "999px", fontSize: "0.75rem", fontWeight: 700, color: scoreColor, backgroundColor: scoreBg }}>
-                              {score !== null ? `${score}%` : '—'}
-                            </span>
-                          </td>
-                          <td style={{ padding: "0.5rem 0.75rem", fontSize: "0.8rem" }}>
-                            {statusBadge}
-                          </td>
-                          <td style={{ padding: "0.5rem 0.75rem", color: "var(--color-text-muted)", fontSize: "0.75rem", whiteSpace: "nowrap" }}>
-                            {(s.started_at || s.completed_at)
-                              ? new Date(s.started_at || s.completed_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-                              : '—'}
-                          </td>
-                          <td style={{ padding: "0.5rem 0.75rem", textAlign: "right" }}>
-                            <button
-                              onClick={() => toggleExpand(s.id)}
-                              title={isExpanded ? "Collapse card details" : "Expand card details"}
-                              style={{ background: "none", border: "none", cursor: "pointer", fontSize: "0.85rem", color: "var(--color-text-muted)", padding: "0.1rem 0.3rem" }}
-                            >
-                              {isExpanded ? '▲' : '▼'}
-                            </button>
-                          </td>
-                        </tr>
-                        {isExpanded && (
-                          <tr style={{ borderBottom: "1px solid var(--color-border)", backgroundColor: rowBg }}>
-                            <td colSpan={5} style={{ padding: "0 0.75rem 0.75rem 1.5rem" }}>
-                              {!cards ? (
-                                <span style={{ fontSize: "0.8rem", color: "var(--color-text-muted)" }}>Loading…</span>
-                              ) : cards.length === 0 ? (
-                                <span style={{ fontSize: "0.8rem", color: "var(--color-text-muted)" }}>No card interactions saved for this session.</span>
-                              ) : (
-                                <table style={{ width: "100%", fontSize: "0.78rem", borderCollapse: "collapse", marginTop: "0.25rem" }}>
-                                  <thead>
-                                    <tr style={{ borderBottom: "1px solid var(--color-border)" }}>
-                                      {['Card #', 'Time (s)', 'Wrong', 'Hints', 'Idle', 'Adaptation'].map(h => (
-                                        <th key={h} style={{ textAlign: "left", padding: "0.3rem 0.5rem", fontWeight: 700, color: "var(--color-text-muted)", whiteSpace: "nowrap" }}>{h}</th>
-                                      ))}
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {cards.map((c, ci) => (
-                                      <tr key={ci} style={{ borderBottom: ci < cards.length - 1 ? "1px solid var(--color-border)" : "none" }}>
-                                        <td style={{ padding: "0.3rem 0.5rem", color: "var(--color-primary)", fontWeight: 700 }}>{c.card_index + 1}</td>
-                                        <td style={{ padding: "0.3rem 0.5rem" }}>{c.time_on_card_sec.toFixed(1)}</td>
-                                        <td style={{ padding: "0.3rem 0.5rem" }}>{c.wrong_attempts}</td>
-                                        <td style={{ padding: "0.3rem 0.5rem" }}>{c.hints_used}</td>
-                                        <td style={{ padding: "0.3rem 0.5rem" }}>{c.idle_triggers}</td>
-                                        <td style={{ padding: "0.3rem 0.5rem", color: "var(--color-text-muted)" }}>{c.adaptation_applied || '—'}</td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              )}
-                            </td>
-                          </tr>
-                        )}
-                      </Fragment>
-                    );
-                  })}
-                </tbody>
-              </table>
+            <div style={{ padding: "0.75rem" }}>
+              {sessions.map((s, i) => {
+                const score = s.check_score ?? null;
+                const scoreColor = score === null ? "var(--color-text-muted)" : score >= 60 ? "var(--color-success)" : score >= 40 ? "var(--color-warning)" : "var(--color-danger)";
+                const isExpanded = expandedSession === s.id;
+                const cards = sessionCards[s.id];
+                return (
+                  <motion.div key={s.id}
+                    initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: i * 0.04 }}
+                    whileHover={{ borderColor: "var(--color-primary)" }}
+                    onClick={() => toggleExpand(s.id)}
+                    style={{ background: "var(--color-surface)", border: "1px solid var(--color-border)", borderRadius: "var(--radius-lg)", padding: "var(--sp-4)", marginBottom: "var(--sp-3)", cursor: "pointer", transition: "border-color 150ms" }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.75rem" }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: "0.875rem", fontWeight: 600, color: "var(--color-text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.concept_id}</div>
+                        <div style={{ fontSize: "0.72rem", color: "var(--color-text-muted)", marginTop: "2px" }}>
+                          {(s.started_at || s.completed_at) ? new Date(s.started_at || s.completed_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}
+                        </div>
+                      </div>
+                      {score !== null && (
+                        <span style={{ fontSize: "1rem", fontWeight: 800, color: scoreColor }}>{score}%</span>
+                      )}
+                      <span style={{ fontSize: "0.75rem", color: "var(--color-text-muted)" }}>{isExpanded ? '▲' : '▼'}</span>
+                    </div>
+                    {isExpanded && cards && cards.length > 0 && (
+                      <div style={{ marginTop: "0.75rem", borderTop: "1px solid var(--color-border)", paddingTop: "0.75rem" }}>
+                        {cards.map((c, ci) => (
+                          <div key={ci} style={{ display: "flex", gap: "1rem", fontSize: "0.78rem", color: "var(--color-text-muted)", padding: "0.25rem 0", borderBottom: ci < cards.length - 1 ? "1px solid var(--color-border)" : "none" }}>
+                            <span style={{ color: "var(--color-primary)", fontWeight: 700, minWidth: "40px" }}>#{c.card_index + 1}</span>
+                            <span>{c.time_on_card_sec.toFixed(1)}s</span>
+                            <span>{c.wrong_attempts} wrong</span>
+                            <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{c.adaptation_applied || '—'}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </motion.div>
+                );
+              })}
             </div>
           </div>
         )}
@@ -380,7 +269,7 @@ export default function StudentHistoryPage() {
           }}>
             <div style={{ fontSize: "3rem", marginBottom: "0.75rem" }}>📚</div>
             <p style={{ fontWeight: 600 }}>
-              No learning history yet. Complete some cards to see your progress here!
+              {t("history.noSessions", "No learning history yet. Complete some cards to see your progress here!")}
             </p>
           </div>
         )}

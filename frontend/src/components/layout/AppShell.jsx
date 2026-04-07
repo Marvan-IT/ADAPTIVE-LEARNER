@@ -1,38 +1,121 @@
 import { useState, useRef, useEffect } from "react";
-import { Outlet, Navigate, useNavigate, Link } from "react-router-dom";
+import { Outlet, Navigate, NavLink, useNavigate, useLocation } from "react-router-dom";
+import { AnimatePresence, motion } from "framer-motion";
 import { useTranslation } from "react-i18next";
 import { useStudent } from "../../context/StudentContext";
+import { useTheme } from "../../context/ThemeContext";
 import StyleSwitcher from "./StyleSwitcher";
 import LanguageSelector from "../LanguageSelector";
-import { Brain, Map, LogOut, ChevronDown, User, BookOpen } from "lucide-react";
+import {
+  Brain, Map, BookOpen, LogOut,
+  ChevronLeft, ChevronRight, Sun, Moon,
+} from "lucide-react";
 import { useAdaptiveStore } from "../../store/adaptiveStore";
 import LevelBadge from "../game/LevelBadge";
 import StreakMeter from "../game/StreakMeter";
 import AdaptiveModeIndicator from "../game/AdaptiveModeIndicator";
 
+/* ── Sidebar nav link ─────────────────── */
+function SidebarLink({ to, icon: Icon, label, collapsed }) {
+  return (
+    <NavLink
+      to={to}
+      className={({ isActive }) =>
+        "sidebar-item" + (isActive ? " sidebar-item--active" : "")
+      }
+      style={{ position: "relative" }}
+    >
+      {({ isActive }) => (
+        <>
+          {/* Active accent bar */}
+          {isActive && (
+            <motion.span
+              layoutId="nav-active-bar"
+              style={{
+                position: "absolute",
+                left: 0,
+                top: "20%",
+                bottom: "20%",
+                width: "3px",
+                borderRadius: "0 2px 2px 0",
+                background: "var(--color-primary)",
+              }}
+              transition={{ type: "spring", stiffness: 500, damping: 40 }}
+            />
+          )}
+          <Icon size={18} style={{ flexShrink: 0 }} />
+          <AnimatePresence>
+            {!collapsed && (
+              <motion.span
+                initial={{ opacity: 0, width: 0 }}
+                animate={{ opacity: 1, width: "auto" }}
+                exit={{ opacity: 0, width: 0 }}
+                transition={{ duration: 0.18 }}
+                style={{ overflow: "hidden", whiteSpace: "nowrap" }}
+              >
+                {label}
+              </motion.span>
+            )}
+          </AnimatePresence>
+        </>
+      )}
+    </NavLink>
+  );
+}
+
+/* ── XP progress bar ───────────────────── */
+function XPBar({ xp, level }) {
+  const progress = xp % 100;
+  return (
+    <div style={{ width: "100%", padding: "0 var(--sp-3)" }}>
+      <div style={{
+        display: "flex",
+        justifyContent: "space-between",
+        fontSize: "0.65rem",
+        color: "var(--color-sidebar-text)",
+        fontWeight: 600,
+        marginBottom: "4px",
+      }}>
+        <span>Lv.{level}</span>
+        <span>{progress}/100 XP</span>
+      </div>
+      <div style={{
+        height: "5px",
+        borderRadius: "9999px",
+        background: "rgba(255,255,255,0.08)",
+        overflow: "hidden",
+      }}>
+        <motion.div
+          animate={{ width: `${progress}%` }}
+          transition={{ type: "spring", stiffness: 180, damping: 20 }}
+          style={{
+            height: "100%",
+            borderRadius: "9999px",
+            background: "linear-gradient(90deg, var(--color-primary), var(--xp-gold))",
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+/* ── Main AppShell ─────────────────────── */
 export default function AppShell() {
   const { t } = useTranslation();
   const { student, logout, loading } = useStudent();
+  const { toggleTheme, isDark } = useTheme();
   const navigate = useNavigate();
-  const [dropdownOpen, setDropdownOpen] = useState(false);
-  const dropdownRef = useRef(null);
-  const xp = useAdaptiveStore((s) => s.xp);
+  const location = useLocation();
+  const [collapsed, setCollapsed] = useState(false);
+  const xp    = useAdaptiveStore((s) => s.xp);
   const level = useAdaptiveStore((s) => s.level);
-
-  // Close dropdown on outside click
-  useEffect(() => {
-    const handler = (e) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
-        setDropdownOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, []);
 
   if (loading) {
     return (
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "100vh" }}>
+      <div style={{
+        display: "flex", alignItems: "center", justifyContent: "center",
+        minHeight: "100vh", background: "var(--color-bg)",
+      }}>
         <div style={{
           width: "36px", height: "36px",
           border: "3px solid var(--color-primary)",
@@ -44,256 +127,286 @@ export default function AppShell() {
     );
   }
 
-  if (!student) {
-    return <Navigate to="/" />;
-  }
+  if (!student) return <Navigate to="/" />;
+
+  const initial = (student.display_name || "S")[0].toUpperCase();
 
   return (
-    <div style={{ minHeight: "100vh" }}>
-      {/* Nav Bar */}
-      <nav
+    <div className="app-layout">
+      {/* ── Sidebar ──────────────────────── */}
+      <motion.aside
+        animate={{ width: collapsed ? "var(--sidebar-collapsed-width)" : "var(--sidebar-width)" }}
+        transition={{ type: "spring", stiffness: 300, damping: 30 }}
         style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "0 1.5rem",
-          height: "64px",
-          backgroundColor: "color-mix(in srgb, var(--color-surface) 88%, transparent)",
-          backdropFilter: "blur(12px)",
-          WebkitBackdropFilter: "blur(12px)",
-          borderBottom: "1.5px solid var(--color-border)",
-          position: "sticky",
+          position: "fixed",
           top: 0,
-          zIndex: 50,
-          boxShadow: "var(--shadow-sm)",
+          left: 0,
+          height: "100vh",
+          background: "var(--color-sidebar-bg)",
+          borderRight: "1px solid var(--color-sidebar-border)",
+          display: "flex",
+          flexDirection: "column",
+          padding: "var(--sp-4) var(--sp-3)",
+          zIndex: 40,
+          overflow: "hidden",
+          flexShrink: 0,
         }}
       >
-        {/* Left: Logo + Map button */}
-        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-          <button
-            onClick={() => navigate("/map")}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "0.5rem",
-              background: "none",
-              border: "none",
-              cursor: "pointer",
-              fontWeight: 800,
-              fontSize: "1.25rem",
-              color: "var(--color-primary)",
-              fontFamily: "inherit",
-              padding: "0.25rem",
-            }}
-            aria-label="Go to concept map"
-          >
-            <Brain size={26} aria-hidden="true" />
-            {t("app.title")}
-          </button>
-
-          {/* Map icon button */}
-          <button
-            onClick={() => navigate("/map")}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "0.3rem",
-              padding: "0.35rem 0.65rem",
-              background: "var(--color-primary-light)",
-              border: "none",
-              borderRadius: "var(--radius-full)",
-              color: "var(--color-primary)",
-              cursor: "pointer",
-              fontFamily: "inherit",
-              fontSize: "0.8rem",
-              fontWeight: 700,
-              transition: "background var(--motion-fast)",
-            }}
-            onMouseEnter={(e) => (e.currentTarget.style.filter = "brightness(0.95)")}
-            onMouseLeave={(e) => (e.currentTarget.style.filter = "brightness(1)")}
-            aria-label="Concept Map"
-          >
-            <Map size={14} aria-hidden="true" />
-            {t("nav.conceptMap")}
-          </button>
-        </div>
-
-        {/* Center: XP + Level HUD */}
-        <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", flex: 1, justifyContent: "center", maxWidth: "360px" }}>
-          <LevelBadge size={36} />
-          <div style={{ flex: 1 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.65rem", color: "var(--color-text-muted)", fontWeight: 600, marginBottom: "3px" }}>
-              <span>Lv.{level}</span>
-              <span>{xp % 100}/100 XP</span>
-            </div>
-            <div style={{ height: "6px", borderRadius: "9999px", background: "var(--color-border)", overflow: "hidden" }}>
-              <div style={{
-                height: "100%",
-                width: `${xp % 100}%`,
-                borderRadius: "9999px",
-                background: "linear-gradient(90deg, var(--color-primary), var(--xp-gold))",
-                transition: "width 0.5s var(--spring-soft)",
-              }} />
-            </div>
-          </div>
-          <AdaptiveModeIndicator compact />
-        </div>
-
-        {/* Right: Streak + Student dropdown */}
-        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-          <StreakMeter compact />
-
-          <div ref={dropdownRef} style={{ position: "relative" }}>
-            <button
-              onClick={() => setDropdownOpen((v) => !v)}
-              aria-expanded={dropdownOpen}
-              aria-haspopup="true"
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "0.4rem",
-                padding: "0.4rem 0.75rem",
-                borderRadius: "var(--radius-full)",
-                border: "1.5px solid var(--color-border)",
-                backgroundColor: "var(--color-surface)",
-                color: "var(--color-text)",
-                cursor: "pointer",
-                fontFamily: "inherit",
-                fontSize: "0.875rem",
-                fontWeight: 600,
-                transition: "border-color var(--motion-fast)",
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.borderColor = "var(--color-primary)")}
-              onMouseLeave={(e) => (e.currentTarget.style.borderColor = "var(--color-border)")}
-            >
-              <User size={15} aria-hidden="true" />
-              {student.display_name}
-              <ChevronDown
-                size={14}
-                aria-hidden="true"
-                style={{ transition: "transform var(--motion-fast)", transform: dropdownOpen ? "rotate(180deg)" : "rotate(0deg)" }}
-              />
-            </button>
-
-            {/* Dropdown */}
-            {dropdownOpen && (
-              <div
+        {/* Zone 1 — Logo */}
+        <div style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "var(--sp-3)",
+          marginBottom: "var(--sp-6)",
+          paddingLeft: "var(--sp-1)",
+          cursor: "pointer",
+          flexShrink: 0,
+        }} onClick={() => navigate("/map")}>
+          <Brain
+            size={22}
+            color="var(--color-primary)"
+            style={{ flexShrink: 0 }}
+            aria-hidden="true"
+          />
+          <AnimatePresence>
+            {!collapsed && (
+              <motion.span
+                initial={{ opacity: 0, width: 0 }}
+                animate={{ opacity: 1, width: "auto" }}
+                exit={{ opacity: 0, width: 0 }}
+                transition={{ duration: 0.18 }}
                 style={{
-                  position: "absolute",
-                  top: "calc(100% + 8px)",
-                  right: 0,
-                  minWidth: "220px",
-                  backgroundColor: "var(--color-surface)",
-                  borderRadius: "var(--radius-lg)",
-                  border: "1.5px solid var(--color-border)",
-                  boxShadow: "var(--shadow-lg)",
-                  padding: "0.75rem",
-                  zIndex: 100,
-                  animation: "fade-up 0.15s ease-out",
+                  fontWeight: 800,
+                  fontSize: "1.15rem",
+                  color: "#fff",
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  letterSpacing: "-0.01em",
                 }}
               >
-                {/* Learning History link */}
-                <Link
-                  to="/history"
-                  onClick={() => setDropdownOpen(false)}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "0.4rem",
-                    width: "100%",
-                    padding: "0.5rem 0.5rem",
-                    borderRadius: "var(--radius-sm)",
-                    border: "none",
-                    backgroundColor: "transparent",
-                    color: "var(--color-text)",
-                    fontSize: "0.875rem",
-                    fontWeight: 600,
-                    cursor: "pointer",
-                    fontFamily: "inherit",
-                    textDecoration: "none",
-                    transition: "background var(--motion-fast)",
-                    marginBottom: "0.25rem",
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "var(--color-primary-light)")}
-                  onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "transparent")}
-                >
-                  <BookOpen size={14} aria-hidden="true" />
-                  {t("nav.learningHistory") || "Learning History"}
-                </Link>
-
-                <hr style={{ border: "none", borderTop: "1px solid var(--color-border)", margin: "0.25rem 0 0.5rem" }} />
-
-                <div style={{
-                  fontSize: "0.7rem", fontWeight: 700,
-                  color: "var(--color-text-muted)",
-                  textTransform: "uppercase",
-                  letterSpacing: "0.05em",
-                  marginBottom: "0.5rem",
-                  paddingLeft: "0.25rem",
-                }}>
-                  Language
-                </div>
-                <div style={{ marginBottom: "0.75rem" }}>
-                  <LanguageSelector compact />
-                </div>
-
-                <div style={{
-                  fontSize: "0.7rem", fontWeight: 700,
-                  color: "var(--color-text-muted)",
-                  textTransform: "uppercase",
-                  letterSpacing: "0.05em",
-                  marginBottom: "0.5rem",
-                  paddingLeft: "0.25rem",
-                }}>
-                  Theme
-                </div>
-                <div style={{ marginBottom: "0.75rem" }}>
-                  <StyleSwitcher />
-                </div>
-
-                <hr style={{ border: "none", borderTop: "1px solid var(--color-border)", margin: "0.5rem 0" }} />
-
-                <button
-                  onClick={() => { logout(); navigate("/"); setDropdownOpen(false); }}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "0.4rem",
-                    width: "100%",
-                    padding: "0.5rem 0.5rem",
-                    borderRadius: "var(--radius-sm)",
-                    border: "none",
-                    backgroundColor: "transparent",
-                    color: "var(--color-danger)",
-                    fontSize: "0.875rem",
-                    fontWeight: 600,
-                    cursor: "pointer",
-                    fontFamily: "inherit",
-                    textAlign: "left",
-                    transition: "background var(--motion-fast)",
-                  }}
-                  onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "rgba(239,68,68,0.08)")}
-                  onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "transparent")}
-                >
-                  <LogOut size={14} aria-hidden="true" />
-                  {t("nav.switch")}
-                </button>
-              </div>
+                {t("app.title")}
+              </motion.span>
             )}
+          </AnimatePresence>
+        </div>
+
+        {/* Zone 2 — Nav links */}
+        <nav style={{ display: "flex", flexDirection: "column", gap: "var(--sp-1)", marginBottom: "var(--sp-6)", flexShrink: 0 }}>
+          <SidebarLink to="/map"     icon={Map}      label={t("nav.conceptMap")}      collapsed={collapsed} />
+          <SidebarLink to="/history" icon={BookOpen}  label={t("nav.learningHistory") || "Learning History"} collapsed={collapsed} />
+        </nav>
+
+        {/* Divider */}
+        <div style={{ height: "1px", background: "var(--color-sidebar-border)", marginBottom: "var(--sp-4)", flexShrink: 0 }} />
+
+        {/* Zone 3 — Gamification HUD */}
+        <div style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: "var(--sp-3)",
+          marginBottom: "var(--sp-4)",
+          alignItems: collapsed ? "center" : "flex-start",
+          flexShrink: 0,
+        }}>
+          <div style={{ paddingLeft: collapsed ? 0 : "var(--sp-1)" }}>
+            <LevelBadge size={32} />
+          </div>
+          <AnimatePresence>
+            {!collapsed && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.15 }}
+                style={{ width: "100%" }}
+              >
+                <XPBar xp={xp} level={level} />
+              </motion.div>
+            )}
+          </AnimatePresence>
+          <div style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "var(--sp-2)",
+            paddingLeft: collapsed ? 0 : "var(--sp-1)",
+          }}>
+            <StreakMeter compact />
+            {!collapsed && <AdaptiveModeIndicator compact />}
           </div>
         </div>
-      </nav>
 
-      {/* Adaptive mode glow line */}
-      <div style={{
-        height: "2px",
-        background: "linear-gradient(90deg, transparent, var(--color-primary), transparent)",
-        opacity: 0.4,
-      }} />
+        {/* Divider */}
+        <div style={{ height: "1px", background: "var(--color-sidebar-border)", marginBottom: "var(--sp-4)", flexShrink: 0 }} />
 
-      {/* Main Content */}
-      <main>
-        <Outlet />
+        {/* Zone 4 — Style switcher (themes) */}
+        <AnimatePresence>
+          {!collapsed && (
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.15 }}
+              style={{ marginBottom: "var(--sp-4)", paddingLeft: "var(--sp-1)", flexShrink: 0 }}
+            >
+              <div style={{
+                fontSize: "0.65rem",
+                fontWeight: 700,
+                color: "var(--color-sidebar-text)",
+                textTransform: "uppercase",
+                letterSpacing: "0.07em",
+                marginBottom: "var(--sp-2)",
+              }}>
+                {t("customize.style") || "Style"}
+              </div>
+              <StyleSwitcher />
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Bottom zone — pinned */}
+        <div style={{
+          marginTop: "auto",
+          display: "flex",
+          flexDirection: "column",
+          gap: "var(--sp-2)",
+          flexShrink: 0,
+        }}>
+          {/* Student avatar + name */}
+          <div style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "var(--sp-2)",
+            padding: "var(--sp-2) var(--sp-1)",
+          }}>
+            <div style={{
+              width: "28px", height: "28px",
+              borderRadius: "50%",
+              background: "linear-gradient(135deg, var(--color-primary), var(--color-accent))",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              color: "#fff", fontWeight: 800, fontSize: "0.75rem",
+              flexShrink: 0,
+            }}>
+              {initial}
+            </div>
+            <AnimatePresence>
+              {!collapsed && (
+                <motion.span
+                  initial={{ opacity: 0, width: 0 }}
+                  animate={{ opacity: 1, width: "auto" }}
+                  exit={{ opacity: 0, width: 0 }}
+                  transition={{ duration: 0.18 }}
+                  style={{
+                    fontSize: "0.8rem",
+                    fontWeight: 600,
+                    color: "var(--color-sidebar-text-active)",
+                    whiteSpace: "nowrap",
+                    overflow: "hidden",
+                    maxWidth: "120px",
+                    textOverflow: "ellipsis",
+                  }}
+                >
+                  {student.display_name}
+                </motion.span>
+              )}
+            </AnimatePresence>
+          </div>
+
+          {/* Language selector */}
+          <div style={{ paddingLeft: collapsed ? 0 : "var(--sp-1)", display: "flex", justifyContent: collapsed ? "center" : "flex-start" }}>
+            <LanguageSelector compact />
+          </div>
+
+          {/* Dark/light toggle */}
+          <button
+            onClick={toggleTheme}
+            title={t("nav.themeToggle") || "Toggle theme"}
+            className="sidebar-item"
+            style={{ justifyContent: collapsed ? "center" : "flex-start" }}
+          >
+            {isDark
+              ? <Sun size={16} style={{ flexShrink: 0 }} />
+              : <Moon size={16} style={{ flexShrink: 0 }} />}
+            <AnimatePresence>
+              {!collapsed && (
+                <motion.span
+                  initial={{ opacity: 0, width: 0 }}
+                  animate={{ opacity: 1, width: "auto" }}
+                  exit={{ opacity: 0, width: 0 }}
+                  transition={{ duration: 0.18 }}
+                  style={{ overflow: "hidden", whiteSpace: "nowrap" }}
+                >
+                  {isDark ? "Light mode" : "Dark mode"}
+                </motion.span>
+              )}
+            </AnimatePresence>
+          </button>
+
+          {/* Collapse toggle */}
+          <button
+            onClick={() => setCollapsed((v) => !v)}
+            title={collapsed ? (t("nav.expand") || "Expand sidebar") : (t("nav.collapse") || "Collapse sidebar")}
+            className="sidebar-item"
+            style={{ justifyContent: collapsed ? "center" : "flex-start" }}
+          >
+            {collapsed
+              ? <ChevronRight size={16} style={{ flexShrink: 0 }} />
+              : <ChevronLeft size={16} style={{ flexShrink: 0 }} />}
+            <AnimatePresence>
+              {!collapsed && (
+                <motion.span
+                  initial={{ opacity: 0, width: 0 }}
+                  animate={{ opacity: 1, width: "auto" }}
+                  exit={{ opacity: 0, width: 0 }}
+                  transition={{ duration: 0.18 }}
+                  style={{ overflow: "hidden", whiteSpace: "nowrap" }}
+                >
+                  {t("nav.collapse") || "Collapse"}
+                </motion.span>
+              )}
+            </AnimatePresence>
+          </button>
+
+          {/* Sign out */}
+          <button
+            onClick={() => { logout(); navigate("/"); }}
+            className="sidebar-item"
+            style={{ color: "var(--color-danger)", justifyContent: collapsed ? "center" : "flex-start" }}
+          >
+            <LogOut size={16} style={{ flexShrink: 0 }} />
+            <AnimatePresence>
+              {!collapsed && (
+                <motion.span
+                  initial={{ opacity: 0, width: 0 }}
+                  animate={{ opacity: 1, width: "auto" }}
+                  exit={{ opacity: 0, width: 0 }}
+                  transition={{ duration: 0.18 }}
+                  style={{ overflow: "hidden", whiteSpace: "nowrap" }}
+                >
+                  {t("nav.switch")}
+                </motion.span>
+              )}
+            </AnimatePresence>
+          </button>
+        </div>
+      </motion.aside>
+
+      {/* ── Main content ─────────────────── */}
+      <main
+        className={collapsed ? "app-main app-main--collapsed" : "app-main"}
+        style={{ minHeight: "100vh" }}
+      >
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={location.pathname}
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -4 }}
+            transition={{ duration: 0.18, ease: "easeOut" }}
+            style={{ minHeight: "100vh" }}
+          >
+            <Outlet />
+          </motion.div>
+        </AnimatePresence>
       </main>
     </div>
   );

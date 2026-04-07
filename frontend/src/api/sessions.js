@@ -154,20 +154,22 @@ export const completeChunkItem = (sessionId, chunkId) =>
 export const evaluateChunkAnswers = (sessionId, chunkId, data) =>
   api.post(`/api/v2/sessions/${sessionId}/chunks/${chunkId}/evaluate`, data, { timeout: 60000 });
 
-export const getBooks = async () => {
-  const res = await api.get("/api/v2/books");
-  return res.data;
-};
-
-export const getSpacedReviews = async (sessionId) => {
-  const res = await api.get(`/api/v2/sessions/${sessionId}/spaced-reviews`);
-  return res.data;
-};
-
-export const completeSpacedReview = async (sessionId, reviewId, score) => {
-  const res = await api.post(
-    `/api/v2/sessions/${sessionId}/spaced-reviews/${reviewId}/complete`,
-    { score }
+export const startExam = (sessionId, conceptId) =>
+  api.post(
+    `/api/v2/sessions/${sessionId}/exam/start`,
+    { concept_id: conceptId },
+    { timeout: 120_000 }
   );
-  return res.data;
-};
+
+export const submitExam = (sessionId, answers) =>
+  api.post(
+    `/api/v2/sessions/${sessionId}/exam/submit`,
+    { answers },
+    { timeout: 120_000 }
+  );
+
+export const retryExam = (sessionId, retryType, failedChunkIds = []) =>
+  api.post(
+    `/api/v2/sessions/${sessionId}/exam/retry`,
+    { retry_type: retryType, failed_chunk_ids: failedChunkIds }
+  );

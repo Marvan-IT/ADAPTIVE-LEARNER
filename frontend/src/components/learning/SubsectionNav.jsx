@@ -25,17 +25,17 @@ export default function SubsectionNav({
   );
 
   const modeColors = {
-    STRUGGLING: { bg: "#fef3c7", text: "#92400e", label: t("subsectionNav.modeSlow", "Slow") },
-    NORMAL: { bg: "#dbeafe", text: "#1e40af", label: t("subsectionNav.modeNormal", "Normal") },
-    FAST: { bg: "#dcfce7", text: "#166534", label: t("subsectionNav.modeFast", "Fast") },
+    STRUGGLING: { bg: "rgba(244,63,94,0.12)", text: "var(--color-danger)", label: t("subsectionNav.modeSlow", "Slow") },
+    NORMAL: { bg: "rgba(99,102,241,0.12)", text: "var(--color-primary)", label: t("subsectionNav.modeNormal", "Normal") },
+    FAST: { bg: "rgba(34,197,94,0.12)", text: "var(--color-success)", label: t("subsectionNav.modeFast", "Fast") },
   };
 
   return (
     <div style={{
       width: "220px",
       minWidth: "220px",
-      background: "#f8fafc",
-      borderRight: "1px solid #e2e8f0",
+      background: "var(--color-surface)",
+      borderRight: "1px solid var(--color-border)",
       padding: "12px 0",
       overflowY: "auto",
       flexShrink: 0,
@@ -50,7 +50,7 @@ export default function SubsectionNav({
             background: "none",
             border: "none",
             cursor: "pointer",
-            color: "#64748b",
+            color: "var(--color-text-muted)",
             fontSize: "12px",
             padding: "6px 12px 4px",
             width: "100%",
@@ -65,7 +65,7 @@ export default function SubsectionNav({
         padding: "0 12px 8px",
         fontSize: "11px",
         fontWeight: 600,
-        color: "#64748b",
+        color: "var(--color-text-muted)",
         textTransform: "uppercase",
         letterSpacing: "0.05em",
       }}>
@@ -87,15 +87,15 @@ export default function SubsectionNav({
               padding: "8px 12px",
               margin: "2px 8px",
               borderRadius: "6px",
-              background: isCurrent ? "#ede9fe" : "transparent",
-              border: isCurrent ? "1.5px solid #7c3aed" : "1px solid transparent",
+              background: isCurrent ? "rgba(99,102,241,0.12)" : "transparent",
+              border: isCurrent ? "1.5px solid var(--color-primary)" : "1px solid transparent",
               cursor: isLocked ? "not-allowed" : "default",
             }}
           >
             <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
               {/* Status icon */}
               <span
-                style={{ fontSize: "13px", flexShrink: 0, color: isDone ? "#16a34a" : isCurrent ? "#5b21b6" : "#94a3b8" }}
+                style={{ fontSize: "13px", flexShrink: 0, color: isDone ? "var(--color-success)" : isCurrent ? "var(--color-primary)" : "var(--color-text-muted)" }}
                 aria-hidden="true"
               >
                 {isDone ? "✓" : isLocked ? "🔒" : isCurrent ? "●" : "○"}
@@ -104,7 +104,7 @@ export default function SubsectionNav({
               {/* Heading */}
               <span style={{
                 fontSize: "12px",
-                color: isDone ? "#16a34a" : isCurrent ? "#5b21b6" : "#475569",
+                color: isDone ? "var(--color-success)" : isCurrent ? "var(--color-primary)" : "var(--color-text-muted)",
                 fontWeight: isCurrent ? 600 : 400,
                 lineHeight: "1.4",
                 flex: 1,
@@ -118,7 +118,7 @@ export default function SubsectionNav({
               {isDone && score != null && (
                 <span style={{
                   fontSize: "10px",
-                  color: score >= 80 ? "#16a34a" : score >= 50 ? "#2563eb" : "#dc2626",
+                  color: score >= 80 ? "var(--color-success)" : score >= 50 ? "var(--color-primary)" : "var(--color-danger)",
                   fontWeight: 600,
                 }}>
                   {score}%
@@ -139,8 +139,8 @@ export default function SubsectionNav({
               {isOptional && (
                 <span style={{
                   fontSize: "10px",
-                  color: "#92400e",
-                  background: "#fef3c7",
+                  color: "var(--color-warning)",
+                  background: "rgba(245,158,11,0.12)",
                   padding: "1px 5px",
                   borderRadius: "4px",
                 }}>
@@ -150,8 +150,8 @@ export default function SubsectionNav({
               {isLocked && (
                 <span style={{
                   fontSize: "10px",
-                  color: "#64748b",
-                  background: "#f1f5f9",
+                  color: "var(--color-text-muted)",
+                  background: "rgba(148,163,184,0.12)",
                   padding: "1px 5px",
                   borderRadius: "4px",
                 }}>

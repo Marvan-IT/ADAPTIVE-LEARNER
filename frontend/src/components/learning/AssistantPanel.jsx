@@ -281,24 +281,13 @@ export default function AssistantPanel() {
             placeholder={t("assist.placeholder")}
             disabled={assistLoading}
             maxLength={500}
+            className="ada-input"
             style={{
               flex: 1,
               padding: "0.55rem 0.75rem",
               fontSize: "0.85rem",
               borderRadius: "10px",
-              border: "2px solid var(--color-border)",
-              backgroundColor: "var(--color-bg)",
-              color: "var(--color-text)",
-              fontFamily: "inherit",
-              outline: "none",
-              transition: "border-color 0.2s",
             }}
-            onFocus={(e) =>
-              (e.target.style.borderColor = "var(--color-primary)")
-            }
-            onBlur={(e) =>
-              (e.target.style.borderColor = "var(--color-border)")
-            }
           />
           <button
             type="submit"

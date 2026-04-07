@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { LANGUAGES } from "../i18n";
 import { useStudent } from "../context/StudentContext";
+import { useSession } from "../context/SessionContext";
 import { updateLanguage } from "../api/students";
 import { Globe, Search, Check } from "lucide-react";
 import { trackEvent } from "../utils/analytics";
@@ -9,6 +10,7 @@ import { trackEvent } from "../utils/analytics";
 export default function LanguageSelector({ compact = false }) {
   const { i18n, t } = useTranslation();
   const { student } = useStudent();
+  const { dispatch: sessionDispatch } = useSession();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [highlightIdx, setHighlightIdx] = useState(0);
@@ -40,13 +42,17 @@ export default function LanguageSelector({ compact = false }) {
       setSearch("");
       if (student) {
         try {
-          await updateLanguage(student.id, lang.code);
+          const res = await updateLanguage(student.id, lang.code);
+          const { translated_headings } = res.data || {};
+          if (translated_headings?.length > 0) {
+            sessionDispatch({ type: "LANGUAGE_CHANGED", payload: { headings: translated_headings } });
+          }
         } catch {
           // silent — localStorage is the primary persistence
         }
       }
     },
-    [i18n, student]
+    [i18n, student, sessionDispatch]
   );
 
   // Close on outside click

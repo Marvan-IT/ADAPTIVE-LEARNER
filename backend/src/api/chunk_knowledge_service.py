@@ -56,8 +56,10 @@ class ChunkKnowledgeService:
         )
         chunks = result.scalars().all()
         all_chunks = [self._chunk_to_dict(c) for c in chunks]
-        # Exclude chunks with no text content — they cannot generate meaningful cards
-        all_chunks = [c for c in all_chunks if (c.get("text") or "").strip()]
+        # Exclude chunks with no real content — heading-only stubs (e.g. "SECTION 1.1 EXERCISES",
+        # "Practice Makes Perfect (Exercises)") are extracted with < 100 chars of text and cannot
+        # generate meaningful cards. This rule applies to all books and all sections.
+        all_chunks = [c for c in all_chunks if len((c.get("text") or "").strip()) >= 100]
         return all_chunks
 
     async def get_chunk(self, db: AsyncSession, chunk_id: str) -> dict | None:

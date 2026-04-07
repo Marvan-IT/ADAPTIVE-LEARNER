@@ -3,21 +3,59 @@ import { createContext, useContext, useState, useEffect } from "react";
 const ThemeContext = createContext();
 
 export function ThemeProvider({ children }) {
-  const [style, setStyleState] = useState(() => {
-    return localStorage.getItem("ada_style") || "default";
+  // UI theme: dark | light — never sent to backend
+  const [theme, setThemeState] = useState(() => {
+    const saved = localStorage.getItem("ada_theme");
+    if (saved === "light" || saved === "dark") return saved;
+    // Migrate old ada_style "dark"/"light" values
+    const oldStyle = localStorage.getItem("ada_style");
+    if (oldStyle === "dark" || oldStyle === "light") return oldStyle;
+    return "dark";
   });
 
-  useEffect(() => {
-    document.documentElement.setAttribute("data-theme", style === "default" ? "" : style);
-    localStorage.setItem("ada_style", style);
-  }, [style]);
+  // Teaching style: default | pirate | astronaut | gamer — sent to backend
+  const [teachingStyle, setTeachingStyleState] = useState(() => {
+    const saved = localStorage.getItem("ada_teaching_style");
+    if (saved && /^(default|pirate|astronaut|gamer)$/.test(saved)) return saved;
+    // Migrate old ada_style if it was a valid teaching style
+    const oldStyle = localStorage.getItem("ada_style");
+    if (oldStyle && /^(default|pirate|astronaut|gamer)$/.test(oldStyle)) return oldStyle;
+    return "default";
+  });
 
-  const setStyle = (newStyle) => {
-    setStyleState(newStyle);
+  // data-theme drives all CSS: use teaching style when it has its own theme, else use dark/light
+  useEffect(() => {
+    const dataTheme = (teachingStyle !== "default") ? teachingStyle : theme;
+    document.documentElement.setAttribute("data-theme", dataTheme);
+    localStorage.setItem("ada_theme", theme);
+    localStorage.setItem("ada_teaching_style", teachingStyle);
+  }, [theme, teachingStyle]);
+
+  const toggleTheme = () => {
+    setThemeState((prev) => (prev === "dark" ? "light" : "dark"));
   };
 
+  const setStyle = (newStyle) => {
+    if (/^(default|pirate|astronaut|gamer)$/.test(newStyle)) {
+      setTeachingStyleState(newStyle);
+    } else if (newStyle === "dark" || newStyle === "light") {
+      // Backwards compat: if someone passes a theme value, treat as theme toggle
+      setThemeState(newStyle);
+    }
+  };
+
+  const isDark = theme === "dark" || theme === "astronaut" || theme === "gamer";
+
   return (
-    <ThemeContext.Provider value={{ style, setStyle }}>
+    <ThemeContext.Provider value={{
+      style: teachingStyle,    // backward compat — SessionContext reads this
+      teachingStyle,
+      theme,
+      setStyle,
+      setTeachingStyle: setTeachingStyleState,
+      toggleTheme,
+      isDark,
+    }}>
       {children}
     </ThemeContext.Provider>
   );

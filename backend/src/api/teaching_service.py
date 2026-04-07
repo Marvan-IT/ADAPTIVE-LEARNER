@@ -1854,17 +1854,7 @@ class TeachingService:
         Targeted re-explanation in STRUGGLING mode using chunk text directly.
         Returns card dict with is_recovery=True and chunk_id stamped, or None on failure.
         """
-        try:
-            student = await None  # not needed for this call; chunk text is self-contained
-        except Exception:
-            pass
-
-        student = None
-        try:
-            from sqlalchemy.ext.asyncio import AsyncSession as _AS
-            from db.models import Student as _Student
-        except Exception:
-            pass
+        student = None  # not needed — chunk text is self-contained
 
         chunk_id = chunk.get("id", "")
         topic_title = chunk.get("heading", "this topic")

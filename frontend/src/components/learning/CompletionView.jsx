@@ -7,26 +7,29 @@ import { formatConceptTitle } from "../../utils/formatConceptTitle";
 import { useTranslation } from "react-i18next";
 import { trackEvent } from "../../utils/analytics";
 import { RefreshCw, Map, ArrowRight } from "lucide-react";
+import { motion } from "framer-motion";
 import ProgressRing from "../ui/ProgressRing";
 
-const CONFETTI_COLORS = ["#3b82f6", "#22c55e", "#8b5cf6", "#f59e0b", "#ef4444", "#06b6d4"];
+const CONFETTI_COLORS = ["#6366f1", "#22c55e", "#8b5cf6", "#f59e0b", "#ef4444", "#06b6d4"];
 
 function Confetti() {
   const pieces = Array.from({ length: 14 }, (_, i) => i);
   return (
     <div aria-hidden="true" style={{ position: "absolute", top: 0, left: 0, right: 0, pointerEvents: "none", overflow: "hidden", height: "100%" }}>
       {pieces.map((i) => (
-        <div
+        <motion.div
           key={i}
+          initial={{ y: -10, opacity: 1, rotate: 0 }}
+          animate={{ y: 200, opacity: 0, rotate: (i % 2 ? 1 : -1) * (180 + i * 30) }}
+          transition={{ duration: 0.85 + (i % 5) * 0.2, delay: i * 0.04, ease: "easeIn" }}
           style={{
             position: "absolute",
             top: "-10px",
-            left: `${(i / 14) * 100 + Math.random() * 6}%`,
+            left: `${(i / 14) * 100 + (i % 3) * 2}%`,
             width: "8px",
             height: "8px",
             borderRadius: i % 3 === 0 ? "50%" : "2px",
             backgroundColor: CONFETTI_COLORS[i % CONFETTI_COLORS.length],
-            animation: `confetti-fall ${0.9 + (i % 5) * 0.25}s ${i * 0.06}s ease-in both`,
           }}
         />
       ))}
@@ -36,7 +39,7 @@ function Confetti() {
 
 export default function CompletionView() {
   const { t } = useTranslation();
-  const { score, mastered, conceptTitle, session, reset } = useSession();
+  const { score, mastered, conceptTitle, session, dispatch } = useSession();
   const { masteredConcepts } = useStudent();
   const navigate = useNavigate();
   const [nextConcept, setNextConcept] = useState(null);
@@ -71,8 +74,10 @@ export default function CompletionView() {
     "var(--score-fail)";
 
   return (
-    <div
-      className="fade-up"
+    <motion.div
+      initial={{ opacity: 0, scale: 0.92, y: 16 }}
+      animate={{ opacity: 1, scale: 1, y: 0 }}
+      transition={{ type: "spring", stiffness: 320, damping: 28 }}
       style={{
         backgroundColor: "var(--color-surface)",
         borderRadius: "var(--radius-xl)",
@@ -137,10 +142,11 @@ export default function CompletionView() {
         {/* Actions */}
         <div style={{ display: "flex", flexDirection: "column", gap: "0.65rem", maxWidth: "300px", margin: "0 auto" }}>
           {!mastered && (
-            <button
+            <motion.button
+              whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
               onClick={() => {
                 trackEvent("completion_action", { action: "try_again", concept_id: session?.concept_id, concept_title: conceptTitle });
-                reset();
+                dispatch({ type: "SESSION_COMPLETED" });
                 window.location.reload();
               }}
               style={{
@@ -151,20 +157,18 @@ export default function CompletionView() {
                 fontSize: "1rem", fontWeight: 700,
                 cursor: "pointer", fontFamily: "inherit",
                 boxShadow: "var(--shadow-sm)",
-                transition: "transform var(--motion-fast)",
               }}
-              onMouseEnter={(e) => (e.currentTarget.style.transform = "scale(1.02)")}
-              onMouseLeave={(e) => (e.currentTarget.style.transform = "scale(1)")}
             >
               <RefreshCw size={18} /> {t("completion.tryAgain")}
-            </button>
+            </motion.button>
           )}
 
           {mastered && nextConcept && (
-            <button
+            <motion.button
+              whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
               onClick={() => {
                 trackEvent("completion_action", { action: "next_concept", concept_id: session?.concept_id, concept_title: conceptTitle, next_concept_id: nextConcept.concept_id, next_concept_title: nextConcept.concept_title || formatConceptTitle(nextConcept.concept_id) });
-                reset();
+                dispatch({ type: "SESSION_COMPLETED" });
                 navigate(`/learn/${encodeURIComponent(nextConcept.concept_id)}`);
               }}
               style={{
@@ -175,20 +179,18 @@ export default function CompletionView() {
                 fontSize: "1rem", fontWeight: 700,
                 cursor: "pointer", fontFamily: "inherit",
                 boxShadow: "var(--shadow-sm)",
-                transition: "transform var(--motion-fast)",
               }}
-              onMouseEnter={(e) => (e.currentTarget.style.transform = "scale(1.02)")}
-              onMouseLeave={(e) => (e.currentTarget.style.transform = "scale(1)")}
             >
               <ArrowRight size={18} />
               {t("completion.next", { title: nextConcept.concept_title || formatConceptTitle(nextConcept.concept_id) })}
-            </button>
+            </motion.button>
           )}
 
-          <button
+          <motion.button
+            whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.97 }}
             onClick={() => {
               trackEvent("completion_action", { action: "back_to_map", concept_id: session?.concept_id, concept_title: conceptTitle });
-              reset();
+              dispatch({ type: "SESSION_COMPLETED" });
               navigate("/map");
             }}
             style={{
@@ -198,13 +200,12 @@ export default function CompletionView() {
               backgroundColor: "transparent", color: "var(--color-text-muted)",
               fontSize: "0.9rem", fontWeight: 600,
               cursor: "pointer", fontFamily: "inherit",
-              transition: "border-color var(--motion-fast)",
             }}
           >
             <Map size={16} /> {t("learning.backToMap")}
-          </button>
+          </motion.button>
         </div>
       </div>
-    </div>
+    </motion.div>
   );
 }

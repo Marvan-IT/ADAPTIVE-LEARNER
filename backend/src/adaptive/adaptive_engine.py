@@ -1014,3 +1014,83 @@ async def generate_recovery_card(
     except Exception as exc:
         logger.warning("generate_recovery_card failed (non-fatal): %s", exc)
         return None
+
+
+async def generate_exercise_recovery_card(
+    failed_question: str,
+    wrong_answer: str,
+    chunk: dict,
+    language: str,
+    client: AsyncOpenAI,
+) -> dict:
+    """Generate a single recovery card after 2 wrong answers on an exercise MCQ.
+
+    Flow:
+      1. Build prompts via build_exercise_recovery_prompt()
+      2. Call gpt-4o with max_tokens=1200, timeout=30
+      3. 3-retry exponential back-off
+      4. Parse JSON response into a card dict with is_recovery=True
+      5. On parse failure, attempt json_repair fallback
+      6. On exhausted retries, raise ValueError
+
+    Returns a dict compatible with the LessonCard Pydantic schema.
+    """
+    from api.prompts import build_exercise_recovery_prompt, _extract_json_block
+
+    chunk_heading = chunk.get("heading", "")
+    chunk_text = chunk.get("text", "")
+    chunk_id = str(chunk.get("id", ""))
+
+    system_prompt, user_prompt = build_exercise_recovery_prompt(
+        failed_question=failed_question,
+        wrong_answer=wrong_answer,
+        chunk_heading=chunk_heading,
+        chunk_text=chunk_text,
+        language=language,
+    )
+
+    last_exc: Exception | None = None
+    for attempt in range(1, 4):
+        try:
+            resp = await client.chat.completions.create(
+                model=OPENAI_MODEL,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user",   "content": user_prompt},
+                ],
+                max_tokens=1200,
+                temperature=0.4,
+                timeout=30.0,
+            )
+            raw = (resp.choices[0].message.content or "").strip()
+            raw = _extract_json_block(raw)
+            try:
+                card = json.loads(raw)
+            except json.JSONDecodeError:
+                try:
+                    import json_repair
+                    card = json.loads(json_repair.repair(raw))
+                except Exception:
+                    raise
+
+            if isinstance(card, list):
+                card = card[0] if card else {}
+            card.setdefault("chunk_id", chunk_id)
+            card["is_recovery"] = True
+            if isinstance(card.get("question"), dict):
+                card["question"]["difficulty"] = "EASY"
+
+            logger.info(
+                "generate_exercise_recovery_card: chunk_id=%s failed_question_len=%d",
+                chunk_id, len(failed_question),
+            )
+            return card
+        except Exception as exc:
+            last_exc = exc
+            logger.warning(
+                "generate_exercise_recovery_card attempt=%d failed: %s", attempt, exc
+            )
+        if attempt < 3:
+            await asyncio.sleep(2 * attempt)
+
+    raise ValueError(f"Exercise recovery card generation failed after 3 attempts: {last_exc}")

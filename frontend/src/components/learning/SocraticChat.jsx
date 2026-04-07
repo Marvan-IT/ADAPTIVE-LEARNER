@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo } from "react";
+import { motion } from "framer-motion";
 import { useTranslation } from "react-i18next";
 import { useSession } from "../../context/SessionContext";
 import ChatBubble from "./ChatBubble";
@@ -48,22 +49,26 @@ function ScoreAnnouncement({ score, passed, remediationNeeded, onContinueToRevie
 
   if (passed) {
     return (
-      <div style={{
-        margin: "0.75rem 0",
-        padding: "0.75rem 1rem",
-        borderRadius: "var(--radius-md)",
-        backgroundColor: "rgba(34,197,94,0.1)",
-        border: "1.5px solid #22c55e",
-        display: "flex",
-        alignItems: "center",
-        gap: "0.6rem",
-        fontSize: "0.92rem",
-        fontWeight: 700,
-        color: "#166534",
-      }}>
+      <motion.div
+        initial={{ opacity: 0, scale: 0.94 }}
+        animate={{ opacity: 1, scale: 1 }}
+        transition={{ type: "spring", stiffness: 380, damping: 28 }}
+        style={{
+          margin: "0.75rem 0",
+          padding: "0.75rem 1rem",
+          borderRadius: "var(--radius-md)",
+          backgroundColor: "rgba(34,197,94,0.1)",
+          border: "1.5px solid #22c55e",
+          display: "flex",
+          alignItems: "center",
+          gap: "0.6rem",
+          fontSize: "0.92rem",
+          fontWeight: 700,
+          color: "var(--color-success)",
+        }}>
         <span aria-hidden="true">✅</span>
         {t("chat.scorePassed", { score })}
-      </div>
+      </motion.div>
     );
   }
 
@@ -85,7 +90,7 @@ function ScoreAnnouncement({ score, passed, remediationNeeded, onContinueToRevie
           gap: "0.6rem",
           fontSize: "0.92rem",
           fontWeight: 700,
-          color: "#92400e",
+          color: "var(--color-warning)",
         }}>
           <span aria-hidden="true">📊</span>
           {t("chat.scoreReview", { score })}
@@ -361,14 +366,19 @@ export default function SocraticChat({ recheckMode = false }) {
         )}
 
         {messages.map((msg, idx) => (
-          <React.Fragment key={idx}>
+          <motion.div
+            key={idx}
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.2 }}
+          >
             <ChatBubble role={msg.role} content={msg.content} />
             {msg.role === "assistant" && msg.image && (
               <div style={{ marginBottom: "0.75rem", marginLeft: "0.5rem" }}>
                 <ConceptImage img={msg.image} maxWidth="340px" />
               </div>
             )}
-          </React.Fragment>
+          </motion.div>
         ))}
 
         {loading && <TypingDots />}
@@ -416,25 +426,16 @@ export default function SocraticChat({ recheckMode = false }) {
                 disabled={inputDisabled}
                 maxLength={2000}
                 rows={1}
+                className="ada-input"
                 style={{
                   flex: 1,
-                  padding: "0.7rem 1rem",
-                  fontSize: "0.95rem",
-                  borderRadius: "var(--radius-md)",
-                  border: "2px solid var(--color-border)",
-                  backgroundColor: "var(--color-bg)",
-                  color: "var(--color-text)",
-                  fontFamily: "inherit",
-                  outline: "none",
                   resize: "none",
                   minHeight: "44px",
                   maxHeight: "120px",
                   overflowY: "auto",
-                  transition: "border-color var(--motion-fast)",
                   lineHeight: 1.5,
+                  fontSize: "0.95rem",
                 }}
-                onFocus={(e) => (e.target.style.borderColor = "var(--color-primary)")}
-                onBlur={(e) => (e.target.style.borderColor = "var(--color-border)")}
               />
               <button
                 type="submit"

@@ -534,7 +534,7 @@ async def update_student_language(
             headings = [c.get("heading", "") for c in sorted(raw_chunks, key=lambda c: c.get("order_index", 0))]
             if headings:
                 translated_headings = await _translate_summaries_headings(
-                    headings, req.language, teaching_svc._openai_client
+                    headings, req.language, teaching_svc.openai
                 )
 
             # Bust the card generation cache so cards regenerate in the new language
@@ -1036,7 +1036,7 @@ async def get_next_adaptive_card(
                         wrong_answer=req.student_wrong_answer or "",
                         chunk=chunk,
                         language=student.preferred_language or "en",
-                        client=teaching_svc._openai_client,
+                        client=teaching_svc.openai,
                     )
                     await db.commit()
                     logger.info(
@@ -1064,7 +1064,7 @@ async def get_next_adaptive_card(
                     )
                     from api.prompts import _extract_json_block
                     import json as _json
-                    resp = await teaching_svc._openai_client.chat.completions.create(
+                    resp = await teaching_svc.openai.chat.completions.create(
                         model=OPENAI_MODEL_MINI,
                         messages=[
                             {"role": "system", "content": system_p},
@@ -1161,24 +1161,30 @@ async def generate_chunk_cards(
         chunk = await chunk_ksvc.get_chunk(db, req.chunk_id)
 
         # Generate 2-3 exam questions for teaching chunks
-        chunk_type = _get_chunk_type(chunk.heading if chunk else "", chunk.text if chunk else "")
+        chunk_heading = chunk.get("heading", "") if chunk else ""
+        chunk_text = chunk.get("text", "") if chunk else ""
+        chunk_type = _get_chunk_type(chunk_heading, chunk_text)
         questions: list[ChunkExamQuestion] = []
-        if chunk_type == "teaching" and chunk and (chunk.text or "").strip():
+        if chunk_type == "teaching" and chunk and chunk_text.strip():
+            # Dynamic question count based on chunk text length
+            _text_len = len(chunk_text.strip()) if chunk_text else 0
+            _target_q = 1 if _text_len < 400 else (2 if _text_len < 1200 else 3)
             _q_system = (
-                "You are an exam question writer. Based on the content, generate exactly 2-3 short open-ended "
-                "exam questions that test understanding (not just recall). "
+                "You are an exam question writer. Based on the content, generate exactly "
+                f"{_target_q} short open-ended question{'s' if _target_q > 1 else ''} "
+                "that test understanding (not just recall). "
                 "Return ONLY valid JSON with no markdown: "
-                '{"questions": [{"index": 0, "text": "..."}, {"index": 1, "text": "..."}]}'
+                '{"questions": [{"index": 0, "text": "..."}, ...]}'
             )
-            _q_user = f"Section: {chunk.heading}\n\n{(chunk.text or '')[:900]}"
+            _q_user = f"Section: {chunk_heading}\n\n{chunk_text[:900]}"
             try:
                 _q_result = await _call_llm_json(
-                    teaching_svc._openai_client,
+                    teaching_svc.openai,
                     _q_system,
                     _q_user,
                     max_tokens=400,
                 )
-                for _qi, _q in enumerate((_q_result.get("questions") or [])[:3]):
+                for _qi, _q in enumerate((_q_result.get("questions") or [])[:_target_q]):
                     _qtext = (_q.get("text") or "").strip()
                     if _qtext:
                         questions.append(ChunkExamQuestion(
@@ -1190,12 +1196,12 @@ async def generate_chunk_cards(
                 logger.exception("[chunk-cards] question generation failed on first try — retrying")
                 try:
                     _q_result2 = await _call_llm_json(
-                        teaching_svc._openai_client,
+                        teaching_svc.openai,
                         _q_system,
                         _q_user,
                         max_tokens=400,
                     )
-                    for _qi, _q in enumerate((_q_result2.get("questions") or [])[:3]):
+                    for _qi, _q in enumerate((_q_result2.get("questions") or [])[:_target_q]):
                         _qtext = (_q.get("text") or "").strip()
                         if _qtext:
                             questions.append(ChunkExamQuestion(
@@ -1360,15 +1366,11 @@ async def complete_chunk(
         None,
     )
 
-    # all_study_complete: all required chunks (teaching, chapter_review, non-optional exercise) completed
+    # all_study_complete: all teaching chunks completed
     completed_ids = set(existing_progress.keys())
     required_ids = {
         str(c["id"]) for c in all_sorted
-        if _get_chunk_type(c.get("heading", "")) in ("teaching", "chapter_review")
-        or (
-            _get_chunk_type(c.get("heading", "")) == "exercise"
-            and not _heading_is_optional(c.get("heading", ""))
-        )
+        if _get_chunk_type(c.get("heading", "")) == "teaching"
     }
     all_study_complete = bool(required_ids) and required_ids.issubset(completed_ids)
 
@@ -1431,15 +1433,11 @@ async def complete_chunk_item(
         None,
     )
 
-    # Check all_study_complete (exclude optional exercise chunks)
+    # Check all_study_complete (teaching chunks only)
     completed_ids = set(existing_progress.keys())
     required_ids = {
         str(c["id"]) for c in all_sorted
-        if _get_chunk_type(c.get("heading", "")) in ("teaching", "section_review")
-        or (
-            _get_chunk_type(c.get("heading", "")) == "exercise"
-            and not _heading_is_optional(c.get("heading", ""))
-        )
+        if _get_chunk_type(c.get("heading", "")) == "teaching"
     }
     all_study_complete = bool(required_ids) and required_ids.issubset(completed_ids)
 
@@ -1502,7 +1500,7 @@ async def evaluate_chunk_answers(
 
     try:
         grade_result = await _call_llm_json(
-            teaching_svc._openai_client,
+            teaching_svc.openai,
             grading_system,
             grading_user,
             max_tokens=600,
@@ -1530,8 +1528,34 @@ async def evaluate_chunk_answers(
 
     chunk_progress_update: dict = {}
     all_study_complete = False
+    next_mode = "NORMAL"
 
     if passed:
+        # Part 1 — Mode computation using MCQ behavioral signals
+        try:
+            history = await load_student_history(str(session.student_id), session.concept_id, db)
+            history["section_count"] = history.get("section_count", 0) + 1
+            signals = CardBehaviorSignals(
+                card_index=max(req.mcq_total - 1, 0),
+                wrong_attempts=max(req.mcq_total - req.mcq_correct, 0),
+                hints_used=0,
+                time_on_card_sec=history.get("avg_time_per_card") or 0.0,
+                idle_triggers=0,
+            )
+            _, _, next_mode = build_blended_analytics(
+                signals, history, session.concept_id, str(session.student_id)
+            )
+            await db.execute(
+                sa_update(Student)
+                .where(Student.id == session.student_id)
+                .values(section_count=Student.section_count + 1)
+            )
+        except Exception:
+            logger.exception("[evaluate-chunk] adaptive blending failed, using MCQ score fallback")
+            from api.teaching_service import _mode_from_chunk_score
+            mcq_pct = round((req.mcq_correct / req.mcq_total) * 100) if req.mcq_total > 0 else 50
+            next_mode = _mode_from_chunk_score(mcq_pct)
+
         # Record chunk progress
         existing_progress = dict(session.chunk_progress or {})
         score_pct = round(score_frac * 100)
@@ -1544,7 +1568,7 @@ async def evaluate_chunk_answers(
         session.chunk_progress = existing_progress
         chunk_progress_update = {chunk_id: {"score": score_pct, "mode_used": req.mode_used}}
 
-        # Compute all_study_complete (same logic as complete_chunk)
+        # Compute all_study_complete (teaching chunks only)
         try:
             all_chunks = await chunk_ksvc.get_chunks_for_concept(
                 db, session.book_slug or DEFAULT_BOOK_SLUG, session.concept_id
@@ -1552,16 +1576,39 @@ async def evaluate_chunk_answers(
             all_sorted = sorted(all_chunks, key=lambda c: c["order_index"])
             required_ids = {
                 str(c["id"]) for c in all_sorted
-                if _get_chunk_type(c.get("heading", "")) in ("teaching", "chapter_review")
-                or (
-                    _get_chunk_type(c.get("heading", "")) == "exercise"
-                    and not _heading_is_optional(c.get("heading", ""))
-                )
+                if _get_chunk_type(c.get("heading", "")) == "teaching"
             }
             completed_ids = set(existing_progress.keys())
             all_study_complete = bool(required_ids) and required_ids.issubset(completed_ids)
         except Exception:
             logger.exception("[evaluate-chunk] all_study_complete check failed")
+
+        # Part 2 — StudentMastery insertion when all study complete
+        if all_study_complete:
+            from datetime import datetime, timezone as _tz
+            session.concept_mastered = True
+            session.phase = "COMPLETED"
+            session.completed_at = datetime.now(_tz.utc)
+            _existing_result = await db.execute(
+                select(StudentMastery).where(
+                    StudentMastery.student_id == session.student_id,
+                    StudentMastery.concept_id == session.concept_id,
+                )
+            )
+            _existing_mastery = _existing_result.scalar_one_or_none()
+            if _existing_mastery:
+                _existing_mastery.session_id = session.id
+                _existing_mastery.mastered_at = datetime.now(_tz.utc)
+            else:
+                db.add(StudentMastery(
+                    student_id=session.student_id,
+                    concept_id=session.concept_id,
+                    session_id=session.id,
+                ))
+            logger.info(
+                "[evaluate-chunk] concept MASTERED via KC: session_id=%s concept_id=%s",
+                session_id, session.concept_id,
+            )
 
         await db.commit()
 
@@ -1571,6 +1618,7 @@ async def evaluate_chunk_answers(
         all_study_complete=all_study_complete,
         chunk_progress=chunk_progress_update,
         feedback=feedback,
+        next_mode=next_mode,
     )
 
 
@@ -1601,6 +1649,26 @@ _OPTIONAL_HEADING_PATTERNS = ("writing exercises",)
 def _heading_is_optional(heading: str) -> bool:
     h = heading.lower()
     return any(p in h for p in _OPTIONAL_HEADING_PATTERNS)
+
+
+def _chunk_has_meaningful_content(text: str, chunk_type: str) -> bool:
+    """Return False for chunks that are bare headings or numbered-problem-list stubs.
+
+    Teaching chunks are always shown (may be short but contain real explanation).
+    All other types must contain at least 2 prose sentences (≥5 words, not a
+    numbered/lettered exercise item like '1. Find the value...').
+    """
+    stripped = (text or "").strip()
+    if len(stripped) < 60:
+        return False
+    if chunk_type == "teaching":
+        return True
+    sentences = re.split(r"[.!?]", stripped)
+    prose_sentences = [
+        s for s in sentences
+        if len(s.split()) >= 5 and not re.match(r"^\s*\d+[\.\)]\s", s)
+    ]
+    return len(prose_sentences) >= 2
 
 
 @router.get(
@@ -1634,7 +1702,9 @@ async def list_chunks(
             .where(ConceptChunk.book_slug == book_slug, ConceptChunk.concept_id == concept_id)
             .order_by(ConceptChunk.order_index)
         )
-        chunks = [c for c in result.scalars().all() if (c.text or "").strip()]
+        # Exclude heading-only stubs (< 100 chars) — same rule as get_chunks_for_concept()
+        # in chunk_knowledge_service.py. Applies to all books and all sections.
+        chunks = [c for c in result.scalars().all() if len((c.text or "").strip()) >= 100]
 
         if not chunks:
             # ChromaDB-path signal: return empty list
@@ -1680,33 +1750,8 @@ async def list_chunks(
 
         section_title = chunks[0].section if chunks else ""
 
-        # Inject synthetic exam gate if none exists in the DB chunks
-        already_has_gate = any(s.chunk_type == "exercise_gate" for s in summaries)
-        if not already_has_gate:
-            from uuid import uuid5, NAMESPACE_DNS
-            synthetic_id = str(uuid5(NAMESPACE_DNS, f"exam_gate:{concept_id}"))
-            max_order = max((s.order_index for s in summaries), default=0)
-            summaries.append(ChunkSummary(
-                chunk_id=synthetic_id,
-                order_index=max_order + 1,
-                heading="Section Exam",
-                has_images=False,
-                has_mcq=False,
-                chunk_type="exercise_gate",
-                is_optional=False,
-                completed=False,
-                score=None,
-                mode_used=None,
-            ))
-            logger.info(
-                "[chunks] exam gate injected: session_id=%s concept_id=%s",
-                session_id, concept_id,
-            )
-        else:
-            logger.debug(
-                "[chunks] exam gate already exists, skipping inject: session_id=%s concept_id=%s",
-                session_id, concept_id,
-            )
+        # Chunks with < 100 chars are already excluded above at the DB fetch level,
+        # so all summaries here have real content.
 
         logger.info(
             "[chunks] session_id=%s concept_id=%s total=%d current_index=%d",

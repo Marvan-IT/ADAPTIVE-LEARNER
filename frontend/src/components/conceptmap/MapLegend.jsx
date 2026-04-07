@@ -4,9 +4,9 @@ export default function MapLegend() {
   const { t } = useTranslation();
 
   const items = [
-    { fill: "#dcfce7", border: "#22c55e", labelKey: "map.mastered" },
-    { fill: "#dbeafe", border: "#3b82f6", labelKey: "map.readyToLearn" },
-    { fill: "#f1f5f9", border: "#94a3b8", labelKey: "map.locked" },
+    { fill: "rgba(34,197,94,0.12)", border: "rgba(34,197,94,0.6)", labelKey: "map.mastered" },
+    { fill: "rgba(99,102,241,0.12)", border: "rgba(99,102,241,0.6)", labelKey: "map.readyToLearn" },
+    { fill: "rgba(148,163,184,0.12)", border: "rgba(148,163,184,0.5)", labelKey: "map.locked" },
   ];
 
   return (

@@ -427,6 +427,8 @@ class ChunkEvaluateRequest(BaseModel):
     questions: list[dict]
     answers: list[ChunkAnswerItem]
     mode_used: str = "NORMAL"
+    mcq_correct: int = 0   # MCQ correct count from card phase
+    mcq_total: int = 0     # total MCQs attempted during cards
 
 
 class ChunkEvaluateFeedback(BaseModel):
@@ -441,6 +443,7 @@ class ChunkEvaluateResponse(BaseModel):
     all_study_complete: bool
     chunk_progress: dict
     feedback: list[ChunkEvaluateFeedback]
+    next_mode: str = "NORMAL"
 
 
 class CompleteChunkRequest(BaseModel):
@@ -463,24 +466,6 @@ class RecoveryCardRequest(BaseModel):
     card_index: int = 0         # the card that triggered recovery
     wrong_answers: list[str] = []  # what the student answered incorrectly
     is_exercise: bool = False
-
-
-class SocraticExamStartRequest(BaseModel):
-    session_id: str   # UUID
-
-
-class SocraticExamAnswer(BaseModel):
-    question_index: int
-    answer: str
-
-
-class SocraticExamResult(BaseModel):
-    score: float          # 0.0 – 1.0
-    passed: bool
-    total_questions: int
-    correct_count: int
-    failed_chunk_ids: list[str]
-    attempt: int
 
 
 # ── Chunk List Schemas ─────────────────────────────────────────────────────────

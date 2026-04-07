@@ -1,4 +1,6 @@
 import { useAdaptiveStore } from '../../store/adaptiveStore';
+import { motion } from 'framer-motion';
+import { useRef } from 'react';
 
 const LEVEL_XP = 100;
 const R = 16;
@@ -7,12 +9,19 @@ const CIRC = 2 * Math.PI * R;
 export default function LevelBadge({ size = 36 }) {
   const xp = useAdaptiveStore((s) => s.xp);
   const level = useAdaptiveStore((s) => s.level);
+  const prevLevelRef = useRef(level);
+  const levelJustUp = level > prevLevelRef.current;
+  if (levelJustUp) prevLevelRef.current = level;
   const progress = (xp % LEVEL_XP) / LEVEL_XP;
   const dash = progress * CIRC;
   const isGold = level >= 5;
 
   return (
-    <div style={{ position: 'relative', width: size, height: size, flexShrink: 0 }}>
+    <motion.div
+      animate={levelJustUp ? { scale: [1, 1.45, 0.95, 1] } : {}}
+      transition={{ duration: 0.4, ease: "backOut" }}
+      style={{ position: 'relative', width: size, height: size, flexShrink: 0 }}
+    >
       <svg width={size} height={size} viewBox={`0 0 ${size + 4} ${size + 4}`}>
         <circle
           cx={(size + 4) / 2} cy={(size + 4) / 2} r={R}
@@ -37,6 +46,6 @@ export default function LevelBadge({ size = 36 }) {
       }}>
         {level}
       </div>
-    </div>
+    </motion.div>
   );
 }

@@ -46,7 +46,7 @@ export default function LearningPage() {
       const launchLesson = () => startLesson(decodedConceptId, null, []);
 
       const tryResume = () => {
-        const savedSessionId = localStorage.getItem(`ada_session_${decodedConceptId}`);
+        const savedSessionId = localStorage.getItem(`ada_session_${student?.id}_${decodedConceptId}`);
         if (savedSessionId) {
           getSession(savedSessionId)
             .then(res => {
@@ -385,8 +385,7 @@ export default function LearningPage() {
 
         <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
           {visibleChunks.map((chunk, idx) => {
-            const isDone = chunk.chunk_id in (chunkProgress || {});
-            const score = chunkProgress?.[chunk.chunk_id]?.score;
+            const isGate = chunk.chunk_type === "exercise_gate";
             const isOptional = chunk.is_optional === true;
             const isInfoPanel = chunk.chunk_type === "learning_objective";
             const isReview = chunk.chunk_type === "chapter_review";
@@ -394,9 +393,20 @@ export default function LearningPage() {
             const prevRequired = visibleChunks.slice(0, idx).filter(
               (c) => c.chunk_type !== "learning_objective"
             );
-            const isLocked = !isInfoPanel
-              && prevRequired.length > 0
-              && !(prevRequired[prevRequired.length - 1]?.chunk_id in (chunkProgress || {}));
+
+            // Gate is locked until ALL non-gate, non-optional, non-info study chunks are complete
+            const isLocked = isGate
+              ? !(allStudyComplete === true)
+              : !isInfoPanel
+                  && prevRequired.length > 0
+                  && !(prevRequired[prevRequired.length - 1]?.chunk_id in (chunkProgress || {}));
+
+            // Gate completion is driven by backend concept_mastered flag
+            const isDone = isGate
+              ? chunk.completed === true
+              : chunk.chunk_id in (chunkProgress || {});
+
+            const score = isGate ? null : chunkProgress?.[chunk.chunk_id]?.score;
 
             const statusColor = isDone
               ? "var(--color-success)"
@@ -404,7 +414,13 @@ export default function LearningPage() {
                 ? "var(--color-text-muted)"
                 : "var(--color-primary)";
 
-            const statusIcon = isDone ? "✓" : isLocked ? "🔒" : `${idx + 1}`;
+            const statusIcon = isDone
+              ? "✓"
+              : isLocked
+                ? "🔒"
+                : isGate
+                  ? "★"
+                  : `${idx + 1}`;
 
             return (
               <div
@@ -518,7 +534,23 @@ export default function LearningPage() {
                           {t("subsectionNav.info", "Info")}
                         </span>
                       )}
-                      {isLocked && (
+                      {isGate && (
+                        <span style={{
+                          fontSize: "10px", fontWeight: 700, padding: "1px 7px", borderRadius: "9999px",
+                          backgroundColor: "rgba(99,102,241,0.12)", color: "var(--color-primary)",
+                          border: "1px solid rgba(99,102,241,0.3)",
+                        }}>
+                          {t("subsectionNav.exam", "Exam")}
+                        </span>
+                      )}
+                      {isLocked && isGate && (
+                        <span style={{
+                          fontSize: "10px", fontWeight: 500, color: "var(--color-text-muted)",
+                        }}>
+                          {t("exam.locked", "Complete all sections first")}
+                        </span>
+                      )}
+                      {isLocked && !isGate && (
                         <span style={{
                           fontSize: "10px", fontWeight: 500, color: "var(--color-text-muted)",
                         }}>
@@ -529,7 +561,7 @@ export default function LearningPage() {
                   </div>
 
                   {/* Action button */}
-                  {!isLocked && (
+                  {!isLocked && !isGate && (
                     <button
                       disabled={loading}
                       onClick={() =>
@@ -564,7 +596,7 @@ export default function LearningPage() {
                       }}
                     >
                       {isDone
-                        ? (isExpanded ? "▲" : t("map.reviewLesson", "Review"))
+                        ? t("map.reviewLesson", "Review")
                         : isExpanded
                           ? "▲"
                           : t("learning.startSubsection", "Start")
