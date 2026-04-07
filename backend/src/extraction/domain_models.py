@@ -107,38 +107,6 @@ class ValidationResult:
 
 # ── Image Models ───────────────────────────────────────────────────────
 
-class ImageType(str, Enum):
-    FORMULA = "FORMULA"
-    DIAGRAM = "DIAGRAM"
-    CHART = "CHART"
-    DECORATIVE = "DECORATIVE"
-    UNKNOWN = "UNKNOWN"
-
-
-class ImageAction(str, Enum):
-    SEND_TO_MATHPIX = "SEND_TO_MATHPIX"
-    SKIP = "SKIP"
-
-
-@dataclass
-class ImageDecision:
-    """Decision about how to handle an extracted image."""
-    image_reference: str
-    page: int                    # 1-indexed page number
-    image_type: str              # ImageType value
-    action: str                  # ImageAction value
-    reason: str
-
-    def to_dict(self) -> dict:
-        return {
-            "image_reference": self.image_reference,
-            "page": self.page,
-            "image_type": self.image_type,
-            "action": self.action,
-            "reason": self.reason,
-        }
-
-
 # ── Pipeline Output Model ─────────────────────────────────────────────
 
 @dataclass
@@ -147,12 +115,10 @@ class PipelineOutput:
     concept_blocks: list[ConceptBlock] = field(default_factory=list)
     dependency_edges: list[DependencyEdge] = field(default_factory=list)
     validation_report: list[ValidationResult] = field(default_factory=list)
-    mathpix_plan: list[ImageDecision] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
             "concept_blocks": [b.to_dict() for b in self.concept_blocks],
             "dependency_edges": [e.to_dict() for e in self.dependency_edges],
             "validation_report": [v.to_dict() for v in self.validation_report],
-            "mathpix_plan": [m.to_dict() for m in self.mathpix_plan],
         }
