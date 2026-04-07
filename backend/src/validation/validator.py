@@ -11,7 +11,8 @@ Checks:
 
 import re
 
-import sys, os
+import sys
+import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from extraction.domain_models import ConceptBlock, ValidationResult
 from config import BOILERPLATE_PATTERNS, EXERCISE_SECTION_MARKERS
@@ -43,7 +44,7 @@ def validate_concept_block(block: ConceptBlock) -> ValidationResult:
     # Check: no boilerplate in text
     for pattern in BOILERPLATE_PATTERNS:
         if re.search(pattern, block.text, re.IGNORECASE):
-            issues.append(f"CONTAINS_BOILERPLATE: Found boilerplate pattern in text")
+            issues.append("CONTAINS_BOILERPLATE: Found boilerplate pattern in text")
             break
 
     # Check: no exercise instruction patterns

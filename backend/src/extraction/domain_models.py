@@ -5,8 +5,6 @@ All structures used across the extraction, graph, storage, and validation module
 
 from __future__ import annotations
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Optional
 
 
 # ── Page-Level Models ──────────────────────────────────────────────────

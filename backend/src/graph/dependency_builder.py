@@ -12,10 +12,10 @@ Design principles:
   - Operations hierarchy: ADD -> SUBTRACT, ADD -> MULTIPLY, SUBTRACT+MULTIPLY -> DIVIDE.
 """
 
-import re
 from collections import defaultdict
 
-import sys, os
+import sys
+import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from extraction.domain_models import ConceptBlock, DependencyEdge
 
@@ -50,7 +50,7 @@ def build_dependency_edges(concept_blocks: list[ConceptBlock]) -> list[Dependenc
                 print(f"  Warning: Expert graph has {len(missing)} IDs not in concepts")
             if extra:
                 print(f"  Warning: {len(extra)} concepts not in expert graph")
-            print(f"  Falling back to keyword-based builder")
+            print("  Falling back to keyword-based builder")
 
     # Fallback: keyword-based builder
     print(f"  Using keyword-based dependency builder for {book_slug}")

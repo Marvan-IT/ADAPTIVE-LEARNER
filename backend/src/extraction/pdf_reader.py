@@ -6,7 +6,8 @@ Uses PyMuPDF (fitz) for all PDF operations.
 import fitz  # PyMuPDF
 from pathlib import Path
 
-import sys, os
+import sys
+import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from extraction.domain_models import PageText, FontSpan
 

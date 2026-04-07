@@ -5,7 +5,8 @@ from raw PDF text. Does NOT modify actual teaching content.
 
 import re
 
-import sys, os
+import sys
+import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from config import BOILERPLATE_PATTERNS
 

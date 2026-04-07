@@ -24,7 +24,6 @@ except ImportError:
     print("ERROR: networkx is required. Run: pip install networkx")
     sys.exit(1)
 
-from graph.graph_store import load_graph_json
 
 
 def load_dependency_edges(path: Path) -> list[dict]:
@@ -36,7 +35,7 @@ def load_dependency_edges(path: Path) -> list[dict]:
 def validate_from_edges(edges_path: Path):
     """Validate using dependency_edges.json."""
     print(f"\n{'='*70}")
-    print(f"  DEPENDENCY GRAPH VALIDATION")
+    print("  DEPENDENCY GRAPH VALIDATION")
     print(f"  Source: {edges_path}")
     print(f"{'='*70}\n")
 
@@ -51,7 +50,7 @@ def validate_from_edges(edges_path: Path):
 
     # ── Check 1: Missing prerequisite references ──────────────────────
     missing = all_prereqs - all_ids
-    print(f"[Check 1] Missing prerequisite references:")
+    print("[Check 1] Missing prerequisite references:")
     if missing:
         print(f"  FAIL — {len(missing)} prerequisites reference non-existent concepts:")
         for m in sorted(missing):
@@ -69,10 +68,10 @@ def validate_from_edges(edges_path: Path):
                 G.add_edge(p, e["concept_id"])
 
     # ── Check 2: Cycles ───────────────────────────────────────────────
-    print(f"\n[Check 2] Cycle detection:")
+    print("\n[Check 2] Cycle detection:")
     is_dag = nx.is_directed_acyclic_graph(G)
     if is_dag:
-        print(f"  PASS — Graph is a valid DAG (no cycles)")
+        print("  PASS — Graph is a valid DAG (no cycles)")
     else:
         cycles = list(nx.simple_cycles(G))
         print(f"  FAIL — Found {len(cycles)} cycle(s):")
@@ -80,11 +79,11 @@ def validate_from_edges(edges_path: Path):
             print(f"    Cycle {i+1}: {' -> '.join(cycle)} -> {cycle[0]}")
 
     # ── Check 3: Topological order ────────────────────────────────────
-    print(f"\n[Check 3] Topological order:")
+    print("\n[Check 3] Topological order:")
     if is_dag:
         topo_order = list(nx.topological_sort(G))
         print(f"  Length: {len(topo_order)} nodes")
-        print(f"  First 30 nodes in topological order:")
+        print("  First 30 nodes in topological order:")
         for i, node in enumerate(topo_order[:30]):
             prereqs = [e["prerequisites"] for e in edges if e["concept_id"] == node][0]
             prereq_str = f" <- [{', '.join(p.split('.')[-1] for p in prereqs)}]" if prereqs else " (ROOT)"
@@ -92,10 +91,10 @@ def validate_from_edges(edges_path: Path):
         if len(topo_order) > 30:
             print(f"    ... and {len(topo_order) - 30} more")
     else:
-        print(f"  SKIP — Cannot compute topological order (graph has cycles)")
+        print("  SKIP — Cannot compute topological order (graph has cycles)")
 
     # ── Check 4: Parallel branches (not a linear chain) ───────────────
-    print(f"\n[Check 4] Parallel branch detection:")
+    print("\n[Check 4] Parallel branch detection:")
     # In a linear chain, every node (except root) has exactly 1 in-edge
     # and every node (except leaf) has exactly 1 out-edge
     in_degrees = [G.in_degree(n) for n in G.nodes]
@@ -109,14 +108,14 @@ def validate_from_edges(edges_path: Path):
     is_linear = (multi_child_nodes == 0 and multi_prereq_nodes == 0 and root_nodes == 1)
 
     if is_linear:
-        print(f"  FAIL — Graph appears to be a linear chain")
+        print("  FAIL — Graph appears to be a linear chain")
     else:
-        print(f"  PASS — Graph has parallel branches")
+        print("  PASS — Graph has parallel branches")
         print(f"    Nodes with multiple prerequisites (convergence points): {multi_prereq_nodes}")
         print(f"    Nodes with multiple children (branch points): {multi_child_nodes}")
 
     # ── Check 5: Graph statistics ─────────────────────────────────────
-    print(f"\n[Check 5] Graph statistics:")
+    print("\n[Check 5] Graph statistics:")
     print(f"  Nodes:         {G.number_of_nodes()}")
     print(f"  Edges:         {G.number_of_edges()}")
     print(f"  Root nodes:    {root_nodes} (no prerequisites)")
@@ -133,17 +132,17 @@ def validate_from_edges(edges_path: Path):
     print(f"  Avg prereqs:   {avg_prereqs:.1f} per concept")
 
     # ── Check 6: Orphan nodes ─────────────────────────────────────────
-    print(f"\n[Check 6] Orphan detection (no edges at all):")
+    print("\n[Check 6] Orphan detection (no edges at all):")
     orphans = [n for n in G.nodes if G.in_degree(n) == 0 and G.out_degree(n) == 0]
     if orphans:
         print(f"  WARNING — {len(orphans)} orphan node(s):")
         for o in orphans:
             print(f"    - {o}")
     else:
-        print(f"  PASS — No orphan nodes")
+        print("  PASS — No orphan nodes")
 
     # ── Check 7: Chapter-level dependency summary ─────────────────────
-    print(f"\n[Check 7] Chapter dependency map:")
+    print("\n[Check 7] Chapter dependency map:")
     chapter_deps = defaultdict(set)
     for e in edges:
         target_ch = e["concept_id"].split(".")[1]  # e.g., "C1"
@@ -179,10 +178,10 @@ def validate_from_edges(edges_path: Path):
     if issues:
         print(f"  VERDICT: ISSUES FOUND — {'; '.join(issues)}")
     else:
-        print(f"  VERDICT: GRAPH IS VALID")
+        print("  VERDICT: GRAPH IS VALID")
         print(f"    - DAG with {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
         print(f"    - Has parallel branches ({multi_child_nodes} branch points)")
-        print(f"    - All prerequisite references valid")
+        print("    - All prerequisite references valid")
     print(f"{'='*70}\n")
 
 
@@ -197,7 +196,7 @@ if __name__ == "__main__":
 
     if not edges_path.exists():
         print(f"ERROR: File not found: {edges_path}")
-        print(f"Usage: python validate_graph.py [path/to/dependency_edges.json]")
+        print("Usage: python validate_graph.py [path/to/dependency_edges.json]")
         sys.exit(1)
 
     validate_from_edges(edges_path)

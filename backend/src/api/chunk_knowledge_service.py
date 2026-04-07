@@ -7,7 +7,6 @@ No initialization needed — queries DB on demand via AsyncSession.
 
 import json
 import logging
-from pathlib import Path
 from uuid import UUID
 
 import networkx as nx

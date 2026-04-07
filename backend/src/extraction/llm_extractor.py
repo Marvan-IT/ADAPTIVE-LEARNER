@@ -15,9 +15,10 @@ from typing import Optional
 
 from openai import OpenAI
 
-import sys, os
+import sys
+import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from config import OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, OUTPUT_DIR
+from config import OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL
 
 
 # ── Rate limiting ────────────────────────────────────────────────────

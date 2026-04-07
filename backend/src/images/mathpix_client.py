@@ -20,7 +20,8 @@ import requests
 from pathlib import Path
 from typing import Optional
 
-import sys, os
+import sys
+import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from config import MATHPIX_APP_ID, MATHPIX_APP_KEY, MATHPIX_RATE_LIMIT
 

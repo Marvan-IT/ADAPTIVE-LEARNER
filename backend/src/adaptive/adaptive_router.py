@@ -24,7 +24,6 @@ from uuid import UUID
 from adaptive.schemas import AdaptiveLessonRequest, AdaptiveLesson, NextCardRequest, NextCardResponse
 from adaptive.adaptive_engine import generate_adaptive_lesson, generate_recovery_card
 from api.rate_limiter import limiter
-from api.chunk_knowledge_service import ChunkKnowledgeService
 from db.connection import get_db
 from db.models import Student, StudentMastery
 from config import ADAPTIVE_CARD_MODEL, DEFAULT_BOOK_SLUG

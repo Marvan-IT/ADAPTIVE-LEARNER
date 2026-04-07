@@ -11,9 +11,10 @@ Strategy:
 import re
 from typing import Optional
 
-import sys, os
+import sys
+import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from extraction.domain_models import PageText, SectionBoundary, FontSpan
+from extraction.domain_models import PageText, SectionBoundary
 
 
 def detect_sections(pages: list[PageText], book_config: dict) -> list[SectionBoundary]:
@@ -106,7 +107,7 @@ def _find_exercise_boundaries(pages: list[PageText], book_config: dict) -> dict:
     Scan raw text for exercise markers like 'Section 1.1 Exercises'.
     Returns dict mapping section_number -> page_index.
     """
-    pattern_str = book_config.get("exercise_marker_pattern", r"Section\s+\d+\.\d+\s+Exercises")
+    book_config.get("exercise_marker_pattern", r"Section\s+\d+\.\d+\s+Exercises")
     # Build a more specific regex that captures the section number
     exercise_re = re.compile(r"Section\s+(\d+\.\d+)\s+Exercises", re.IGNORECASE)
 

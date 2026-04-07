@@ -61,10 +61,9 @@ from api.teaching_schemas import (
     ChunkEvaluateRequest,
     ChunkEvaluateResponse,
     ChunkEvaluateFeedback,
-    ChunkAnswerItem,
     RecoveryCardRequest,
     CompleteChunkRequest, CompleteChunkResponse,
-    CompleteChunkItemRequest, CompleteChunkItemResponse,
+    CompleteChunkItemResponse,
     ChunkSummary, ChunkListResponse,
     StudentLanguageResponse,
     ExamStartRequest, ExamStartResponse, ExamQuestion,
@@ -1126,7 +1125,6 @@ async def complete_chunk(
     db: AsyncSession = Depends(get_db),
 ):
     """Record completion of a study chunk and determine mode for the next chunk."""
-    from api.teaching_service import EXERCISE_HEADING_PATTERNS
     from datetime import datetime
 
     session = await db.get(TeachingSession, session_id)

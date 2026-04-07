@@ -485,7 +485,7 @@ if __name__ == "__main__":
     # Find first chunk with an image URL
     image_chunk = next((c for c in chunks if c.image_urls), None)
     if image_chunk:
-        print(f"\nSample chunk with image:")
+        print("\nSample chunk with image:")
         print(f"  concept_id  : {image_chunk.concept_id}")
         print(f"  heading     : {image_chunk.heading}")
         print(f"  image_urls  : {image_chunk.image_urls[:2]}")

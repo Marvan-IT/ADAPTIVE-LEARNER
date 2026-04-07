@@ -421,7 +421,7 @@ def _build_user_prompt(
             "",
             "PREREQUISITE REMEDIATION:",
             f"  The student has not yet fully mastered the prerequisite concept: \"{prereq_title}\".",
-            f"  Prepend exactly 3 [Review]-prefixed cards at the START of the cards array.",
+            "  Prepend exactly 3 [Review]-prefixed cards at the START of the cards array.",
             "  These review cards must:",
             "    - Be of type 'explain' or 'example'",
             "    - Have difficulty 1 or 2",
@@ -469,7 +469,6 @@ def build_next_card_prompt(
     Reuses _build_system_prompt() unchanged, then overrides schema + card count.
     Adds STUDENT CONTEXT block with historical signals and motivational note rules.
     """
-    import math
 
     # Reuse existing system prompt, then override schema and card rules
     base_sys = _build_system_prompt(learning_profile, gen_profile, language)

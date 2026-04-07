@@ -13,10 +13,11 @@ Removes:
 
 import re
 
-import sys, os
+import sys
+import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from extraction.domain_models import SectionBoundary
-from config import EXERCISE_SECTION_MARKERS, CONTENT_EXCLUDE_MARKERS
+from config import EXERCISE_SECTION_MARKERS
 
 
 def filter_section_content(
