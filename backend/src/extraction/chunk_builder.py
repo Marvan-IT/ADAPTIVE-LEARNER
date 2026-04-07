@@ -165,6 +165,8 @@ async def save_chunk(
             existing.text = chunk.text
         if existing.latex != chunk.latex:
             existing.latex = chunk.latex
+        existing.chunk_type  = chunk.chunk_type
+        existing.is_optional = chunk.is_optional
         logger.debug("Chunk already exists, updated: %s / %s", chunk.concept_id, chunk.heading)
         return None
 
@@ -176,6 +178,8 @@ async def save_chunk(
         heading=chunk.heading,
         text=chunk.text,
         latex=chunk.latex,
+        chunk_type=chunk.chunk_type,
+        is_optional=chunk.is_optional,
         embedding=embedding,
     )
     db.add(db_chunk)
@@ -199,18 +203,26 @@ async def save_chunk(
 
 # ── Main entry point ──────────────────────────────────────────────────────────
 
-async def build_chunks(book_slug: str, mmd_path: Path, db: AsyncSession) -> None:
+async def build_chunks(book_slug: str, mmd_path: Path, db: AsyncSession, rebuild: bool = False) -> None:
     """
     Full chunk pipeline: parse → download images → embed → save to DB.
 
     Commits every 10 chunks so progress is preserved if the run is interrupted.
-    Safe to re-run: existing chunks are skipped (idempotent).
+    Safe to re-run: when rebuild=False, existing chunks are updated (idempotent).
+    When rebuild=True, all existing chunks for the book are deleted first (clean rebuild).
 
     Args:
         book_slug: e.g. "prealgebra".
         mmd_path:  Path to the book.mmd file.
         db:        Open async SQLAlchemy session (caller manages lifetime).
+        rebuild:   If True, delete all existing chunks for the book before re-inserting.
     """
+    if rebuild:
+        from sqlalchemy import delete as _sa_delete
+        await db.execute(_sa_delete(ConceptChunk).where(ConceptChunk.book_slug == book_slug))
+        await db.commit()
+        logger.info("[rebuild] Cleared all existing chunks for book_slug=%s", book_slug)
+
     chunks = parse_book_mmd(mmd_path, book_slug)
     logger.info("Parsed %d chunks from %s", len(chunks), mmd_path)
 

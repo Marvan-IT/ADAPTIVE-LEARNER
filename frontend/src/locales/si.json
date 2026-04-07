@@ -160,6 +160,7 @@
   "chunk.progress": "කොටස {{current}} / {{total}}",
   "chunk.loadingNext": "ඊළඟ කොටස පූරණය වෙමින්…",
   "learning.nextSection": "ඊළඟ කොටස",
+  "learning.answerQuestions": "ප්‍රශ්නවලට පිළිතුරු දෙන්න",
   "learning.chooseSubsection": "උපඅංශයක් තෝරන්න",
   "learning.startSubsection": "ආරම්භ කරන්න",
   "learning.startLearning": "ඉගෙනීම ආරම්භ කරන්න",
@@ -235,5 +236,8 @@
     "start": "විභාගය දෙන්න",
     "locked": "පළමුව සියලු කොටස් සම්පූර්ණ කරන්න",
     "estimatedTime": "~{{seconds}}s"
+  },
+  "chunks": {
+    "exerciseSection": "පුහුණු ප්‍රශ්න"
   }
 }

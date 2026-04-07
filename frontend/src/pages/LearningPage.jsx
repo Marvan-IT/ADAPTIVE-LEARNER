@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useParams, useNavigate } from "react-router-dom";
 import { useSession } from "../context/SessionContext";
@@ -310,6 +310,10 @@ export default function LearningPage() {
         && !(c.chunk_id in (chunkProgress || {}))
     );
 
+    const firstExerciseIdx = visibleChunks.findIndex(
+      (c) => c.chunk_type === "exercise" && !c.is_optional
+    );
+
     const modeBadgeLabel = (mode) => t(`learning.mode.${mode}`, mode);
 
     return (
@@ -423,8 +427,22 @@ export default function LearningPage() {
                   : `${idx + 1}`;
 
             return (
+              <Fragment key={chunk.chunk_id}>
+                {idx === firstExerciseIdx && firstExerciseIdx > 0 && (
+                  <div style={{
+                    padding: "10px 4px 6px",
+                    marginTop: "2px",
+                    fontSize: "11px",
+                    fontWeight: 600,
+                    letterSpacing: "0.08em",
+                    textTransform: "uppercase",
+                    color: "var(--color-text-muted)",
+                    borderTop: "1px solid var(--color-border, rgba(128,128,128,0.2))",
+                  }}>
+                    {t("chunks.exerciseSection", "Exercise Practice")}
+                  </div>
+                )}
               <div
-                key={chunk.chunk_id}
                 style={{
                   borderRadius: "14px",
                   border: isExpanded
@@ -739,6 +757,7 @@ export default function LearningPage() {
                   </div>
                 )}
               </div>
+              </Fragment>
             );
           })}
         </div>

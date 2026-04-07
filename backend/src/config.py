@@ -67,7 +67,7 @@ CHUNK_MAX_TOKENS_FAST       = 3000   # ~2 content+MCQ pairs
 CHUNK_MAX_TOKENS_RECOVERY   = 800    # single recovery card+MCQ
 
 # ── Socratic exam pass threshold for chunk-based architecture ─────────────────
-CHUNK_EXAM_PASS_RATE = 0.70          # 70% — student needs ≥70% to master section
+CHUNK_EXAM_PASS_RATE = 0.50   # pass if student gets at least half right
 CHUNK_EXAM_QUESTIONS_PER_CHUNK = 2  # Open-ended questions generated per PM sub-section for exam
 
 # ── Socratic exam LLM token budgets ───────────────────────────────────────────
@@ -136,6 +136,7 @@ BOILERPLATE_PATTERNS = [
 # ── Exercise / non-instructional markers ───────────────────────────────
 EXERCISE_SECTION_MARKERS = [
     "Practice Makes Perfect",
+    "Mixed Practice",
     "Everyday Math",
     "Writing Exercises",
     "Self Check",
@@ -159,8 +160,6 @@ MATHPIX_RATE_LIMIT = 0.5   # Seconds between Mathpix API requests
 
 # ── Vision annotation settings ────────────────────────────────────────
 VISION_RATE_LIMIT: float = 0.5   # Seconds between GPT-4o Vision API requests
-# Warn when latex_expressions JSON string exceeds this byte threshold in ChromaDB metadata
-LATEX_METADATA_SIZE_WARN_THRESHOLD: int = 8192
 
 # ── Book-slug to book-code mapping ─────────────────────────────────────
 BOOK_CODE_MAP = {

@@ -190,25 +190,6 @@ class CardsResponse(BaseModel):
     cache_version: int = 0                    # Internal generation version for staleness detection
 
 
-class NextSectionCardsRequest(BaseModel):
-    """Live signals from the current session — used for real-time mode blending."""
-    card_index: int = 0
-    time_on_card_sec: float = 0.0
-    wrong_attempts: int = 0
-    hints_used: int = 0
-    idle_triggers: int = 0
-
-
-class NextSectionCardsResponse(BaseModel):
-    session_id: UUID
-    cards: list[LessonCard]
-    has_more_concepts: bool
-    concepts_total: int
-    concepts_covered_count: int
-    current_mode: str    # "SLOW" | "NORMAL" | "FAST"
-    learning_profile_summary: dict | None = None
-
-
 class UpdateSessionInterestsRequest(BaseModel):
     interests: list[str] = Field(
         default_factory=list,
@@ -369,32 +350,6 @@ class SectionCompleteResponse(BaseModel):
     section_count: int
     avg_state_score: float
     state_distribution: dict
-
-
-# ── Per-Card Adaptive Generation Schemas ──────────────────────────────────────
-
-class NextCardRequest(BaseModel):
-    """Live signals from the card the student just completed — used to adapt the next card."""
-    card_index: int = Field(default=0, ge=0, description="0-based index of the card just completed")
-    time_on_card_sec: float = Field(default=0.0, ge=0.0, description="Seconds spent on the completed card")
-    wrong_attempts: int = Field(default=0, ge=0, description="Wrong MCQ attempts on the completed card")
-    hints_used: int = Field(default=0, ge=0, description="Hints used on the completed card")
-    idle_triggers: int = Field(default=0, ge=0, description="Idle assistant triggers on the completed card")
-    # Present when the request is for an exercise chunk (optional — defaults to None for teaching path)
-    chunk_id: str | None = Field(default=None, description="UUID of the exercise chunk being studied")
-    # Exercise failure context — present only when student answered an exercise MCQ wrong twice
-    failed_exercise_question: str | None = Field(default=None, max_length=500)
-    student_wrong_answer: str | None = Field(default=None, max_length=500)
-
-
-class NextCardResponse(BaseModel):
-    """Response from POST /sessions/{id}/next-card — single per-card adaptive generation."""
-    session_id: UUID
-    card: LessonCard | None = None       # None when has_more_concepts=False
-    has_more_concepts: bool
-    current_mode: str                    # "STRUGGLING" | "NORMAL" | "FAST"
-    concepts_covered_count: int
-    concepts_total: int
 
 
 # ── Chunk-Based Card Generation Schemas ───────────────────────────────────────

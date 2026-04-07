@@ -171,6 +171,7 @@
   "chunkQuestions.continuing": "جارٍ المتابعة...",
   "chunkQuestions.completing": "إكمال المفهوم...",
   "learning.nextSection": "القسم التالي",
+  "learning.answerQuestions": "أجب على الأسئلة",
   "learning.chooseSubsection": "اختر وحدة فرعية للبدء",
   "learning.startSubsection": "بدء",
   "learning.startLearning": "ابدأ التعلم",
@@ -235,5 +236,8 @@
     "start": "ابدأ الاختبار",
     "locked": "أكمل جميع الأقسام أولاً",
     "estimatedTime": "~{{seconds}} ثانية"
+  },
+  "chunks": {
+    "exerciseSection": "تمرين عملي"
   }
 }

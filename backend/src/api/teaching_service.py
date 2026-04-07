@@ -1082,31 +1082,6 @@ class TeachingService:
             "concepts_covered_count": result["concepts_covered_count"],
         }
 
-    # ── LEGACY STUB — generate_cards full body removed in Phase 3 ──
-    # The block below preserves the _CARDS_CACHE_VERSION reference so no
-    # accidental restoration attempts break compilation.
-    _CARDS_CACHE_VERSION_COMPAT = 23  # was: 23 — kept for legacy cache bust detection only
-    async def generate_next_section_cards(
-        self,
-        db: AsyncSession,
-        session: "TeachingSession",
-        student,
-        signals,  # NextSectionCardsRequest
-    ) -> dict:
-        """DEPRECATED — replaced by chunk-based per-chunk generation. Returns empty result."""
-        logger.warning(
-            "[generate_next_section_cards] deprecated — use chunk-based generation. session_id=%s",
-            session.id,
-        )
-        return {
-            "cards": [],
-            "has_more_concepts": False,
-            "concepts_total": 0,
-            "concepts_covered_count": 0,
-            "current_mode": "NORMAL",
-            "learning_profile_summary": None,
-        }
-
     async def generate_per_card(
         self,
         db: AsyncSession,
@@ -1557,17 +1532,35 @@ class TeachingService:
         _style_modifier = _STYLE_MODIFIERS.get(style, "")
         _persona_prefix = f"{_style_modifier}\n\n" if _style_modifier else ""
 
+        # Build vision-capable user message (base64 encode local images for GPT-4o vision)
+        # Must happen BEFORE build_chunk_card_prompt so only confirmed-visible images are listed in the text prompt.
+        _book_slug_for_img = chunk.get("book_slug", "prealgebra")
+        _vision_parts = []
+        _visible_images = []  # only images successfully base64-encoded
+        for _img in (images or [])[:4]:  # Cap at 4 images per call
+            _data_url = _image_to_data_url(_img.get("image_url", ""), _book_slug_for_img)
+            if _data_url:
+                _vision_parts.append({
+                    "type": "image_url",
+                    "image_url": {"url": _data_url, "detail": "low"},
+                })
+                _visible_images.append(_img)
+
         user_prompt = build_chunk_card_prompt(
             chunk=chunk,
-            images=images,
+            images=_visible_images,
             student_mode=_generate_as,
             style=style,
             interests=interests,
             language=language,
         )
 
-        # Detect exercise/practice chunks (uses module-level EXERCISE_HEADING_PATTERNS)
-        is_exercise_chunk = any(p in (chunk.get("heading") or "").lower() for p in EXERCISE_HEADING_PATTERNS)
+        # Detect exercise/practice chunks — prefer stored DB chunk_type, fall back to heading pattern
+        _stored_type = chunk.get("chunk_type", "")
+        is_exercise_chunk = (
+            _stored_type == "exercise"
+            or any(p in (chunk.get("heading") or "").lower() for p in EXERCISE_HEADING_PATTERNS)
+        )
 
         if is_exercise_chunk:
             # Fetch preceding teaching subsections for this concept
@@ -1697,17 +1690,6 @@ class TeachingService:
                 except json.JSONDecodeError:
                     pass
             return []
-
-        # Build vision-capable user message (base64 encode local images for GPT-4o vision)
-        _book_slug_for_img = chunk.get("book_slug", "prealgebra")
-        _vision_parts = []
-        for _img in (images or [])[:4]:  # Cap at 4 images per call
-            _data_url = _image_to_data_url(_img.get("image_url", ""), _book_slug_for_img)
-            if _data_url:
-                _vision_parts.append({
-                    "type": "image_url",
-                    "image_url": {"url": _data_url, "detail": "low"},
-                })
 
         if _vision_parts:
             _user_content: list | str = [{"type": "text", "text": user_prompt}] + _vision_parts

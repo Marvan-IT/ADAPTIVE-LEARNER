@@ -160,6 +160,7 @@
   "chunk.progress": "第 {{current}} / {{total}} 节",
   "chunk.loadingNext": "正在加载下一节…",
   "learning.nextSection": "下一节",
+  "learning.answerQuestions": "回答问题",
   "learning.chooseSubsection": "选择子章节",
   "learning.startSubsection": "开始",
   "learning.startLearning": "开始学习",
@@ -235,5 +236,8 @@
     "start": "参加考试",
     "locked": "请先完成所有章节",
     "estimatedTime": "约 {{seconds}} 秒"
+  },
+  "chunks": {
+    "exerciseSection": "练习题"
   }
 }

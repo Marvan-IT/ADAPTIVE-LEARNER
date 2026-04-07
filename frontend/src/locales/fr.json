@@ -160,6 +160,7 @@
   "chunk.progress": "Section {{current}} sur {{total}}",
   "chunk.loadingNext": "Chargement de la section suivante…",
   "learning.nextSection": "Section suivante",
+  "learning.answerQuestions": "Répondre aux questions",
   "learning.chooseSubsection": "Choisir une sous-section",
   "learning.startSubsection": "Démarrer",
   "learning.startLearning": "Commencer à apprendre",
@@ -235,5 +236,8 @@
     "start": "Passer l'examen",
     "locked": "Terminer toutes les sections d'abord",
     "estimatedTime": "~{{seconds}}s"
+  },
+  "chunks": {
+    "exerciseSection": "Exercices Pratiques"
   }
 }

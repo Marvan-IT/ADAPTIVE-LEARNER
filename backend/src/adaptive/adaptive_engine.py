@@ -30,9 +30,6 @@ except ImportError:
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from pathlib import Path as _SanitizePath
-import sys as _sanitize_sys
-_sanitize_sys.path.insert(0, str(_SanitizePath(__file__).resolve().parent.parent))
 from api.teaching_service import _sanitize_math as _sanitize_math_fn
 
 from openai import AsyncOpenAI

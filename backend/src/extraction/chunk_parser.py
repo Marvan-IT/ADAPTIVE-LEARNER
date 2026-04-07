@@ -68,6 +68,7 @@ _NOISE_HEADING_PATTERNS: list[re.Pattern] = [
     re.compile(r"^In the following exercises\b", re.IGNORECASE),
     re.compile(r"^Access for free\b", re.IGNORECASE),
     re.compile(r"^\([a-z0-9]\)\s+Solution\b", re.IGNORECASE),  # "(a) Solution", "(r) Solution"
+    re.compile(r"^\(\s*[A-Z]\s*\)?\s+Solution\b"),             # "( J Solution", "(A) Solution" — Mathpix OCR artifact ⊙
     # Headings that are just a single word with no spaces (usually CAPS markers)
     re.compile(r"^[A-Z]{2,}$"),
     # Numbered items that are headings by mistake (e.g. "207. Seventy-five more than...")
@@ -79,6 +80,111 @@ _NOISE_HEADING_PATTERNS: list[re.Pattern] = [
 def _is_noise_heading(heading_text: str) -> bool:
     """Return True if this heading is a noise marker, not a pedagogical subsection."""
     return any(p.match(heading_text) for p in _NOISE_HEADING_PATTERNS)
+
+
+def _normalize_heading(heading: str) -> str:
+    """
+    Strip Unicode symbol prefixes, LaTeX \\section*{} wrappers, and HTML tags
+    that Mathpix sometimes emits before the meaningful heading text.
+
+    Examples:
+      "□ <br> \\section*{SECTION 10.3 EXERCISES}" → "SECTION 10.3 EXERCISES"
+      "© Practice Makes Perfect"                  → "Practice Makes Perfect"
+      "SECTION 1.1 Exercises"                     → "SECTION 1.1 Exercises"
+    """
+    h = heading
+    # Unwrap \\section*{...} LaTeX
+    m = re.search(r"\\section\*\{(.+?)\}", h)
+    if m:
+        h = m.group(1)
+    # Remove <br> tags
+    h = re.sub(r"<br\s*/?>", " ", h, flags=re.IGNORECASE)
+    # Strip leading non-alphanumeric/non-paren characters (Unicode symbols, dashes, bullets)
+    h = re.sub(r"^[^\w(]+", "", h)
+    # Collapse whitespace
+    h = re.sub(r"\s+", " ", h).strip()
+    return h
+
+
+# Patterns that mark start of the exercise zone for a section.
+# Once triggered, all subsequent meaningful ## headings within this section
+# are classified as exercise chunks.
+_EXERCISE_ZONE_PATTERN = re.compile(
+    r"^(?:section\s+\d+\.\d+"      # SECTION 1.1 [EXERCISES]
+    r"|review exercises?"           # Review Exercises
+    r"|chapter\s+review"            # Chapter Review
+    r"|practice\s+test"             # Practice Test
+    r"|chapter\s+test"              # Chapter Test
+    r")",
+    re.IGNORECASE,
+)
+
+# Headings classified as exercise type (within exercise zone OR standalone)
+_EXERCISE_HEADING_PATTERN = re.compile(
+    r"^(?:practice makes perfect?"  # includes typo "Practice Makes Pefect"
+    r"|mixed practice"
+    r"|everyday math"
+    r"|writing exercises?"
+    r")",
+    re.IGNORECASE,
+)
+
+# Info/objective panels — always learning_objective regardless of text length
+_INFO_HEADING_PATTERN = re.compile(
+    r"^(?:learning objectives?"
+    r"|section objectives?"
+    r"|chapter objectives?"
+    r"|section outcomes?"
+    r"|learning outcomes?"
+    r"|key terms?"
+    r"|key concepts?"
+    r"|summary"
+    r"|in this section,?\s+you will"   # college_algebra: "In this section, you will:"
+    r"|by the end of this"             # common variant across books
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _normalize_mmd_format(mmd_text: str) -> str:
+    """
+    Convert LaTeX-style headings to markdown-style headings for uniform parsing.
+
+    Books like elementary_algebra, intermediate_algebra, college_algebra, and algebra_1
+    use LaTeX heading syntax produced by Mathpix:
+      \\subsection*{1.1 Title}     →  ### 1.1 Title   (section boundary, X.Y pattern)
+      \\section*{Subsection Name}  →  ## Subsection Name   (pedagogical subsection)
+
+    Markdown books (prealgebra) already use ### and ## — transformation is a no-op.
+    """
+    # \subsection*{1.1 Title} → ### 1.1 Title
+    text = re.sub(r"^\\subsection\*\{(.+?)\}", r"### \1", mmd_text, flags=re.MULTILINE)
+    # \section*{Title} → ## Title
+    text = re.sub(r"^\\section\*\{(.+?)\}", r"## \1", text, flags=re.MULTILINE)
+    return text
+
+
+# Detects section titles that ARE themselves exercise sections (e.g. college_algebra
+# "1.1 SECTION EXERCISES") — in these cases the entire body is exercise content.
+_SECTION_IS_EXERCISE_PATTERN = re.compile(
+    r"section\s+exercises?|chapter\s+review|review\s+exercises?|practice\s+test|chapter\s+test",
+    re.IGNORECASE,
+)
+
+
+def _classify_chunk(raw_heading: str, in_exercises_zone: bool) -> tuple[str, bool]:
+    """Return (chunk_type, is_optional) for a chunk heading.
+
+    chunk_type values: 'learning_objective' | 'teaching' | 'exercise'
+    is_optional: True only for 'Writing Exercises' chunks
+    """
+    h = _normalize_heading(raw_heading)
+    if _INFO_HEADING_PATTERN.match(h):
+        return "learning_objective", False
+    if in_exercises_zone or _EXERCISE_HEADING_PATTERN.match(h):
+        is_opt = bool(re.match(r"^writing exercises?", h, re.IGNORECASE))
+        return "exercise", is_opt
+    return "teaching", False
 
 
 @dataclass
@@ -93,6 +199,8 @@ class ParsedChunk:
     text: str              # full markdown text including image tags and LaTeX
     latex: list[str] = field(default_factory=list)
     image_urls: list[str] = field(default_factory=list)
+    chunk_type:  str  = "teaching"
+    is_optional: bool = False
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
@@ -143,6 +251,9 @@ def parse_book_mmd(mmd_path: Path, book_slug: str) -> list[ParsedChunk]:
         After dedup the count should be ~300-600 for prealgebra (not 900-1500).
     """
     mmd_text = mmd_path.read_text(encoding="utf-8")
+    # Normalize LaTeX heading syntax (\subsection*{} / \section*{}) to markdown (### / ##)
+    # This is a no-op for prealgebra (already markdown); required for all other books.
+    mmd_text = _normalize_mmd_format(mmd_text)
     logger.info("Loaded %s (%d chars)", mmd_path, len(mmd_text))
 
     # ── Step 1: Find all X.Y section headings ────────────────────────────────
@@ -208,15 +319,20 @@ def parse_book_mmd(mmd_path: Path, book_slug: str) -> list[ParsedChunk]:
                 continue
             meaningful_subs.append((hm.start(), hm.end(), heading_text))
 
-        # Tag headings inside the exercises zone with "(Exercises)" suffix so:
-        # (a) dedup keys are unique (prevents teaching/exercise heading collision)
-        # (b) chunk_type classification works correctly in the API layer
-        in_exercises_zone = False
+        # Tag headings inside the exercises zone with "(Exercises)" suffix.
+        # Zone trigger headings (e.g. "SECTION 1.1 EXERCISES", "Chapter Review") set
+        # the flag but are NOT added to tagged_subs — they create no chunk because
+        # they contain zero instructional content (pure organizational dividers).
+        #
+        # Some books (e.g. college_algebra) place exercises as a separate top-level
+        # section titled "1.1 SECTION EXERCISES" — seed the zone from the section title.
+        in_exercises_zone = bool(_SECTION_IS_EXERCISE_PATTERN.search(sec["section_label"]))
         tagged_subs: list[tuple[int, int, str]] = []
         for (sh_start, sh_end, heading_text) in meaningful_subs:
-            if re.match(r"^SECTION\s+\d+\.\d+", heading_text, re.IGNORECASE):
+            _norm = _normalize_heading(heading_text)
+            if _EXERCISE_ZONE_PATTERN.match(_norm):
+                # Set zone flag; do NOT create a chunk for this organizational marker
                 in_exercises_zone = True
-                tagged_subs.append((sh_start, sh_end, heading_text))  # keep as-is
             elif in_exercises_zone:
                 tagged_subs.append((sh_start, sh_end, heading_text + " (Exercises)"))
             else:
@@ -227,6 +343,7 @@ def parse_book_mmd(mmd_path: Path, book_slug: str) -> list[ParsedChunk]:
             # Case 3: no meaningful sub-headings → whole body is one chunk
             text = body.strip()
             if text:
+                _ctype, _opt = _classify_chunk(sec["section_label"], in_exercises_zone)
                 raw_chunks.append(ParsedChunk(
                     book_slug=book_slug,
                     concept_id=sec["concept_id"],
@@ -236,6 +353,8 @@ def parse_book_mmd(mmd_path: Path, book_slug: str) -> list[ParsedChunk]:
                     text=text,
                     latex=_extract_latex(text),
                     image_urls=_extract_image_urls(text),
+                    chunk_type=_ctype,
+                    is_optional=_opt,
                 ))
                 global_order += 1
             continue
@@ -244,6 +363,7 @@ def parse_book_mmd(mmd_path: Path, book_slug: str) -> list[ParsedChunk]:
         first_sub_start = meaningful_subs[0][0]
         orphan_text = body[:first_sub_start].strip()
         if orphan_text:
+            _ctype, _opt = _classify_chunk(sec["section_label"], in_exercises_zone)
             raw_chunks.append(ParsedChunk(
                 book_slug=book_slug,
                 concept_id=sec["concept_id"],
@@ -253,6 +373,8 @@ def parse_book_mmd(mmd_path: Path, book_slug: str) -> list[ParsedChunk]:
                 text=orphan_text,
                 latex=_extract_latex(orphan_text),
                 image_urls=_extract_image_urls(orphan_text),
+                chunk_type=_ctype,
+                is_optional=_opt,
             ))
             global_order += 1
 
@@ -265,6 +387,10 @@ def parse_book_mmd(mmd_path: Path, book_slug: str) -> list[ParsedChunk]:
             chunk_text = body[sh_start:content_end].strip()
             if not chunk_text:
                 continue
+            # Determine if this heading is in the exercise zone
+            # (exercise headings were tagged with " (Exercises)" in the loop above)
+            _in_zone = heading_text.endswith(" (Exercises)")
+            _ctype, _opt = _classify_chunk(heading_text, _in_zone)
             raw_chunks.append(ParsedChunk(
                 book_slug=book_slug,
                 concept_id=sec["concept_id"],
@@ -274,6 +400,8 @@ def parse_book_mmd(mmd_path: Path, book_slug: str) -> list[ParsedChunk]:
                 text=chunk_text,
                 latex=_extract_latex(chunk_text),
                 image_urls=_extract_image_urls(chunk_text),
+                chunk_type=_ctype,
+                is_optional=_opt,
             ))
             global_order += 1
 
@@ -290,6 +418,29 @@ def parse_book_mmd(mmd_path: Path, book_slug: str) -> list[ParsedChunk]:
             seen[key] = chunk
 
     deduped = list(seen.values())
+
+    # ── Step 3b: Drop section-title stub duplicates ───────────────────────────
+    # Some books (e.g. college_algebra) emit a chapter-review copy of each section
+    # with heading == section label (e.g. "1.1 Real Numbers: Algebra Essentials").
+    # These survive dedup because their heading differs from the real subsection chunks
+    # ("Learning Objectives", "Classifying a Real Number", etc.). When real subsection
+    # chunks exist for a concept, the section-title stub is redundant — drop it.
+    from collections import defaultdict as _defaultdict
+    _concept_headings: dict[str, set] = _defaultdict(set)
+    for chunk in deduped:
+        _concept_headings[chunk.concept_id].add(chunk.heading)
+
+    _pre_stub_count = len(deduped)
+    deduped = [
+        c for c in deduped
+        if not (
+            c.heading == c.section                          # heading is the section title
+            and len(_concept_headings[c.concept_id]) > 1   # other distinct headings exist
+        )
+    ]
+    _stub_removed = _pre_stub_count - len(deduped)
+    if _stub_removed:
+        logger.info("Removed %d section-title stub duplicates", _stub_removed)
 
     # ── Step 4: Re-sort by original reading order and re-number ──────────────
     # The winner of each dedup group retains its order_index from the body-copy

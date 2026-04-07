@@ -12,12 +12,11 @@ from extraction.domain_models import PipelineOutput
 
 def export_full_output(output: PipelineOutput, output_path: Path) -> None:
     """
-    Export the combined JSON with all four sections:
+    Export the combined JSON with all three sections:
     {
       "concept_blocks": [...],
       "dependency_edges": [...],
-      "validation_report": [...],
-      "mathpix_plan": [...]
+      "validation_report": [...]
     }
     """
     output_path = Path(output_path)
@@ -48,9 +47,6 @@ def export_individual_files(output: PipelineOutput, output_dir: Path) -> None:
 
     # Validation report
     _write_json(output_dir / "validation_report.json", data["validation_report"])
-
-    # Mathpix plan
-    _write_json(output_dir / "mathpix_plan.json", data["mathpix_plan"])
 
     print(f"Exported individual files to {output_dir}")
 

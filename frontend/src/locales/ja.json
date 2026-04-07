@@ -160,6 +160,7 @@
   "chunk.progress": "セクション {{current}} / {{total}}",
   "chunk.loadingNext": "次のセクションを読み込み中…",
   "learning.nextSection": "次のセクション",
+  "learning.answerQuestions": "問題に答える",
   "learning.chooseSubsection": "セクションを選択",
   "learning.startSubsection": "開始",
   "learning.startLearning": "学習を始める",
@@ -235,5 +236,8 @@
     "start": "試験を受ける",
     "locked": "まずすべてのセクションを完了してください",
     "estimatedTime": "約{{seconds}}秒"
+  },
+  "chunks": {
+    "exerciseSection": "練習問題"
   }
 }

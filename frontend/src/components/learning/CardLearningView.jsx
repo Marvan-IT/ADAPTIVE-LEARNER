@@ -145,6 +145,7 @@ export default function CardLearningView({ remediationMode = false }) {
     currentChunkMode,
     currentChunkId,
     modeJustChanged,
+    chunkQuestions,
     dispatch,
   } = useSession();
 
@@ -477,6 +478,12 @@ export default function CardLearningView({ remediationMode = false }) {
   }, [currentCardIndex, idleTriggerCount, goToNextCard]);
 
   const handleNextChunk = useCallback(async () => {
+    // If exam questions were generated for this teaching chunk, show Q&A first
+    if (chunkQuestions?.length > 0) {
+      dispatch({ type: "SHOW_CHUNK_QUESTIONS" });
+      return;
+    }
+    // No questions (exercise/info chunk) — complete and advance directly
     const chunkId = cards[currentCardIndex]?.chunk_id;
     if (chunkId && completeChunkAction) {
       await completeChunkAction(chunkId, chunkCorrect, chunkTotal, currentChunkMode || "NORMAL");
@@ -484,7 +491,8 @@ export default function CardLearningView({ remediationMode = false }) {
       setChunkTotal(0);
     }
     goToNextChunk();
-  }, [cards, currentCardIndex, chunkCorrect, chunkTotal, currentChunkMode, completeChunkAction, goToNextChunk]);
+  }, [cards, currentCardIndex, chunkCorrect, chunkTotal, currentChunkMode,
+      completeChunkAction, goToNextChunk, chunkQuestions, dispatch]);
 
   // Handle finish button — in remediation mode, go to recheck instead of finishCards
   const handleFinish = useCallback(() => {
@@ -812,32 +820,10 @@ export default function CardLearningView({ remediationMode = false }) {
           onNextChunk={handleNextChunk}
           onFinish={handleFinish}
           remediationMode={remediationMode}
+          chunkQuestions={chunkQuestions}
           t={t}
         />
 
-        {/* Complete button — shown on last card when chunk has a currentChunkId */}
-        {currentCardIndex === cards.length - 1 && currentChunkId && completeChunkItem && (
-          <button
-            onClick={() => completeChunkItem(currentChunkId)}
-            style={{
-              width: "100%",
-              marginTop: "0.75rem",
-              padding: "0.75rem",
-              borderRadius: "12px",
-              border: "none",
-              background: "var(--color-success)",
-              color: "#fff",
-              fontWeight: 700,
-              fontSize: "0.95rem",
-              cursor: "pointer",
-              fontFamily: "inherit",
-              boxShadow: "0 4px 12px rgba(34,197,94,0.25)",
-              transition: "opacity 0.15s",
-            }}
-          >
-            ✓ {t("learning.completeChunk", "Complete Section")}
-          </button>
-        )}
       </div>
 
       {/* ─── Assistant Panel — slides in after first answer ─── */}
@@ -930,7 +916,7 @@ function RemediationBanner() {
 function NavButtons({
   currentCardIndex, maxReachedIndex, isLastCard, isLastCardOfNonFinalChunk,
   canProceed, loading, nextChunkInFlight, nextChunkCards,
-  onPrev, onNext, onNextChunk, onFinish, remediationMode, t,
+  onPrev, onNext, onNextChunk, onFinish, remediationMode, chunkQuestions, t,
 }) {
   // Determine which primary action to show on the right side
   const showNextSection = isLastCardOfNonFinalChunk && canProceed;
@@ -980,9 +966,9 @@ function NavButtons({
               {t("chunk.loadingNext")}
             </>
           ) : (
-            <>
-              {t("learning.nextSection")} <ChevronRight size={18} />
-            </>
+            chunkQuestions?.length > 0
+              ? <><Flag size={18} style={{ marginRight: "0.3rem" }} />{t("learning.answerQuestions", "Answer Questions")}</>
+              : <>{t("learning.nextSection")} <ChevronRight size={18} /></>
           )}
         </button>
       )}

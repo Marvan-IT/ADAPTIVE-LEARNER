@@ -55,9 +55,7 @@ from api.teaching_schemas import (
     RegenerateMCQRequest, RegenerateMCQResponse,
     SectionCompleteRequest, SectionCompleteResponse,
     UpdateSessionInterestsRequest,
-    NextSectionCardsRequest, NextSectionCardsResponse,
     CompleteCardRequest, CompleteCardResponse,
-    NextCardRequest, NextCardResponse,
     ChunkCardsRequest, ChunkCardsResponse,
     ChunkExamQuestion,
     ChunkEvaluateRequest,
@@ -123,8 +121,9 @@ def _get_chunk_type(heading: str, text: str = "") -> str:
     else:
         chunk_type = "teaching"
 
-    # Only promote info/title chunks that have real content — never re-classify exercise types
-    if chunk_type in ("section_review", "learning_objective") and len((text or "").strip()) > 200:
+    # section_review (bare section-title headings) with real content → reclassify as teaching
+    # learning_objective is NEVER reclassified — long LO blocks are still info cards
+    if chunk_type == "section_review" and len((text or "").strip()) > 200:
         return "teaching"
     return chunk_type
 
@@ -954,172 +953,6 @@ async def complete_cards(
     return result
 
 
-@router.post(
-    "/sessions/{session_id}/next-section-cards",
-    response_model=NextSectionCardsResponse,
-    summary="Generate cards for the next sub-section (rolling adaptive)",
-)
-@limiter.limit("30/minute")
-async def next_section_cards(
-    request: Request,
-    session_id: UUID,
-    req: NextSectionCardsRequest,
-    db: AsyncSession = Depends(get_db),
-):
-    """Generate cards for the next sub-section using live session signals (rolling adaptive).
-
-    Pops one section from the session's concepts_queue, generates cards with mode determined
-    by blended live signals + student history, appends to session cache, and returns the new cards
-    along with rolling progress metadata.
-
-    Returns 400 when no more sections are queued (caller should use complete-cards instead).
-    """
-    session = await db.get(TeachingSession, session_id)
-    if not session:
-        raise HTTPException(404, "Session not found")
-    if session.phase not in ("PRESENTING", "CARDS"):
-        raise HTTPException(400, f"Session not in card phase (phase={session.phase})")
-
-    student = await db.get(Student, session.student_id)
-    result = await teaching_svc.generate_next_section_cards(
-        db, session, student, signals=req
-    )
-    await db.commit()
-    return NextSectionCardsResponse(**result, session_id=session_id)
-
-
-@router.post(
-    "/sessions/{session_id}/next-card",
-    response_model=NextCardResponse,
-    summary="Generate the next card on demand (per-card adaptive generation)",
-)
-@limiter.limit("30/minute")
-async def get_next_adaptive_card(
-    request: Request,
-    session_id: UUID,
-    req: NextCardRequest,
-    db: AsyncSession = Depends(get_db),
-):
-    """Generate exactly one card for the next content piece in the session queue.
-
-    Uses live signals from the card just completed to determine presentation mode
-    (STRUGGLING / NORMAL / FAST) for the new card. Returns has_more_concepts=False
-    with card=null when all content pieces have been covered — the frontend should
-    then transition to the Socratic check phase.
-
-    Returns 409 when session.phase is not CARDS.
-    """
-    session = await db.get(TeachingSession, session_id)
-    if not session:
-        raise HTTPException(404, "Session not found")
-    if session.phase not in ("CARDS", "PRESENTING"):
-        raise HTTPException(
-            409,
-            f"Cannot generate next card: session is in {session.phase} phase (expected CARDS or PRESENTING)",
-        )
-
-    student = await db.get(Student, session.student_id)
-    if not student:
-        raise HTTPException(404, "Student not found")
-
-    # Exercise chunk branch — when chunk_id is provided and chunk is an exercise type
-    if req.chunk_id:
-        chunk = await chunk_ksvc.get_chunk(db, req.chunk_id)
-        if chunk and _get_chunk_type(chunk.get("heading", "")) == "exercise":
-            from adaptive.adaptive_engine import generate_exercise_recovery_card
-            from adaptive.prompt_builder import build_exercise_card_prompt
-            try:
-                if req.failed_exercise_question and req.wrong_attempts >= 2:
-                    # Recovery card branch
-                    card = await generate_exercise_recovery_card(
-                        failed_question=req.failed_exercise_question,
-                        wrong_answer=req.student_wrong_answer or "",
-                        chunk=chunk,
-                        language=student.preferred_language or "en",
-                        client=teaching_svc.openai,
-                    )
-                    await db.commit()
-                    logger.info(
-                        "[next-card] exercise recovery generated: session_id=%s chunk_id=%s",
-                        session_id, req.chunk_id,
-                    )
-                    return NextCardResponse(
-                        session_id=session.id,
-                        card=card,
-                        has_more_concepts=True,
-                        current_mode="NORMAL",
-                        concepts_covered_count=0,
-                        concepts_total=0,
-                    )
-                else:
-                    # Normal exercise card generation
-                    system_p, user_p = build_exercise_card_prompt(
-                        chunk=chunk,
-                        student_profile={
-                            "style": session.style or "default",
-                            "interests": student.interests or [],
-                            "language": student.preferred_language or "en",
-                        },
-                        language=student.preferred_language or "en",
-                    )
-                    from api.prompts import _extract_json_block
-                    import json as _json
-                    resp = await teaching_svc.openai.chat.completions.create(
-                        model=OPENAI_MODEL_MINI,
-                        messages=[
-                            {"role": "system", "content": system_p},
-                            {"role": "user",   "content": user_p},
-                        ],
-                        max_tokens=2000,
-                        temperature=0.5,
-                        timeout=30.0,
-                    )
-                    raw = (resp.choices[0].message.content or "").strip()
-                    raw = _extract_json_block(raw)
-                    cards_list = _json.loads(raw)
-                    if not isinstance(cards_list, list):
-                        cards_list = [cards_list]
-                    first_card = cards_list[0] if cards_list else {}
-                    first_card.setdefault("chunk_id", req.chunk_id)
-                    first_card.setdefault("is_recovery", False)
-                    await db.commit()
-                    logger.info(
-                        "[next-card] exercise card generated: session_id=%s chunk_id=%s card_count=%d",
-                        session_id, req.chunk_id, len(cards_list),
-                    )
-                    return NextCardResponse(
-                        session_id=session.id,
-                        card=LessonCard(**first_card),
-                        has_more_concepts=True,
-                        current_mode="NORMAL",
-                        concepts_covered_count=0,
-                        concepts_total=0,
-                    )
-            except Exception as exc:
-                logger.exception("[next-card] exercise generation failed: session_id=%s", session_id)
-                raise HTTPException(500, f"Exercise card generation failed: {exc}")
-
-    try:
-        result = await teaching_svc.generate_per_card(db, session, student, req)
-    except ValueError as exc:
-        logger.exception(
-            "[next-card] generation_failed: session_id=%s error=%s",
-            session_id, exc,
-        )
-        raise HTTPException(500, f"Card generation failed: {exc}")
-
-    await db.commit()
-
-    return NextCardResponse(
-        session_id=session.id,
-        card=LessonCard(**result["card"]) if result.get("card") else None,
-        has_more_concepts=result["has_more_concepts"],
-        current_mode=result["current_mode"],
-        concepts_covered_count=result["concepts_covered_count"],
-        concepts_total=result["concepts_total"],
-    )
-
-
 # ═══════════════════════════════════════════════════════════════════
 # CHUNK-BASED CARD GENERATION (Phase 3)
 # ═══════════════════════════════════════════════════════════════════
@@ -1163,16 +996,20 @@ async def generate_chunk_cards(
         # Generate 2-3 exam questions for teaching chunks
         chunk_heading = chunk.get("heading", "") if chunk else ""
         chunk_text = chunk.get("text", "") if chunk else ""
-        chunk_type = _get_chunk_type(chunk_heading, chunk_text)
+        chunk_type = chunk.get("chunk_type") or _get_chunk_type(chunk_heading, chunk_text)
         questions: list[ChunkExamQuestion] = []
         if chunk_type == "teaching" and chunk and chunk_text.strip():
             # Dynamic question count based on chunk text length
             _text_len = len(chunk_text.strip()) if chunk_text else 0
             _target_q = 1 if _text_len < 400 else (2 if _text_len < 1200 else 3)
             _q_system = (
-                "You are an exam question writer. Based on the content, generate exactly "
-                f"{_target_q} short open-ended question{'s' if _target_q > 1 else ''} "
-                "that test understanding (not just recall). "
+                "You are a friendly quiz writer for math students. "
+                "Based ONLY on the content provided, generate exactly "
+                f"{_target_q} simple, short question{'s' if _target_q > 1 else ''}. "
+                "Rules:\n"
+                "- Questions must be directly answerable from the content — no inference beyond what is written.\n"
+                "- Ask for a definition, a key fact, or what a term means — simple recall only.\n"
+                "- One sentence per question. No multi-part questions.\n"
                 "Return ONLY valid JSON with no markdown: "
                 '{"questions": [{"index": 0, "text": "..."}, ...]}'
             )
@@ -1491,10 +1328,13 @@ async def evaluate_chunk_answers(
         qa_pairs.append(f"Q{idx + 1}: {text}\nStudent answer: {answer or '(no answer)'}")
 
     grading_system = (
-        "You are a math tutor grading short answers. For each Q/A pair, determine if the student "
-        "demonstrates understanding of the concept (does not need to be word-perfect). "
+        "You are a supportive math tutor grading a quick recall check. "
+        "Mark an answer CORRECT if it shows the student remembers the key idea — "
+        "even if the wording is imprecise, incomplete, or informal. "
+        "Only mark WRONG if the answer is completely blank, unrelated, or factually opposite. "
+        "Give short, encouraging feedback (1 sentence). "
         "Return ONLY valid JSON: "
-        '{"results": [{"index": 0, "correct": true/false, "feedback": "brief 1-sentence feedback"}]}'
+        '{"results": [{"index": 0, "correct": true/false, "feedback": "..."}]}'
     )
     grading_user = "\n\n".join(qa_pairs)
 
@@ -1739,8 +1579,8 @@ async def list_chunks(
                 heading=c.heading or "",
                 has_images=c.id in chunks_with_images,
                 has_mcq=_heading_has_mcq(c.heading or ""),
-                chunk_type=_get_chunk_type(c.heading or ""),
-                is_optional=_heading_is_optional(c.heading or ""),
+                chunk_type=c.chunk_type or _get_chunk_type(c.heading or ""),
+                is_optional=c.is_optional,
                 completed=str(c.id) in progress,
                 score=progress.get(str(c.id), {}).get("score"),
                 mode_used=progress.get(str(c.id), {}).get("mode"),
@@ -2131,6 +1971,8 @@ async def retry_exam(
             heading=c["heading"],
             has_images=UUID(c["id"]) in chunks_with_images,
             has_mcq=_heading_has_mcq(c["heading"]),
+            chunk_type=c.get("chunk_type") or _get_chunk_type(c.get("heading", "")),
+            is_optional=c.get("is_optional", False),
         )
         for c in retry_raw
     ]

@@ -116,6 +116,8 @@ class ChunkKnowledgeService:
             "text": chunk.text,
             "latex": chunk.latex or [],
             "images": [],  # populated separately via get_chunk_images()
+            "chunk_type":  chunk.chunk_type,
+            "is_optional": chunk.is_optional,
         }
 
     # ── Graph methods (sync) ──────────────────────────────────────────────────

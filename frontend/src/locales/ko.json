@@ -160,6 +160,7 @@
   "chunk.progress": "섹션 {{current}} / {{total}}",
   "chunk.loadingNext": "다음 섹션 로드 중…",
   "learning.nextSection": "다음 섹션",
+  "learning.answerQuestions": "질문에 답하기",
   "learning.chooseSubsection": "섹션 선택",
   "learning.startSubsection": "시작",
   "learning.startLearning": "학습 시작",
@@ -235,5 +236,8 @@
     "start": "시험 보기",
     "locked": "먼저 모든 섹션을 완료하세요",
     "estimatedTime": "~{{seconds}}초"
+  },
+  "chunks": {
+    "exerciseSection": "연습 문제"
   }
 }

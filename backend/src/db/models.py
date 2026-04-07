@@ -271,6 +271,8 @@ class ConceptChunk(Base):
     heading     = Column(Text, nullable=False)
     text        = Column(Text, nullable=False)
     latex       = Column(ARRAY(Text), server_default="{}")
+    chunk_type  = Column(Text, nullable=False, server_default="teaching")
+    is_optional = Column(Boolean, nullable=False, server_default="false")
     embedding   = Column(Vector(1536), nullable=True)
     created_at  = Column(TIMESTAMPTZ(timezone=True), server_default=func.now())
 

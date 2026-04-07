@@ -160,6 +160,7 @@
   "chunk.progress": "பகுதி {{current}} / {{total}}",
   "chunk.loadingNext": "அடுத்த பகுதி ஏற்றுகிறது…",
   "learning.nextSection": "அடுத்த பகுதி",
+  "learning.answerQuestions": "கேள்விகளுக்கு பதிலளிக்கவும்",
   "learning.chooseSubsection": "ஒரு பிரிவை தேர்ந்தெடுக்கவும்",
   "learning.startSubsection": "தொடங்கு",
   "learning.startLearning": "கற்றல் தொடங்கு",
@@ -235,5 +236,8 @@
     "start": "தேர்வு எழுதவும்",
     "locked": "முதலில் அனைத்து பகுதிகளையும் முடிக்கவும்",
     "estimatedTime": "~{{seconds}}s"
+  },
+  "chunks": {
+    "exerciseSection": "பயிற்சி கேள்விகள்"
   }
 }

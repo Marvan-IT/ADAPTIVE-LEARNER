@@ -160,6 +160,7 @@
   "chunk.progress": "വിഭാഗം {{current}} / {{total}}",
   "chunk.loadingNext": "അടുത്ത വിഭാഗം ലോഡ് ചെയ്യുന്നു…",
   "learning.nextSection": "അടുത്ത വിഭാഗം",
+  "learning.answerQuestions": "ചോദ്യങ്ങൾക്ക് ഉത്തരം നൽകുക",
   "learning.chooseSubsection": "ഒരു ഉപവിഭാഗം തിരഞ്ഞെടുക്കുക",
   "learning.startSubsection": "ആരംഭിക്കുക",
   "learning.startLearning": "പഠനം ആരംഭിക്കുക",
@@ -235,5 +236,8 @@
     "start": "പരീക്ഷ എഴുതുക",
     "locked": "ആദ്യം എല്ലാ വിഭാഗങ്ങളും പൂർത്തിയാക്കൂ",
     "estimatedTime": "~{{seconds}}s"
+  },
+  "chunks": {
+    "exerciseSection": "പ്രാക്ടീസ് ചോദ്യങ്ങൾ"
   }
 }

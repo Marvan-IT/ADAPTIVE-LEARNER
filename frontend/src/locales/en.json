@@ -172,6 +172,7 @@
   "chunkQuestions.continuing": "Continuing...",
   "chunkQuestions.completing": "Completing concept...",
   "learning.nextSection": "Next Section",
+  "learning.answerQuestions": "Answer Questions",
   "learning.chooseSubsection": "Choose a subsection to start",
   "learning.startSubsection": "Start",
   "learning.startLearning": "Start Learning",
@@ -236,5 +237,8 @@
     "start": "Take Exam",
     "locked": "Complete all sections first",
     "estimatedTime": "~{{seconds}}s"
+  },
+  "chunks": {
+    "exerciseSection": "Exercise Practice"
   }
 }

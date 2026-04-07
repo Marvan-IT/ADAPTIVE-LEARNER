@@ -41,12 +41,6 @@ export const startSession = (studentId, conceptId, style = "default", lessonInte
     book_slug: getBookSlugFromConceptId(conceptId),
   });
 
-export const getPresentation = (sessionId) =>
-  api.post(`/api/v2/sessions/${sessionId}/present`, {}, { timeout: LLM_TIMEOUT });
-
-export const beginCheck = (sessionId) =>
-  api.post(`/api/v2/sessions/${sessionId}/check`, {}, { timeout: LLM_TIMEOUT });
-
 export const sendResponse = (sessionId, message, engagementSignal = null) =>
   api.post(
     `/api/v2/sessions/${sessionId}/respond`,
@@ -54,22 +48,11 @@ export const sendResponse = (sessionId, message, engagementSignal = null) =>
     { timeout: LLM_TIMEOUT }
   );
 
-export const completeSection = (sessionId, conceptId, stateScore = 2.0) =>
-  api.post(`/api/v2/sessions/${sessionId}/section-complete`, {
-    concept_id: conceptId,
-    state_score: stateScore,
-  });
-
 export const switchStyle = (sessionId, style) =>
   api.put(`/api/v2/sessions/${sessionId}/style`, { style }, { timeout: LLM_TIMEOUT });
 
 export const getSession = (sessionId) =>
   api.get(`/api/v2/sessions/${sessionId}`);
-
-export const resumeSession = (studentId, conceptId, bookSlug) =>
-  api.get(`/api/v2/sessions/resume`, {
-    params: { student_id: studentId, concept_id: conceptId, book_slug: bookSlug },
-  });
 
 export const assistStudent = (sessionId, cardIndex, message, trigger = "user") =>
   api.post(`/api/v2/sessions/${sessionId}/assist`, {
@@ -154,22 +137,3 @@ export const completeChunkItem = (sessionId, chunkId) =>
 export const evaluateChunkAnswers = (sessionId, chunkId, data) =>
   api.post(`/api/v2/sessions/${sessionId}/chunks/${chunkId}/evaluate`, data, { timeout: 60000 });
 
-export const startExam = (sessionId, conceptId) =>
-  api.post(
-    `/api/v2/sessions/${sessionId}/exam/start`,
-    { concept_id: conceptId },
-    { timeout: 120_000 }
-  );
-
-export const submitExam = (sessionId, answers) =>
-  api.post(
-    `/api/v2/sessions/${sessionId}/exam/submit`,
-    { answers },
-    { timeout: 120_000 }
-  );
-
-export const retryExam = (sessionId, retryType, failedChunkIds = []) =>
-  api.post(
-    `/api/v2/sessions/${sessionId}/exam/retry`,
-    { retry_type: retryType, failed_chunk_ids: failedChunkIds }
-  );

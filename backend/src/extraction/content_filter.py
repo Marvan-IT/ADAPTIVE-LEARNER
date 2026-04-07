@@ -12,7 +12,6 @@ Removes:
 """
 
 import re
-from typing import Optional
 
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))

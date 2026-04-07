@@ -160,6 +160,7 @@
   "chunk.progress": "अनुभाग {{current}} / {{total}}",
   "chunk.loadingNext": "अगला अनुभाग लोड हो रहा है…",
   "learning.nextSection": "अगला अनुभाग",
+  "learning.answerQuestions": "सवालों का जवाब दें",
   "learning.chooseSubsection": "एक उपखंड चुनें",
   "learning.startSubsection": "शुरू करें",
   "learning.startLearning": "सीखना शुरू करें",
@@ -235,5 +236,8 @@
     "start": "परीक्षा दें",
     "locked": "पहले सभी अनुभाग पूरे करें",
     "estimatedTime": "~{{seconds}}s"
+  },
+  "chunks": {
+    "exerciseSection": "अभ्यास प्रश्न"
   }
 }
