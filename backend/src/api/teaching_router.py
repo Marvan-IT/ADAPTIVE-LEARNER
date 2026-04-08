@@ -22,10 +22,6 @@ import json
 from config import (
     CARD_HISTORY_DEFAULT_LIMIT,
     CARD_HISTORY_MAX_LIMIT,
-    XP_MASTERY,
-    XP_MASTERY_BONUS,
-    XP_MASTERY_BONUS_THRESHOLD,
-    XP_CONSOLATION,
     DEFAULT_BOOK_SLUG,
     CHUNK_EXAM_PASS_RATE,
     OPENAI_MODEL_MINI,
@@ -33,13 +29,12 @@ from config import (
 from adaptive.adaptive_engine import build_blended_analytics, load_student_history
 from adaptive.schemas import CardBehaviorSignals
 from db.connection import get_db
-from db.models import Student, TeachingSession, ConversationMessage, StudentMastery, SpacedReview, CardInteraction
+from db.models import Student, TeachingSession, StudentMastery, SpacedReview, CardInteraction
 from db.models import ConceptChunk, ChunkImage
 from api.teaching_schemas import (
     CreateStudentRequest, StudentResponse,
     StartSessionRequest, SessionResponse,
     PresentationResponse,
-    StudentResponseRequest,
     SwitchStyleRequest,
     SessionHistoryResponse, MessageResponse,
     CardsResponse, LessonCard,
