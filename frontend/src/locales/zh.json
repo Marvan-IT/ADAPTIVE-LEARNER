@@ -179,7 +179,7 @@
   "subsectionNav.modeChange.fast": "太棒了！切换到快速模式",
   "subsectionNav.lockedSubsection": "请先完成上一节",
   "chunkQuestions.title": "知识检查",
-  "chunkQuestions.instruction": "用你自己的话回答——不需要完全精确。",
+  "chunkQuestions.instruction": "简短回答 — 简洁直接。",
   "chunkQuestions.placeholder": "在这里输入你的答案...",
   "chunkQuestions.submit": "提交答案",
   "chunkQuestions.passed": "通过",

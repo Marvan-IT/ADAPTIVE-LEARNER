@@ -68,11 +68,6 @@ CHUNK_MAX_TOKENS_RECOVERY   = 800    # single recovery card+MCQ
 
 # ── Socratic exam pass threshold for chunk-based architecture ─────────────────
 CHUNK_EXAM_PASS_RATE = 0.50   # pass if student gets at least half right
-CHUNK_EXAM_QUESTIONS_PER_CHUNK = 2  # Open-ended questions generated per PM sub-section for exam
-
-# ── Socratic exam LLM token budgets ───────────────────────────────────────────
-CHUNK_MAX_TOKENS_EXAM_Q    = 150    # Per question generation: {"question": "..."}
-CHUNK_MAX_TOKENS_EXAM_EVAL = 100    # Per answer evaluation: {"correct": bool, "feedback": "..."}
 
 # ── Card generation token budgets (profile-adaptive) ──────────────────────────
 # Budget scales with section count × per-section multiplier, clamped to floor/ceiling.

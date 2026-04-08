@@ -160,7 +160,7 @@
   "chunk.progress": "القسم {{current}} من {{total}}",
   "chunk.loadingNext": "تحميل القسم التالي…",
   "chunkQuestions.title": "فحص المعرفة",
-  "chunkQuestions.instruction": "أجب بكلماتك الخاصة — لا حاجة للدقة التامة.",
+  "chunkQuestions.instruction": "أجب باختصار — قصير ومباشر.",
   "chunkQuestions.placeholder": "اكتب إجابتك هنا...",
   "chunkQuestions.submit": "إرسال الإجابات",
   "chunkQuestions.passed": "اجتزت",

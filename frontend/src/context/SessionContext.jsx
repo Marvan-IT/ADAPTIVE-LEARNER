@@ -4,11 +4,7 @@ import {
   startSession,
   assistStudent,
   completeCards,
-  sendResponse,
-  completeCardAndGetNext,
   recordCardInteraction,
-  loadRemediationCards as loadRemediationCardsAPI,
-  beginRecheck as beginRecheckAPI,
   generateChunkCards,
   generateChunkRecoveryCard,
   getChunkList,
@@ -38,9 +34,6 @@ const initialState = {
   // AI assistant
   assistMessages: [],
   assistLoading: false,
-  // Socratic chat (mastery assessment)
-  messages: [],
-  checkLoading: false,
   // Completion
   score: null,
   mastered: null,
@@ -54,11 +47,6 @@ const initialState = {
   // Adaptive transparency
   learningProfileSummary: null,
   adaptationApplied: null,
-  // Remediation / re-check flow
-  socraticAttempt: 0,
-  remediationNeeded: false,
-  checkScore: null,
-  checkPassed: null,
   conceptLocked: false,
   bestScore: null,
   // Rolling adaptive replace
@@ -88,8 +76,7 @@ const initialState = {
   chunkEvalResult: null,
 };
 
-// Valid phases: IDLE, LOADING, SELECTING_CHUNK, CARDS, CHECKING, COMPLETED,
-//               REMEDIATING, RECHECKING, REMEDIATING_2, RECHECKING_2, ATTEMPTS_EXHAUSTED
+// Valid phases: IDLE, LOADING, SELECTING_CHUNK, CARDS, CHUNK_QUESTIONS, COMPLETED
 
 function sessionReducer(state, action) {
   switch (action.type) {
@@ -370,119 +357,8 @@ function sessionReducer(state, action) {
         motivationalNote: null,
         performanceVsBaseline: null,
       };
-    // Transition: cards done → Socratic chat
-    case "CHECKING_STARTED":
-      return {
-        ...state,
-        phase: "CHECKING",
-        messages: [{ role: "assistant", content: action.payload.response, image: action.payload.image ?? null }],
-        loading: false,
-      };
-    case "ANSWER_SENT":
-      return {
-        ...state,
-        messages: [
-          ...state.messages,
-          { role: "user", content: action.payload },
-        ],
-        checkLoading: true,
-      };
-    case "CHECK_RESPONDED": {
-      const base = {
-        ...state,
-        messages: [
-          ...state.messages,
-          { role: "assistant", content: action.payload.response, image: action.payload.image ?? null },
-        ],
-        checkLoading: false,
-      };
-      if (!action.payload.check_complete) return base;
-
-      const { mastered, remediation_needed, score, attempt, locked, best_score } = action.payload;
-
-      // Mastered on this attempt
-      if (mastered) {
-        return {
-          ...base,
-          phase: "COMPLETED",
-          score,
-          mastered: true,
-          checkPassed: true,
-          checkScore: score,
-          bestScore: best_score ?? score,
-        };
-      }
-
-      // Remediation needed (still have attempts left)
-      if (remediation_needed) {
-        const nextRemPhase = attempt <= 1 ? "REMEDIATING" : "REMEDIATING_2";
-        return {
-          ...base,
-          phase: nextRemPhase,
-          remediationNeeded: true,
-          checkScore: score,
-          checkPassed: false,
-          socraticAttempt: attempt ?? state.socraticAttempt,
-          bestScore: best_score ?? score,
-        };
-      }
-
-      // All attempts exhausted (locked === false means concept NOT hard-locked, but session done)
-      return {
-        ...base,
-        phase: "ATTEMPTS_EXHAUSTED",
-        score,
-        mastered: false,
-        checkPassed: false,
-        checkScore: score,
-        bestScore: best_score ?? score,
-        conceptLocked: locked ?? false,
-      };
-    }
-    case "SOCRATIC_FAILED": {
-      const nextPhase = action.payload.attempt <= 1 ? "REMEDIATING" : "REMEDIATING_2";
-      return {
-        ...state,
-        phase: nextPhase,
-        remediationNeeded: true,
-        checkScore: action.payload.score,
-        checkPassed: false,
-        socraticAttempt: action.payload.attempt,
-      };
-    }
-    case "ATTEMPTS_EXHAUSTED":
-      return {
-        ...state,
-        phase: "ATTEMPTS_EXHAUSTED",
-        score: action.payload.score,
-        mastered: false,
-        checkPassed: false,
-        checkScore: action.payload.score,
-        bestScore: action.payload.bestScore,
-      };
     case "SET_LOADING":
       return { ...state, loading: action.payload };
-    case "REMEDIATION_CARDS_LOADED": {
-      // Determine which remediation phase we are entering
-      const remPhase = state.socraticAttempt <= 1 ? "REMEDIATING" : "REMEDIATING_2";
-      return {
-        ...state,
-        cards: action.payload,
-        currentCardIndex: 0,
-        phase: remPhase,
-        loading: false,
-        remediationNeeded: false,
-      };
-    }
-    case "RECHECK_STARTED": {
-      const recheckPhase = action.payload.phase || (state.socraticAttempt <= 1 ? "RECHECKING" : "RECHECKING_2");
-      return {
-        ...state,
-        phase: recheckPhase,
-        messages: [{ role: "assistant", content: action.payload.response }],
-        loading: false,
-      };
-    }
     case "CHUNK_COMPLETED": {
       const prevMode = state.currentChunkMode;
       const newMode = action.payload.next_mode || prevMode;
@@ -797,73 +673,6 @@ export function SessionProvider({ children }) {
     }
   }, [state.session, state.cardAnswers, state.conceptTitle, state.chunkQuestions, state.currentChunkId, state.currentChunkMode]);
 
-  // Send answer during Socratic chat (CHECKING or RECHECKING/RECHECKING_2)
-  const sendAnswer = useCallback(
-    async (message, engagementSignal = null) => {
-      if (!state.session) return;
-      dispatch({ type: "ANSWER_SENT", payload: message });
-      try {
-        const res = await sendResponse(state.session.id, message, engagementSignal);
-        dispatch({ type: "CHECK_RESPONDED", payload: res.data });
-        if (res.data.check_complete) {
-          trackEvent("lesson_completed", {
-            score: res.data.score,
-            mastered: res.data.mastered,
-            passed: res.data.passed,
-            remediation_needed: res.data.remediation_needed,
-            attempt: res.data.attempt,
-            concept_id: state.session?.concept_id,
-            concept_title: state.conceptTitle,
-          });
-          if (res.data.mastered || res.data.passed) {
-            trackEvent("mastered", {
-              score: res.data.score,
-              concept_id: state.session?.concept_id,
-              concept_title: state.conceptTitle,
-            });
-            const xpAwarded = res.data.xp_awarded ?? 50;
-            useAdaptiveStore.getState().awardXP(xpAwarded);
-          }
-          await refreshMastery();
-        }
-      } catch (err) {
-        dispatch({
-          type: "CHECK_RESPONDED",
-          payload: {
-            response: i18n.t("error.checkFallback"),
-            check_complete: false,
-          },
-        });
-      }
-    },
-    [state.session, state.conceptTitle, refreshMastery]
-  );
-
-  // Load remediation cards after Socratic check failure
-  const loadRemediationCards = useCallback(async (sessionId) => {
-    dispatch({ type: "SET_LOADING", payload: true });
-    try {
-      const res = await loadRemediationCardsAPI(sessionId);
-      dispatch({ type: "REMEDIATION_CARDS_LOADED", payload: res.data.cards });
-    } catch (err) {
-      dispatch({ type: "ERROR", payload: friendlyError(err) });
-    }
-  }, []);
-
-  // Begin re-check Socratic session after remediation cards
-  const startRecheck = useCallback(async (sessionId) => {
-    dispatch({ type: "SET_LOADING", payload: true });
-    try {
-      const res = await beginRecheckAPI(sessionId);
-      dispatch({
-        type: "RECHECK_STARTED",
-        payload: { response: res.data.response, phase: res.data.phase },
-      });
-    } catch (err) {
-      dispatch({ type: "ERROR", payload: friendlyError(err) });
-    }
-  }, []);
-
   const loadChunkCards = useCallback(async (chunkId) => {
     if (!state.session?.id) return;
     try {
@@ -956,9 +765,6 @@ export function SessionProvider({ children }) {
         answerQuestion,
         sendAssistMessage,
         finishCards,
-        sendAnswer,
-        loadRemediationCards,
-        startRecheck,
         reset,
         loadChunkCards,
         goToNextChunk,

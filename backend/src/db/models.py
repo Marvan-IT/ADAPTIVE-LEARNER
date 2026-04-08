@@ -126,10 +126,6 @@ class TeachingSession(Base):
 
     # ── Chunk-based architecture tracking ─────────────────────────────────
     chunk_index: Mapped[int | None] = mapped_column(Integer, default=0, nullable=True)
-    exam_phase: Mapped[str | None] = mapped_column(Text, nullable=True)
-    exam_attempt: Mapped[int | None] = mapped_column(Integer, default=0, nullable=True)
-    exam_scores: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    failed_chunk_ids: Mapped[list | None] = mapped_column(ARRAY(Text), nullable=True)
     chunk_progress: Mapped[dict | None] = mapped_column(
         JSONB, nullable=True, default=None,
         comment="Per-chunk learning progress: {chunk_id: {mode, score, correct, total, completed_at}}"

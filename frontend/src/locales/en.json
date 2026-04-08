@@ -161,7 +161,7 @@
   "chunk.progress": "Subsection {{current}} of {{total}}",
   "chunk.loadingNext": "Loading next section…",
   "chunkQuestions.title": "Knowledge Check",
-  "chunkQuestions.instruction": "Answer in your own words — no need to be exact.",
+  "chunkQuestions.instruction": "Answer briefly — short and direct.",
   "chunkQuestions.placeholder": "Type your answer here...",
   "chunkQuestions.submit": "Submit Answers",
   "chunkQuestions.passed": "Passed",

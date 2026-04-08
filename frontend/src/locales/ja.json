@@ -179,7 +179,7 @@
   "subsectionNav.modeChange.fast": "素晴らしい！ファストトラックに切り替えます",
   "subsectionNav.lockedSubsection": "前のセクションを先に完了してください",
   "chunkQuestions.title": "知識チェック",
-  "chunkQuestions.instruction": "自分の言葉で答えてください — 正確さは必要ありません。",
+  "chunkQuestions.instruction": "簡潔に答えてください — 短く、直接的に。",
   "chunkQuestions.placeholder": "ここに答えを入力してください...",
   "chunkQuestions.submit": "回答を提出する",
   "chunkQuestions.passed": "合格",

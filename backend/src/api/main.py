@@ -98,11 +98,6 @@ async def lifespan(app: FastAPI):
     await init_db()
     # Chunk-based knowledge service (PostgreSQL + graph.json — no ChromaDB)
     _chunk_knowledge_svc = ChunkKnowledgeService()
-    try:
-        _chunk_knowledge_svc.preload_graph(DEFAULT_BOOK_SLUG)
-        logger.info("Graph preloaded for book: %s", DEFAULT_BOOK_SLUG)
-    except Exception:
-        logger.exception("Failed to preload graph for %s — graph endpoints will error on demand.", DEFAULT_BOOK_SLUG)
     app.state.chunk_knowledge_svc = _chunk_knowledge_svc
     teaching_router_module.teaching_svc = TeachingService()
     teaching_router_module.chunk_ksvc = _chunk_knowledge_svc
@@ -112,9 +107,50 @@ async def lifespan(app: FastAPI):
     )
     _openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
     _load_translation_cache()
-    # Mount per-book output directories so frontend can resolve /images/{book_slug}/...
-    # DB image URLs are like: http://localhost:8889/images/prealgebra/images_downloaded/{hash}.jpg
-    for _bslug in [DEFAULT_BOOK_SLUG]:
+
+    # ── Self-healing multi-book startup ──────────────────────────────────────────
+    # 1. Query DB for all books that have concept_chunks
+    # 2. Auto-build graph.json for any book missing it (handles already-processed books)
+    # 3. Preload graphs + mount image dirs for all discovered books
+    from extraction.graph_builder import build_graph as _build_graph_fn
+    from db.connection import get_db as _get_db_startup
+
+    _active_db_books: set[str] = set()
+    try:
+        async for _startup_db in _get_db_startup():
+            _active_db_books = await _chunk_knowledge_svc.get_active_books(_startup_db)
+            break
+    except Exception:
+        logger.exception("Could not query active books from DB at startup")
+
+    logger.info("Books found in DB: %s", sorted(_active_db_books))
+
+    for _bslug in sorted(_active_db_books):
+        _graph_path = OUTPUT_DIR / _bslug / "graph.json"
+        if not _graph_path.exists():
+            logger.info("graph.json missing for %s — auto-building from concept_chunks...", _bslug)
+            try:
+                async for _startup_db in _get_db_startup():
+                    await _build_graph_fn(_startup_db, _bslug, _graph_path)
+                    break
+                logger.info("graph.json built for %s", _bslug)
+            except Exception:
+                logger.exception("Failed to auto-build graph.json for %s", _bslug)
+
+    _available_books = sorted([
+        d.name for d in OUTPUT_DIR.iterdir()
+        if d.is_dir() and (d / "graph.json").exists()
+    ])
+    logger.info("Books with graph.json ready: %s", _available_books)
+
+    for _bslug in _available_books:
+        try:
+            _chunk_knowledge_svc.preload_graph(_bslug)
+            logger.info("Graph preloaded: %s", _bslug)
+        except Exception:
+            logger.exception("Failed to preload graph for %s", _bslug)
+
+    for _bslug in _available_books:
         _book_out_dir = OUTPUT_DIR / _bslug
         if _book_out_dir.exists():
             try:
@@ -126,12 +162,16 @@ async def lifespan(app: FastAPI):
                 logger.info("Mounted /images/%s → %s", _bslug, _book_out_dir)
             except Exception:
                 logger.exception("Failed to mount image dir for %s", _bslug)
+
     logger.info("Services loaded. API ready.")
     yield
     _save_translation_cache()
     await close_db()
     logger.info("Shutting down.")
 
+
+# ── Hot-reload lock (used by lifespan and admin_load_book) ───────────────────
+_reload_lock: asyncio.Lock | None = None
 
 app = FastAPI(
     title="ADA - Adaptive Math Learning API",
@@ -512,6 +552,58 @@ async def translate_concept_titles(request: Request, req: TranslateTitlesRequest
             translations[cid] = title
 
     return {"translations": translations}
+
+
+@app.post("/api/admin/load-book/{book_slug}")
+async def admin_load_book(book_slug: str, request: Request):
+    """
+    Hot-load a newly processed book into the running server without restart.
+    Called automatically by the pipeline poller after --chunks completes.
+    Secured by X-API-Key header (must match API_SECRET_KEY).
+    """
+    if request.headers.get("X-API-Key") != _API_KEY:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    global _reload_lock
+    if _reload_lock is None:
+        _reload_lock = asyncio.Lock()
+
+    from extraction.graph_builder import build_graph as _bgfn
+    from db.connection import get_db as _get_db_r
+
+    async with _reload_lock:
+        graph_path = OUTPUT_DIR / book_slug / "graph.json"
+        if not graph_path.exists():
+            logger.info("[load-book] Building graph.json for %s", book_slug)
+            try:
+                async for db in _get_db_r():
+                    await _bgfn(db, book_slug, graph_path)
+                    break
+            except Exception:
+                logger.exception("[load-book] Failed to build graph.json for %s", book_slug)
+                raise HTTPException(500, f"Failed to build graph.json for {book_slug}")
+
+        loop = asyncio.get_event_loop()
+        try:
+            await loop.run_in_executor(None, _chunk_knowledge_svc.preload_graph, book_slug)
+            logger.info("[load-book] Graph preloaded: %s", book_slug)
+        except Exception:
+            logger.exception("[load-book] Failed to preload graph for %s", book_slug)
+
+        book_out_dir = OUTPUT_DIR / book_slug
+        if book_out_dir.exists():
+            try:
+                app.mount(
+                    f"/images/{book_slug}",
+                    StaticFiles(directory=str(book_out_dir)),
+                    name=f"images_{book_slug}",
+                )
+                logger.info("[load-book] Mounted /images/%s", book_slug)
+            except Exception:
+                pass  # Already mounted — not an error
+
+    logger.info("[load-book] Book loaded: %s", book_slug)
+    return {"status": "loaded", "book_slug": book_slug}
 
 
 # ── Run with uvicorn ───────────────────────────────────────────────

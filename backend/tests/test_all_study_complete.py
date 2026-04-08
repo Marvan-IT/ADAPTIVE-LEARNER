@@ -12,17 +12,17 @@ Business criteria:
              learning_objective chunks) required_ids is empty and all_study_complete=False.
   BC-ASC-05  When all required chunks are completed all_study_complete=True, which signals
              the frontend to unlock the exam gate.
-  BC-ASC-06  chapter_review chunks are required — they gate the exam just like teaching
+  BC-ASC-06  section_review chunks are required — they gate the exam just like teaching
              chunks but are NOT sampled for exam questions.
 
 Test strategy:
   The all_study_complete logic is a pure computation on two sets:
-    required_ids = {chunks that are teaching OR chapter_review
+    required_ids = {chunks that are teaching OR section_review
                     OR (exercise AND NOT optional)}
     completed_ids = set(chunk_progress.keys())
     all_study_complete = bool(required_ids) and required_ids.issubset(completed_ids)
 
-  We replicate this logic here with the real _get_chunk_type / _is_optional_chunk
+  We replicate this logic here with the real _get_chunk_type / _heading_is_optional
   functions to confirm each business rule.  No DB or HTTP needed.
 """
 
@@ -64,7 +64,7 @@ def _stub_heavyweight_modules():
 
 _stub_heavyweight_modules()
 
-from api.teaching_router import _get_chunk_type, _is_optional_chunk  # noqa: E402
+from api.teaching_router import _get_chunk_type, _heading_is_optional  # noqa: E402
 
 
 # ── Pure logic replica ────────────────────────────────────────────────────────
@@ -78,10 +78,10 @@ def _compute_all_study_complete(chunks: list[dict], completed_ids: set[str]) -> 
     """
     required_ids = {
         c["id"] for c in chunks
-        if _get_chunk_type(c.get("heading", "")) in ("teaching", "chapter_review")
+        if _get_chunk_type(c.get("heading", "")) in ("teaching", "section_review")
         or (
             _get_chunk_type(c.get("heading", "")) == "exercise"
-            and not _is_optional_chunk(c.get("heading", ""))
+            and not _heading_is_optional(c.get("heading", ""))
         )
     }
     return bool(required_ids) and required_ids.issubset(completed_ids)
@@ -272,10 +272,10 @@ class TestEmptyConceptNoStudyComplete:
         completed = {"c1", "c2"}  # all done, but none are required
         assert _compute_all_study_complete(chunks, completed) is False
 
-    def test_numeric_prefix_section_intro_counts_as_chapter_review(self):
+    def test_numeric_prefix_section_intro_counts_as_section_review(self):
         """
         BC-CT-02 / BC-ASC-06: '1.1 Introduction to Whole Numbers' is classified as
-        chapter_review (not teaching). chapter_review chunks are required, so completing
+        section_review (not teaching). section_review chunks are required, so completing
         the only chunk satisfies required_ids → all_study_complete=True.
         """
         chunks = [
@@ -326,26 +326,26 @@ class TestAllRequiredDone:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# BC-ASC-06  chapter_review chunks are required (gate the exam like teaching)
+# BC-ASC-06  section_review chunks are required (gate the exam like teaching)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class TestChapterReviewRequired:
-    """BC-ASC-06: chapter_review chunks are required — they gate the exam just like teaching chunks."""
+    """BC-ASC-06: section_review chunks are required — they gate the exam just like teaching chunks."""
 
-    def test_chapter_review_incomplete_blocks_exam(self):
-        """Incomplete chapter_review chunk means study not complete."""
+    def test_section_review_incomplete_blocks_exam(self):
+        """Incomplete section_review chunk means study not complete."""
         chunks = [_chunk("c1", "1.1 Introduction to Whole Numbers")]
         completed = set()
         assert _compute_all_study_complete(chunks, completed) is False
 
-    def test_chapter_review_completed_allows_completion(self):
-        """Completing the only chapter_review chunk satisfies required_ids."""
+    def test_section_review_completed_allows_completion(self):
+        """Completing the only section_review chunk satisfies required_ids."""
         chunks = [_chunk("c1", "1.1 Introduction to Whole Numbers")]
         completed = {"c1"}
         assert _compute_all_study_complete(chunks, completed) is True
 
-    def test_chapter_review_and_teaching_both_required(self):
-        """Both teaching and chapter_review must be completed."""
+    def test_section_review_and_teaching_both_required(self):
+        """Both teaching and section_review must be completed."""
         chunks = [
             _chunk("c1", "Use Addition Notation"),
             _chunk("c2", "1.1 Introduction to Whole Numbers"),

@@ -1,0 +1,35 @@
+[Unit]
+Description=ADA S3 PDF pipeline poller
+Documentation=https://github.com/Marvan-IT/ADA
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+
+# Working directory must be the project root so `docker compose` finds compose.yml
+WorkingDirectory=/home/ubuntu/ADA
+
+# All required env vars live in this file — never commit it
+EnvironmentFile=/home/ubuntu/ADA/scripts/.pipeline.env
+
+ExecStart=/usr/bin/python3 /home/ubuntu/ADA/scripts/s3_pipeline_poller.py
+
+# Restart policy — wait 30s before retrying to avoid rapid restart loops
+Restart=on-failure
+RestartSec=30s
+
+# Give the pipeline up to 15 minutes to finish before systemd considers it hung
+TimeoutStartSec=900
+TimeoutStopSec=60
+
+# Write logs to the journal (view with: journalctl -u ada-pipeline -f)
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ada-pipeline
+
+[Install]
+WantedBy=multi-user.target

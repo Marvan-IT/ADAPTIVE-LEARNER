@@ -28,8 +28,6 @@ from api.chunk_knowledge_service import ChunkKnowledgeService
 from api.prompts import (
     build_presentation_system_prompt,
     build_presentation_user_prompt,
-    build_socratic_system_prompt,
-    build_remediation_socratic_prompt,
     build_cards_user_prompt,
     build_assistant_system_prompt,
 )
@@ -578,366 +576,6 @@ class TeachingService:
 
         await db.flush()
         return presentation
-
-    # ── Transition to Socratic Check ──────────────────────────────
-
-    async def begin_socratic_check(
-        self,
-        db: AsyncSession,
-        session: TeachingSession,
-        student: Student,
-    ) -> str:
-        """
-        Transition session to CHECKING phase.
-        Returns the first Socratic question from the AI.
-        """
-        if session.phase not in ("PRESENTING", "CARDS_DONE"):
-            raise ValueError(f"Cannot begin check: session is in {session.phase} phase")
-
-        session.phase = "CHECKING"
-
-        # Retrieve concept context from PostgreSQL chunks
-        _chunks = await self._chunk_ksvc.get_chunks_for_concept(
-            db, session.book_slug or DEFAULT_BOOK_SLUG, session.concept_id
-        )
-        concept_text = "\n\n".join(c["text"] for c in _chunks[:5]) if _chunks else ""
-        concept_title = _chunks[0].get("heading", session.concept_id) if _chunks else session.concept_id
-
-        # Query this session's card interaction stats for adaptive Socratic calibration
-        session_card_stats = None
-        try:
-            stats_result = await db.execute(
-                select(
-                    func.count(CardInteraction.id).label("total_cards"),
-                    func.coalesce(func.sum(CardInteraction.wrong_attempts), 0).label("total_wrong"),
-                    func.coalesce(func.sum(CardInteraction.hints_used), 0).label("total_hints"),
-                ).where(CardInteraction.session_id == session.id)
-            )
-            row = stats_result.one()
-            total_cards = int(row.total_cards or 0)
-            total_wrong = int(row.total_wrong or 0)
-            total_hints = int(row.total_hints or 0)
-            session_card_stats = {
-                "total_cards": total_cards,
-                "total_wrong": total_wrong,
-                "total_hints": total_hints,
-                "error_rate": total_wrong / max(total_cards, 1) if total_cards > 0 else 0.0,
-            }
-            logger.info(
-                "[socratic-adaptive] session_id=%s session_cards=%d session_wrong=%d "
-                "session_hints=%d error_rate=%.2f",
-                str(session.id),
-                session_card_stats["total_cards"],
-                session_card_stats["total_wrong"],
-                session_card_stats["total_hints"],
-                session_card_stats["error_rate"],
-            )
-        except Exception as exc:
-            logger.exception(
-                "[socratic-adaptive] session_stats_failed: session_id=%s error=%s — continuing without stats",
-                session.id, exc,
-            )
-
-        # Build student's learning profile from card interaction history
-        from adaptive.adaptive_engine import load_student_history
-        from adaptive.profile_builder import build_learning_profile
-        from adaptive.schemas import AnalyticsSummary
-
-        history = await load_student_history(str(session.student_id), session.concept_id, db)
-        mini_analytics = AnalyticsSummary(
-            student_id=str(session.student_id),
-            concept_id=session.concept_id,
-            time_spent_sec=history["avg_time_per_card"] or 120.0,
-            expected_time_sec=120.0,
-            attempts=max(1, round((history["avg_wrong_attempts"] or 0) + 1)),
-            wrong_attempts=round(history["avg_wrong_attempts"] or 0),
-            hints_used=round(history["avg_hints_per_card"] or 0),
-            revisits=0,
-            recent_dropoffs=0,
-            skip_rate=0.0,
-            quiz_score=max(0.1, 1.0 - min((history["avg_wrong_attempts"] or 0) * 0.15, 0.9)),
-            last_7d_sessions=history["sessions_last_7d"],
-        )
-        socratic_profile = build_learning_profile(mini_analytics, has_unmet_prereq=False)
-
-        # Extract the specific card titles the student actually studied.
-        # Socratic questions must be restricted to these topics only.
-        # Also build card_visuals: {title, description, image} for cards that have images.
-        covered_topics: list[str] = []
-        card_visuals: list[dict] = []
-        if session.presentation_text:
-            try:
-                cached = json.loads(session.presentation_text)
-                if isinstance(cached, dict):
-                    card_list = cached.get("cards", [])
-                elif isinstance(cached, list):
-                    card_list = cached
-                else:
-                    card_list = []
-                covered_topics = [c.get("title", "") for c in card_list if c.get("title")]
-                for card in card_list:
-                    imgs = card.get("images") or []
-                    if imgs and card.get("title"):
-                        card_visuals.append({
-                            "title": card["title"],
-                            "description": (imgs[0].get("description") or imgs[0].get("filename") or "")[:200],
-                            "image": imgs[0],
-                        })
-            except Exception:
-                logger.warning("[socratic-scope] Failed to parse presentation_text for session_id=%s", session.id, exc_info=True)
-                covered_topics = []
-        logger.info(
-            "[socratic-scope] session_id=%s covered_topics=%s",
-            str(session.id), covered_topics,
-        )
-
-        # Build the Socratic system prompt (per-lesson interests override profile)
-        effective_interests = session.lesson_interests if session.lesson_interests else student.interests
-        language = getattr(student, "preferred_language", "en") or "en"
-        system_prompt = build_socratic_system_prompt(
-            concept_title=concept_title,
-            concept_text=concept_text,
-            style=session.style,
-            interests=effective_interests,
-            card_visuals=card_visuals,
-            language=language,
-            socratic_profile=socratic_profile,
-            history=history,
-            session_card_stats=session_card_stats,
-            covered_topics=covered_topics,
-        )
-
-        msg_count = await self._get_message_count(db, session.id)
-
-        # Build conversation for the API
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": "I've read the explanation. Please check my understanding."},
-        ]
-
-        raw_first_question = await self._chat(messages=messages, max_tokens=500, model="mini")
-        first_question, first_image = self._parse_card_image_ref(raw_first_question, card_visuals)
-
-        # Store messages
-        await self._save_message(db, session.id, "system", system_prompt, "CHECKING", msg_count)
-        await self._save_message(
-            db, session.id, "user",
-            "I've read the explanation. Please check my understanding.",
-            "CHECKING", msg_count + 1,
-        )
-        await self._save_message(db, session.id, "assistant", first_question, "CHECKING", msg_count + 2)
-
-        await db.flush()
-        return first_question, first_image
-
-    # ── Handle Student Response (Socratic Loop) ───────────────────
-
-    async def handle_student_response(
-        self,
-        db: AsyncSession,
-        session: TeachingSession,
-        student_message: str,
-    ) -> dict:
-        """
-        Process a student's response during the Socratic check.
-
-        Returns:
-            {
-                "response": str,
-                "phase": str,
-                "check_complete": bool,
-                "score": int | None,
-                "mastered": bool | None,
-            }
-        """
-        if session.phase not in ("CHECKING", "RECHECKING", "RECHECKING_2"):
-            raise ValueError(f"Cannot respond: session is in {session.phase} phase")
-
-        current_phase = session.phase
-
-        # Get all previous messages for the current check phase
-        messages = await self._get_phase_messages(db, session.id, current_phase)
-
-        # Save the student's new message
-        msg_count = await self._get_message_count(db, session.id)
-        await self._save_message(db, session.id, "user", student_message, current_phase, msg_count)
-
-        # Count student exchanges so far (before this message)
-        user_exchange_count = sum(1 for m in messages if m.role == "user")
-
-        # Build the OpenAI messages array from conversation history
-        raw_messages = [{"role": m.role, "content": m.content} for m in messages]
-        raw_messages.append({"role": "user", "content": student_message})
-
-        # Window the history to avoid token blowup in long sessions
-        openai_messages = self._build_windowed_messages(raw_messages)
-
-        # Mid-session encouragement at halfway point
-        if user_exchange_count == 12:
-            if openai_messages and openai_messages[0]["role"] == "system":
-                openai_messages.insert(1, {
-                    "role": "system",
-                    "content": (
-                        "The student has been working hard for a while. Before your next question, "
-                        "include one warm, brief sentence acknowledging their effort and encouraging them to keep going."
-                    ),
-                })
-
-        # Safety net: force-conclude if ceiling reached
-        if user_exchange_count >= MAX_SOCRATIC_EXCHANGES:
-            force_directive = {
-                "role": "system",
-                "content": (
-                    f"MANDATORY: You have already asked {user_exchange_count} questions. "
-                    "Stop asking more questions. Give the student one warm sentence of encouragement "
-                    "for their effort, then include [ASSESSMENT:XX] to conclude the session."
-                ),
-            }
-            if openai_messages and openai_messages[0]["role"] == "system":
-                openai_messages.insert(1, force_directive)
-            else:
-                openai_messages.insert(0, force_directive)
-
-        # Build card_visuals for image resolution
-        card_visuals: list[dict] = []
-        if session.presentation_text:
-            try:
-                cached = json.loads(session.presentation_text)
-                cv_card_list = cached.get("cards", []) if isinstance(cached, dict) else (cached if isinstance(cached, list) else [])
-                for card in cv_card_list:
-                    imgs = card.get("images") or []
-                    if imgs and card.get("title"):
-                        card_visuals.append({
-                            "title": card["title"],
-                            "description": (imgs[0].get("description") or imgs[0].get("filename") or "")[:200],
-                            "image": imgs[0],
-                        })
-            except Exception:
-                logger.warning("[socratic-respond] Failed to parse presentation_text for session_id=%s", session.id, exc_info=True)
-
-        # Call OpenAI for the next Socratic response (150 tokens enforces 1-2 sentence hints)
-        raw_ai_response = await self._chat(messages=openai_messages, max_tokens=150)
-        ai_response, response_image = self._parse_card_image_ref(raw_ai_response, card_visuals)
-        await self._save_message(db, session.id, "assistant", ai_response, current_phase, msg_count + 1)
-
-        # Check if the AI signaled completion
-        check_complete, score = self._parse_assessment(ai_response)
-
-        # Strip the assessment marker from the visible response
-        clean_response = ai_response
-        if check_complete and score is not None:
-            clean_response = re.sub(r'\[ASSESSMENT:\d+\]', '', ai_response).strip()
-
-        result = {
-            "response": clean_response,
-            "phase": session.phase,
-            "check_complete": check_complete,
-            "score": score,
-            "mastered": None,
-            "remediation_needed": False,
-            "attempt": session.socratic_attempt_count,
-            "locked": False,
-            "best_score": session.best_check_score,
-            "image": response_image,
-        }
-
-        if check_complete:
-            # Track the best score across all attempts
-            session.best_check_score = max(session.best_check_score or 0, score)
-            session.check_score = score
-
-            mastered = score >= MASTERY_THRESHOLD
-            result["mastered"] = mastered
-
-            if mastered:
-                # ── MASTERY PATH ──────────────────────────────────────────
-                session.phase = "COMPLETED"
-                session.concept_mastered = True
-                session.completed_at = datetime.now(timezone.utc)
-                result["phase"] = "COMPLETED"
-
-                # Check for existing mastery (re-learn scenario)
-                existing = await db.execute(
-                    select(StudentMastery).where(
-                        StudentMastery.student_id == session.student_id,
-                        StudentMastery.concept_id == session.concept_id,
-                    )
-                )
-                existing_mastery = existing.scalar_one_or_none()
-                if existing_mastery:
-                    existing_mastery.session_id = session.id
-                    existing_mastery.mastered_at = datetime.now(timezone.utc)
-                else:
-                    db.add(StudentMastery(
-                        student_id=session.student_id,
-                        concept_id=session.concept_id,
-                        session_id=session.id,
-                    ))
-                    # Create spaced review schedule only on FIRST mastery (Ebbinghaus)
-                    from datetime import timedelta
-                    REVIEW_INTERVALS_DAYS = [1, 3, 7, 14, 30]
-                    now_utc = datetime.now(timezone.utc)
-                    for i, days in enumerate(REVIEW_INTERVALS_DAYS, 1):
-                        db.add(SpacedReview(
-                            student_id=session.student_id,
-                            concept_id=session.concept_id,
-                            review_number=i,
-                            due_at=now_utc + timedelta(days=days),
-                        ))
-
-                logger.info(
-                    "[assessment] session_id=%s score=%d MASTERED", str(session.id), score
-                )
-
-            elif session.socratic_attempt_count < SOCRATIC_MAX_ATTEMPTS:
-                # ── REMEDIATION PATH ──────────────────────────────────────
-                session.socratic_attempt_count += 1
-                # Extract covered card titles to help _extract_failed_topics identify weak spots
-                _covered: list[str] = []
-                if session.presentation_text:
-                    try:
-                        _cached = json.loads(session.presentation_text)
-                        _card_list = _cached.get("cards", []) if isinstance(_cached, dict) else []
-                        _covered = [c.get("title", "") for c in _card_list if c.get("title")]
-                    except Exception:
-                        pass
-                failed_topics = await self._extract_failed_topics(session.id, db, covered_topics=_covered)
-                # Fall back to generic message when no corrections were detected
-                if not failed_topics:
-                    failed_topics = _covered[:5] if _covered else ["the key concepts of this section"]
-                session.remediation_context = json.dumps(failed_topics)
-
-                # Set phase based on attempt count
-                if session.socratic_attempt_count == 1:
-                    session.phase = "REMEDIATING"
-                else:
-                    session.phase = "REMEDIATING_2"
-
-                result["phase"] = session.phase
-                result["remediation_needed"] = True
-                result["attempt"] = session.socratic_attempt_count
-
-                logger.info(
-                    "[assessment] session_id=%s score=%d attempt=%d phase=%s",
-                    str(session.id), score, session.socratic_attempt_count, session.phase,
-                )
-
-            else:
-                # ── EXHAUSTED ALL ATTEMPTS ────────────────────────────────
-                session.phase = "COMPLETED"
-                session.concept_mastered = False
-                session.completed_at = datetime.now(timezone.utc)
-                result["phase"] = "COMPLETED"
-                result["locked"] = False  # Student can retry from the concept map
-                result["best_score"] = session.best_check_score
-
-                logger.info(
-                    "[assessment] session_id=%s score=%d attempts_exhausted best_score=%d",
-                    str(session.id), score, session.best_check_score or 0,
-                )
-
-        await db.flush()
-        return result
 
     # ── Style Switching ───────────────────────────────────────────
 
@@ -1494,16 +1132,43 @@ class TeachingService:
             except Exception as _cd_err:
                 logger.warning("[per-chunk] failed to load concept images fallback for chunk %s: %s", chunk_id, _cd_err)
 
-        # Determine mode from session cache signals
-        try:
-            _cache_raw = json.loads(session.presentation_text or "{}")
-            _cached = _cache_raw if isinstance(_cache_raw, dict) else {}
-        except (json.JSONDecodeError, TypeError):
-            _cached = {}
+        # Determine mode using the existing blended-analytics engine
+        from adaptive.adaptive_engine import (
+            load_student_history, build_blended_analytics,
+        )
+        from adaptive.schemas import CardBehaviorSignals
 
-        _generate_as = _cached.get("current_mode", "NORMAL")
-        if _generate_as not in ("STRUGGLING", "NORMAL", "FAST"):
+        _history = await load_student_history(str(session.student_id), session.concept_id, db)
+
+        _ci_result = await db.execute(
+            select(
+                func.count(CardInteraction.id).label("total"),
+                func.coalesce(func.avg(CardInteraction.wrong_attempts), 0.0).label("avg_wrong"),
+                func.coalesce(func.avg(CardInteraction.hints_used), 0.0).label("avg_hints"),
+                func.coalesce(func.avg(CardInteraction.time_on_card_sec), 120.0).label("avg_time"),
+                func.coalesce(func.sum(CardInteraction.idle_triggers), 0).label("idle"),
+            ).where(CardInteraction.session_id == session.id)
+        )
+        _ci_row = _ci_result.one_or_none()
+        _total_ci = int(_ci_row.total or 0) if _ci_row else 0
+
+        if _total_ci == 0:
             _generate_as = "NORMAL"
+        else:
+            _current_signals = CardBehaviorSignals(
+                time_on_card_sec=float(_ci_row.avg_time or 120.0),
+                wrong_attempts=round(float(_ci_row.avg_wrong or 0.0)),
+                hints_used=round(float(_ci_row.avg_hints or 0.0)),
+                idle_triggers=int(_ci_row.idle or 0),
+            )
+            _, _blended_score, _generate_as = build_blended_analytics(
+                current=_current_signals,
+                history=_history,
+                concept_id=session.concept_id,
+                student_id=str(session.student_id),
+            )
+            logger.info("[per-chunk] mode=%s blended_score=%.2f (session_cards=%d)",
+                        _generate_as, _blended_score, _total_ci)
 
         token_budgets = {
             "STRUGGLING": CHUNK_MAX_TOKENS_STRUGGLING,
@@ -2402,88 +2067,6 @@ class TeachingService:
             f"{interests_text}"
         )
 
-    # ── Recheck (after Remediation) ──────────────────────────────
-
-    async def begin_recheck(
-        self,
-        session_id: uuid.UUID,
-        db: AsyncSession,
-    ) -> dict:
-        """
-        Start a new Socratic check focused on previously failed topics.
-        Transitions session to RECHECKING or RECHECKING_2 phase.
-        """
-        session = await db.get(TeachingSession, session_id)
-        if not session:
-            raise ValueError(f"Session not found: {session_id}")
-
-        failed_topics = json.loads(session.remediation_context or "[]")
-        # Retrieve concept context from PostgreSQL chunks
-        _rck_chunks = await self._chunk_ksvc.get_chunks_for_concept(
-            db, session.book_slug or DEFAULT_BOOK_SLUG, session.concept_id
-        )
-        concept = {
-            "concept_title": _rck_chunks[0].get("heading", session.concept_id) if _rck_chunks else session.concept_id,
-            "text": "\n\n".join(c["text"] for c in _rck_chunks[:3]) if _rck_chunks else "",
-        }
-        student = await db.get(Student, session.student_id)
-
-        # Determine next phase based on attempt count
-        if session.socratic_attempt_count == 1:
-            session.phase = "RECHECKING"
-        else:
-            session.phase = "RECHECKING_2"
-
-        effective_interests = (
-            session.lesson_interests if session.lesson_interests
-            else (getattr(student, "interests", []) or [] if student else [])
-        )
-        language = getattr(student, "preferred_language", "en") or "en" if student else "en"
-
-        system_prompt = build_remediation_socratic_prompt(
-            failed_topics=failed_topics,
-            concept_title=concept.get("concept_title", session.concept_id),
-            concept_text=concept.get("text", "")[:2000],
-            student_interests=effective_interests,
-            style=session.style or "default",
-            language=language,
-            session_stats={},
-        )
-
-        opening = await self._chat(
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {
-                    "role": "user",
-                    "content": "I've finished reviewing those parts again. I'm ready for the check!",
-                },
-            ],
-            max_tokens=500,
-            temperature=0.7,
-            model="mini",
-        )
-
-        msg_count = await self._get_message_count(db, session.id)
-        await self._save_message(db, session.id, "system", system_prompt, session.phase, msg_count)
-        await self._save_message(
-            db, session.id, "user",
-            "I've finished reviewing those parts again. I'm ready for the check!",
-            session.phase, msg_count + 1,
-        )
-        await self._save_message(db, session.id, "assistant", opening, session.phase, msg_count + 2)
-        await db.flush()
-
-        logger.info(
-            "[recheck] session_id=%s phase=%s attempt=%d",
-            str(session.id), session.phase, session.socratic_attempt_count,
-        )
-
-        return {
-            "response": opening,
-            "phase": session.phase,
-            "attempt": session.socratic_attempt_count,
-        }
-
     @staticmethod
     def _parse_sub_sections(text: str) -> list[dict]:
         """Split concept text by ## headers into sub-sections.
@@ -2950,10 +2533,3 @@ class TeachingService:
             # Fallback: slightly rephrase the original question
             raise
 
-    @staticmethod
-    def _parse_assessment(text: str) -> tuple[bool, int | None]:
-        """Check if AI included [ASSESSMENT:XX] marker."""
-        match = re.search(r'\[ASSESSMENT:(\d+)\]', text)
-        if match:
-            return True, int(match.group(1))
-        return False, None

@@ -34,16 +34,25 @@ ADA/
 │   ├── src/
 │   │   ├── api/              # FastAPI routers, services, schemas, prompts
 │   │   ├── db/               # SQLAlchemy ORM models and PostgreSQL connection
-│   │   ├── extraction/       # PDF → concept block pipeline
-│   │   ├── graph/            # NetworkX dependency graph
-│   │   ├── storage/          # ChromaDB vector store wrapper
+│   │   ├── extraction/       # PDF → chunk pipeline
+│   │   ├── graph/            # NetworkX dependency graph (JSON-backed)
+│   │   ├── storage/          # JSON export utilities (minimal)
 │   │   ├── images/           # PDF image extraction + Mathpix OCR
 │   │   ├── adaptive/         # Adaptive learning engine: profiling, XP, card generation
+│   │   │   ├── adaptive_engine.py
+│   │   │   ├── adaptive_router.py
+│   │   │   ├── prompt_builder.py
+│   │   │   ├── generation_profile.py
+│   │   │   ├── profile_builder.py
+│   │   │   ├── remediation.py
+│   │   │   ├── boredom_detector.py
+│   │   │   └── schemas.py
 │   │   ├── config.py         # All constants, paths, API keys
-│   │   ├── models.py         # Data models
 │   │   └── pipeline.py       # End-to-end extraction orchestration
+│   ├── tests/                # pytest test suite (30+ files)
+│   ├── scripts/              # Developer utilities (preview_sections.py)
 │   ├── data/                 # Input PDF textbooks (do not commit — 1GB+)
-│   ├── output/               # Pipeline output: ChromaDB, JSON graphs, images (do not commit)
+│   ├── output/               # Pipeline output: JSON graphs, images (do not commit)
 │   └── requirements.txt
 ├── frontend/                 # React 19 + Vite 7 SPA
 │   ├── src/
@@ -51,10 +60,11 @@ ADA/
 │   │   ├── pages/            # Route-level components
 │   │   ├── components/       # Reusable UI components
 │   │   ├── context/          # React Context for student, session, theme
+│   │   ├── store/            # Zustand global stores (adaptiveStore.js)
 │   │   ├── hooks/            # Custom React hooks
 │   │   ├── locales/          # i18next translation files (13 languages)
 │   │   ├── theme/            # Tailwind theme config
-│   │   └── utils/            # PostHog analytics
+│   │   └── utils/            # PostHog analytics, constants, formatters
 │   └── package.json
 └── .claude/
     ├── agents/               # Subagent definitions (5 agents)
@@ -68,37 +78,41 @@ ADA/
 ### Backend
 | Concern | Technology |
 |---|---|
-| Framework | FastAPI 0.128+ (async) |
+| Framework | FastAPI 0.110+ (async) |
 | Server | Uvicorn |
-| Database | PostgreSQL 15 via SQLAlchemy 2.0 async + asyncpg |
-| Migrations | Alembic (setup pending — see Technical Debt) |
-| Vector Store | ChromaDB 0.5 (collection: `openstax_concepts`) |
-| Graph Engine | NetworkX 3+ (DAG of concept prerequisites) |
+| Database | PostgreSQL 15 via SQLAlchemy 2.0 async + asyncpg 0.29 |
+| Migrations | Alembic 1.13.0 |
+| Vector Search | pgvector 0.3.0 — `Vector(1536)` column on `concept_chunks` table |
+| Graph Engine | NetworkX 3+ (DAG of concept prerequisites, JSON-backed) |
 | LLM | OpenAI API — `gpt-4o` for generation, `gpt-4o-mini` for lightweight tasks |
 | Embeddings | `text-embedding-3-small` (1536 dimensions) |
-| PDF Parsing | PyMuPDF 1.24 |
-| Math OCR | Mathpix API |
-| Validation | Pydantic 2.0+ |
+| PDF Parsing | PyMuPDF 1.24+ |
+| Math OCR | Mathpix API (optional) |
+| Validation | Pydantic 2.5+ |
+| Rate Limiting | slowapi 0.1.9 (optional Redis backend via `REDIS_URL`) |
+| JSON Repair | json-repair 0.30.0 (LLM output fallback) |
+| Image Processing | Pillow 10.0+ |
 
 ### Frontend
 | Concern | Technology |
 |---|---|
-| Framework | React 19 + Vite 7 |
-| Routing | React Router DOM 7 |
+| Framework | React 19.2 + Vite 7.3 |
+| Routing | React Router DOM 7.13 |
 | Styling | Tailwind CSS 4 + PostCSS |
-| Graph Viz | Custom SVG component (`ConceptGraph.jsx`) with pan/zoom/blink |
-| HTTP | Axios 1.13 |
+| Graph Viz | @react-sigma/core 5.0.6 + graphology (force-atlas2 layout) |
+| HTTP | Axios 1.7.0 |
 | Math Render | KaTeX 0.16 + remark-math + rehype-katex |
 | Markdown | react-markdown 10 |
 | i18n | i18next 25 (13 languages: en, ar, de, es, fr, hi, ja, ko, ml, pt, si, ta, zh) |
-| Analytics | PostHog |
+| Global State | Zustand 5.0.11 (adaptive store) |
+| Animations | Framer Motion 12.34 |
+| Analytics | PostHog JS |
 | Icons | Lucide React |
 
 ### Infrastructure
 - **Python venv**: `.venv/` at project root
 - **Node**: npm (package-lock.json)
 - **Environment**: `.env` files in `backend/` and `frontend/` — never commit these; `.env.example` files are the source of truth for required keys
-- **ChromaDB data**: `backend/output/prealgebra/chroma_db/` — do not commit (large binary data)
 
 ---
 
@@ -114,6 +128,7 @@ MATHPIX_APP_ID=
 MATHPIX_APP_KEY=
 DATABASE_URL=postgresql+asyncpg://postgres:<password>@localhost:5432/AdaptiveLearner
 API_SECRET_KEY=            # random 32-char hex string — required for API auth
+REDIS_URL=                 # optional — enables cross-worker rate limiting
 ```
 
 ### Frontend (`frontend/.env`)
@@ -127,36 +142,58 @@ VITE_API_SECRET_KEY=       # must match backend API_SECRET_KEY
 
 ## Database Schema
 
-### Tables (PostgreSQL, SQLAlchemy async ORM)
-- **`students`** — id, name, interests, language, style preferences
-- **`teaching_sessions`** — id, student_id (FK), concept_id, phase, mastery_score, timestamps
-- **`conversation_messages`** — id, session_id (FK), role, content, phase, order
-- **`student_mastery`** — id, student_id (FK), concept_id, mastered_at (unique constraint)
+### Tables (PostgreSQL, SQLAlchemy async ORM + pgvector)
 
-Cascading deletes are enforced on all foreign keys. Schema changes must go through Alembic migrations — never use `Base.metadata.create_all()` in production.
+All foreign keys enforce cascading deletes. Schema changes must go through Alembic migrations — never use `Base.metadata.create_all()` in production.
+
+- **`students`** — UUID id, display_name, interests (ARRAY), preferred_style, preferred_language; XP, streak, section_count; adaptive state: overall_accuracy_rate, boredom_pattern, frustration_tolerance, recovery_speed, avg_state_score; JSONB profile fields: effective_analogies, effective_engagement, ineffective_engagement, state_distribution
+
+- **`teaching_sessions`** — UUID id, student_id (FK), concept_id, book_slug, phase (PRESENTING / CARDS / CHECKING / SOCRATIC / COMPLETED); socratic_attempt_count, questions_asked, questions_correct, best_check_score; chunk_index, exam_phase, exam_attempt, exam_scores (JSONB), chunk_progress (JSONB); remediation_context, failed_chunk_ids
+
+- **`conversation_messages`** — UUID id, session_id (FK), role (assistant/user), content, phase, message_order
+
+- **`student_mastery`** — UUID id, student_id (FK), concept_id, mastered_at, session_id (FK); unique on (student_id, concept_id)
+
+- **`card_interactions`** — UUID id, session_id (FK), student_id (FK), concept_id, card_index; telemetry: time_on_card_sec, wrong_attempts, selected_wrong_option, hints_used, idle_triggers; adaptation: adaptation_applied, engagement_signal, strategy_applied, strategy_effective
+
+- **`spaced_reviews`** — UUID id, student_id (FK), concept_id, review_number, due_at, completed_at; unique on (student_id, concept_id, review_number)
+
+- **`concept_chunks`** — UUID id, book_slug, concept_id, section, order_index, heading, text, **embedding Vector(1536)** (pgvector), latex (ARRAY), chunk_type, is_optional, created_at (TIMESTAMPTZ)
+
+- **`chunk_images`** — UUID id, chunk_id (FK → concept_chunks), image_url, caption, order_index
 
 ---
 
 ## Core Architecture
 
-### Hybrid RAG + Graph Engine
+### Hybrid pgvector + Graph Engine
 Every concept query combines two retrieval strategies:
-1. **Semantic search** (ChromaDB) — finds the most relevant concept blocks by embedding similarity
-2. **Graph traversal** (NetworkX) — resolves prerequisites and learning readiness from the DAG
+1. **Semantic search** (pgvector) — queries `concept_chunks.embedding` column in PostgreSQL using cosine similarity
+2. **Graph traversal** (NetworkX) — resolves prerequisites and learning readiness from the DAG loaded from `output/{book_slug}/graph.json`
 
 Results are enriched with student mastery context before being passed to the LLM.
 
-### Pedagogical Loop
-Teaching sessions run through two phases managed by `teaching_service.py`:
-1. **Presentation** — metaphor-based explanation using LLM + knowledge base context
-2. **Socratic Check** — guided questioning; the assistant never gives direct answers
-3. **Mastery threshold** — 70 points (out of 100) required to mark a concept as mastered (constant in `config.py` as `MASTERY_THRESHOLD = 70`)
+### Chunk-Based Pedagogical Loop
+Teaching sessions operate on chunks (ordered sub-sections of a concept), not the whole concept at once:
+1. **Presentation** — metaphor-based explanation of the concept using LLM + knowledge base context
+2. **Cards phase** — cards generated per chunk; 3 cards upfront then each subsequent card generated on demand (per-card adaptive generation)
+3. **Socratic Check** — guided questioning per chunk; the assistant never gives direct answers
+4. **Exam Gate** — mastery assessment after all chunks complete
+5. **Mastery threshold** — 70 points (out of 100) required to mark a concept as mastered (`MASTERY_THRESHOLD = 70` in `config.py`)
+
+### Adaptive Engine
+Each card is shaped by a blended student profile:
+- Cold start (≤2 sections): 80/20 blend toward defaults
+- Warm (3–10 sections): weight shifts toward observed data
+- Acute deviation detection: overrides blending when student state spikes
+- Modes: STRUGGLING / NORMAL / FAST — control token budget (6000 / 5000 / 3000)
 
 ### Data Extraction Pipeline
 ```
 PDF → pdf_reader → text_cleaner → section_detector → content_filter
-    → concept_builder → llm_extractor → ChromaDB + NetworkX graph
-    → image_extractor → Mathpix OCR → image_index.json
+    → chunk_builder → concept_builder → llm_extractor
+    → PostgreSQL (concept_chunks + pgvector embeddings) + NetworkX graph (graph.json)
+    → image_extractor → Mathpix OCR → chunk_images table
 ```
 Supported: 16 OpenStax math textbooks (Prealgebra through Calculus III). Pipeline entry point: `backend/src/pipeline.py`.
 
@@ -203,7 +240,7 @@ docs/{feature-name}/
 ```
 
 #### Stage 2 — Backend (`backend-developer` agent)
-FastAPI endpoints, services, schemas, ChromaDB/NetworkX integrations per DLD.
+FastAPI endpoints, services, schemas, pgvector/NetworkX integrations per DLD.
 
 #### Stage 3 — Testing (`comprehensive-tester` agent)
 Unit + integration + E2E tests. Every test name maps to a business criterion.
@@ -247,14 +284,14 @@ docs/
 ### Frontend (JavaScript/JSX)
 - React 19 functional components only — no class components
 - All API calls go through `src/api/` client wrappers — no direct `fetch`/axios in components
-- State that crosses routes lives in a Context (`src/context/`) — no prop drilling beyond 2 levels
+- State that crosses routes lives in a Context (`src/context/`) or Zustand store (`src/store/`) — no prop drilling beyond 2 levels
 - i18n: all user-visible strings use `useTranslation()` hook — no hardcoded English strings
 - Inline `style={{}}` objects are the primary styling approach for components; Tailwind classes are used for utility tokens only
 - Handle all three UI states: loading, error, and empty
 - Math content renders via KaTeX through `react-markdown` + `remark-math` + `rehype-katex`
 
 ### General
-- Never commit `.env` files, PDF data files (`backend/data/`), or ChromaDB data (`backend/output/`)
+- Never commit `.env` files or PDF data files (`backend/data/`)
 - Never commit secrets, API keys, or credentials
 - No `console.log` or `print()` debug statements in committed code
 - New API endpoints require: Pydantic schema (backend) + Axios wrapper (frontend) + tests
@@ -300,8 +337,7 @@ docs/
 | `is_educational: None` filtered out all images | Changed filter to `is not False` | `teaching_service.py`, `prompts.py` |
 | `_group_by_major_topic()` never called — 57 micro-sections sent to LLM | Now called after `_parse_sub_sections()` — groups into 8-10 topic blocks | `teaching_service.py` |
 | `max_tokens=8000` hardcoded — truncated slow-learner output | Adaptive budget: 8,000–16,000 tokens based on learner profile × section count | `teaching_service.py` |
-| Stale cached cards returned forever despite prompt rebuilds | `cache_version: 2` check forces regeneration when version is behind | `teaching_service.py` |
-| Image filenames in index don't match files on disk | `get_concept_images()` tries indexed name then PDF page-number fallback | `knowledge_service.py` |
+| Stale cached cards returned forever despite prompt rebuilds | `cache_version` check forces regeneration when version is behind | `teaching_service.py` |
 | Card completeness not enforced — LLM skipped sections | Numbered section checklist appended to user prompt + CARD DENSITY instructions | `prompts.py` |
 | Blank screen when card index out of bounds | `if (!card) return null` replaced with loading/error UI | `CardLearningView.jsx` |
 | `NEXT_CARD` had no bounds check — index drifted past cards.length | Added `Math.min` clamp to NEXT_CARD reducer | `SessionContext.jsx` |
@@ -341,19 +377,6 @@ docs/
 | Vite proxy pointed to wrong port (8891) | Fixed proxy to port 8889 | `vite.config.js` |
 | 10/12 simulation tests failing | All 12/12 now passing | `test_student_simulations.py` |
 
-### ✅ Production Cleanup (2026-03-16)
-
-| Action | Detail |
-|---|---|
-| Removed `backend/tests/` | All pytest test files deleted (dev-only) |
-| Removed `frontend/e2e/` | All Playwright E2E specs and helpers deleted |
-| Removed `frontend/playwright.config.js` | Playwright config deleted |
-| Removed `frontend/test-results/` | All test run artifacts deleted |
-| Removed `backend/scripts/test_cards*.py` | Debug scripts deleted |
-| Removed stale nested `.claude/` dirs | `backend/.claude/`, `backend/src/.claude/`, `frontend/.claude/` deleted |
-| DB wiped | All 826 test students + cascaded data deleted |
-| Ports standardized | Everything on port 8889; `FRONTEND_URL` trimmed to `http://localhost:5173` |
-
 ### ✅ Real Student Readiness Fixes (2026-03-16)
 
 | Issue | Fix Applied | File |
@@ -390,19 +413,17 @@ docs/
 
 | Issue | File | Priority |
 |---|---|---|
-| `Base.metadata.create_all()` instead of Alembic | `backend/src/db/connection.py:29` | Critical |
 | No Dockerfile | — | Critical |
 | No `docker-compose.yml` | — | Critical |
 | No CI/CD pipeline | — | Critical |
 | No frontend unit test framework (no vitest/jest) | `frontend/package.json` | High |
-| `backend/src/models.py` duplicates `db/models.py` | `backend/src/models.py` | Low |
 
 ### 🏗️ Out of Scope (Architectural — Defer)
 
-- **ChromaDB local storage**: Cannot scale horizontally. Requires Chroma Cloud / Pinecone / Weaviate.
 - **Translation cache persistence**: Per-worker dict; use PostgreSQL `concept_translations` table for multi-worker.
 - **Circuit breaker for OpenAI**: Requires `tenacity` library.
 - **C1 Per-student authorization**: Full COPPA/FERPA compliance requires auth middleware overhaul.
+- **pgvector horizontal scaling**: Single RDS instance; migrate to managed vector DB (Pinecone/Weaviate) for multi-region.
 
 ---
 
@@ -430,15 +451,15 @@ npm run dev
 
 ### Database (initial setup)
 ```bash
-# Until Alembic is initialized, the DB tables are created on first backend start
-# Once Alembic is set up by the devops-engineer, use:
+# Tables are created on first backend start via init_db()
+# For schema changes, use Alembic:
 cd backend
 alembic upgrade head
 ```
 
 ### Data Extraction Pipeline
 ```bash
-# Run once per textbook to populate ChromaDB + graph
+# Run once per textbook to populate PostgreSQL chunks (pgvector) + graph.json
 cd backend
 python -m src.pipeline --book prealgebra
 ```
@@ -450,22 +471,25 @@ python -m src.pipeline --book prealgebra
 | File | Purpose |
 |---|---|
 | `backend/src/api/main.py` | FastAPI app entrypoint, CORS, lifespan, routers |
-| `backend/src/api/knowledge_service.py` | RAG + graph query orchestration |
+| `backend/src/api/chunk_knowledge_service.py` | pgvector semantic search + graph traversal (primary knowledge retrieval) |
 | `backend/src/api/teaching_service.py` | Pedagogical loop (presentation + Socratic check) + card generation |
 | `backend/src/api/prompts.py` | All LLM system prompts — card generation, Socratic, adaptive |
-| `backend/src/api/teaching_schemas.py` | Pydantic request/response schemas including `RegenerateMCQRequest` |
-| `backend/src/api/teaching_router.py` | All `/api/v2/sessions/` endpoints including `regenerate-mcq` |
-| `backend/src/db/models.py` | SQLAlchemy ORM tables |
+| `backend/src/api/teaching_schemas.py` | Pydantic request/response schemas |
+| `backend/src/api/teaching_router.py` | All `/api/v2/sessions/` endpoints |
+| `backend/src/db/models.py` | SQLAlchemy ORM tables (8 tables including pgvector column) |
 | `backend/src/config.py` | All constants: paths, model names, thresholds, book slugs |
 | `backend/src/adaptive/adaptive_engine.py` | Adaptive learning engine: student profiling, XP, card difficulty |
 | `backend/src/adaptive/prompt_builder.py` | Single-card adaptive prompt builder |
+| `backend/src/adaptive/adaptive_router.py` | Adaptive learning endpoints |
 | `frontend/src/App.jsx` | Root component with React Router routes |
-| `frontend/src/pages/ConceptMapPage.jsx` | Dependency graph visualization (Sigma) |
 | `frontend/src/pages/LearningPage.jsx` | Teaching session interface |
-| `frontend/src/context/` | StudentContext, SessionContext, ThemeContext |
+| `frontend/src/pages/ConceptMapPage.jsx` | Dependency graph visualization (Sigma + graphology) |
+| `frontend/src/context/SessionContext.jsx` | Session state machine (phases, cards, Socratic, chunks) |
+| `frontend/src/context/StudentContext.jsx` | Student profile, mastery, XP state |
 | `frontend/src/components/learning/CardLearningView.jsx` | Card-based lesson UI: MCQ, mastery bar, diagram rendering |
-| `frontend/src/components/learning/MathDiagram.jsx` | SVG renderer for `[MATH_DIAGRAM:type:params]` markers |
+| `frontend/src/components/learning/SocraticChat.jsx` | Chat-based Socratic assessment |
 | `frontend/src/api/sessions.js` | Axios wrappers for all session endpoints |
+| `frontend/src/store/adaptiveStore.js` | Zustand store for adaptive mode state |
 | `docs/` | All HLD/DLD/execution-plan artifacts (source of truth for design) |
 | `.claude/agents/` | Subagent definitions for the 5-agent workflow |
 | `.claude/agent-memory/` | Persistent per-agent memory (do not delete) |

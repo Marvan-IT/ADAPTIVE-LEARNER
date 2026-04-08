@@ -69,6 +69,19 @@ def download_image(cdn_url: str, images_dir: Path) -> str:
         logger.debug("Image already cached: %s", local_filename)
         return local_filename
 
+    # Handle local relative paths from book.mmd (e.g. ./images/{uuid}.jpg)
+    # Actual image files live in mathpix_extracted/, not images/
+    if cdn_url.startswith("./"):
+        filename = Path(cdn_url).name
+        source = images_dir.parent / "mathpix_extracted" / filename
+        if source.exists():
+            import shutil
+            shutil.copy2(source, local_path)
+            logger.debug("Copied local image: %s → %s", filename, local_filename)
+        else:
+            logger.warning("Local image not found in mathpix_extracted/: %s", filename)
+        return local_filename
+
     logger.debug("Downloading image: %s → %s", cdn_url[:80], local_filename)
     try:
         r = requests.get(cdn_url, timeout=30)

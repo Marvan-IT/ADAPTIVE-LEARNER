@@ -44,6 +44,7 @@ SUBHEADING_PATTERN = re.compile(r"^##\s+(.+)$", re.MULTILINE)
 
 # CDN image URLs produced by Mathpix
 IMAGE_URL_PATTERN = re.compile(r"!\[\]\((https://cdn\.mathpix\.com/[^)]+)\)")
+LOCAL_IMAGE_PATTERN = re.compile(r"!\[\]\((\.\/images\/[^)]+)\)")
 
 # Inline ($…$) and block ($$…$$) LaTeX — block must be checked first
 LATEX_PATTERN = re.compile(r"\$\$(.+?)\$\$|\$(.+?)\$", re.DOTALL)
@@ -216,8 +217,8 @@ def _extract_latex(text: str) -> list[str]:
 
 
 def _extract_image_urls(text: str) -> list[str]:
-    """Return all CDN image URLs found in text, in order of appearance."""
-    return IMAGE_URL_PATTERN.findall(text)
+    """Return all image refs found in text — Mathpix CDN URLs or local ./images/ paths."""
+    return IMAGE_URL_PATTERN.findall(text) + LOCAL_IMAGE_PATTERN.findall(text)
 
 
 def _word_count(text: str) -> int:

@@ -107,33 +107,6 @@ class PresentationResponse(BaseModel):
     latex_expressions: list[str] = Field(default_factory=list, description="Key LaTeX formulas")
 
 
-class SocraticResponse(BaseModel):
-    session_id: UUID
-    response: str
-    phase: str
-    check_complete: bool
-    score: int | None = None
-    mastered: bool | None = None
-    exchange_count: int
-    xp_awarded: int | None = None       # Populated only when check_complete=True
-    remediation_needed: bool = False    # True when session moves to REMEDIATING phase
-    attempt: int = 0                    # socratic_attempt_count at time of response
-    locked: bool = False                # True would mean permanently locked (not used currently)
-    best_score: int | None = None       # Best score across all attempts
-    image: dict | None = None           # Exact card image if AI referenced one; None otherwise
-
-
-class RemediationCardsResponse(BaseModel):
-    cards: list[dict]
-    session_phase: str
-
-
-class RecheckResponse(BaseModel):
-    response: str
-    phase: str
-    attempt: int
-
-
 class MessageResponse(BaseModel):
     role: str
     content: str
@@ -291,14 +264,6 @@ class CardInteractionRecord(BaseModel):
         return result
 
 
-class CardHistoryResponse(BaseModel):
-    """Response for GET /api/v2/students/{student_id}/card-history."""
-
-    student_id: str
-    total_returned: int
-    interactions: list[CardInteractionRecord]
-
-
 # ── Analytics Schemas ─────────────────────────────────────────────────────────
 
 class MasteryEvent(BaseModel):
@@ -337,19 +302,6 @@ class ConceptReadinessResponse(BaseModel):
     concept_id: str
     all_prerequisites_met: bool
     unmet_prerequisites: list[UnmetPrerequisite]
-
-
-# ── Section Completion Schemas ─────────────────────────────────────────────────
-
-class SectionCompleteRequest(BaseModel):
-    concept_id: str
-    state_score: float = 2.0  # numeric state score for this section (1.0-3.0)
-
-
-class SectionCompleteResponse(BaseModel):
-    section_count: int
-    avg_state_score: float
-    state_distribution: dict
 
 
 # ── Chunk-Based Card Generation Schemas ───────────────────────────────────────
@@ -451,70 +403,9 @@ class ChunkListResponse(BaseModel):
     translated:          bool = False  # True when headings were just translated on language change
 
 
-class CompleteChunkItemRequest(BaseModel):
-    """Body for POST /sessions/{id}/chunks/{chunk_id}/complete.
-    No score required — this is a pure bookmark/completion call."""
-    pass
-
-
 class CompleteChunkItemResponse(BaseModel):
     chunk_id:           str
     next_chunk_id:      str | None  # None if this was the last study chunk
     all_study_complete: bool        # True → unlock exam gate
 
 
-# ── Exam Schemas ───────────────────────────────────────────────────────────────
-
-class ExamStartRequest(BaseModel):
-    concept_id: str
-
-
-class ExamQuestion(BaseModel):
-    question_index: int
-    chunk_id:       str
-    chunk_heading:  str
-    question_text:  str
-
-
-class ExamStartResponse(BaseModel):
-    exam_id:         str                 # session_id as string
-    questions:       list[ExamQuestion]
-    total_questions: int
-    pass_threshold:  float               # CHUNK_EXAM_PASS_RATE constant
-
-
-class ExamAnswer(BaseModel):
-    question_index: int
-    answer_text:    str
-
-
-class ExamSubmitRequest(BaseModel):
-    answers: list[ExamAnswer]
-
-
-class PerChunkScore(BaseModel):
-    chunk_id: str
-    heading:  str
-    score:    float
-
-
-class ExamSubmitResponse(BaseModel):
-    score:            float               # overall fraction correct (0.0–1.0)
-    passed:           bool                # score >= CHUNK_EXAM_PASS_RATE
-    total_correct:    int
-    total_questions:  int
-    per_chunk_scores: dict[str, float]   # chunk_id -> score fraction
-    failed_chunks:    list[PerChunkScore]
-    exam_attempt:     int
-    retry_options:    list[str]          # ["targeted", "full_redo"] or ["full_redo"]
-
-
-class ExamRetryRequest(BaseModel):
-    retry_type:       str            # "targeted" or "full_redo"
-    failed_chunk_ids: list[str] = []
-
-
-class ExamRetryResponse(BaseModel):
-    retry_chunks: list[ChunkSummary]
-    exam_phase:   str   # "retry_study" or "retry_exam"
-    exam_attempt: int

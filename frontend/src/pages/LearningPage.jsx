@@ -3,10 +3,10 @@ import { useTranslation } from "react-i18next";
 import { useParams, useNavigate } from "react-router-dom";
 import { useSession } from "../context/SessionContext";
 import { useStudent } from "../context/StudentContext";
+import { useTheme } from "../context/ThemeContext";
 import ProgressBar from "../components/learning/ProgressBar";
 import VerticalProgressRail from "../components/learning/VerticalProgressRail";
 import CardLearningView from "../components/learning/CardLearningView";
-import SocraticChat from "../components/learning/SocraticChat";
 import CompletionView from "../components/learning/CompletionView";
 import { trackEvent } from "../utils/analytics";
 import { AlertCircle, LogOut, MapPin } from "lucide-react";
@@ -27,6 +27,7 @@ export default function LearningPage() {
     startChunk, dispatch, loading,
   } = useSession();
   const { student } = useStudent();
+  const { style: globalStyle } = useTheme();
 
   const [prereqWarning, setPrereqWarning] = useState(null);
   const [prereqChecked, setPrereqChecked] = useState(false);
@@ -34,7 +35,7 @@ export default function LearningPage() {
 
   // Per-chunk picker state
   const [selectedChunkId, setSelectedChunkId] = useState(null);
-  const [chunkStyle, setChunkStyle] = useState("default");
+  const [chunkStyle, setChunkStyle] = useState(globalStyle || "default");
   const [chunkInterests, setChunkInterests] = useState([]);
   const [chunkInterestInput, setChunkInterestInput] = useState("");
 
@@ -292,7 +293,7 @@ export default function LearningPage() {
         setSelectedChunkId(null); // collapse if already open
       } else {
         setSelectedChunkId(chunkId);
-        setChunkStyle("default");
+        setChunkStyle(globalStyle || "default");
         setChunkInterests([]);
         setChunkInterestInput("");
       }
@@ -688,6 +689,45 @@ export default function LearningPage() {
                         marginBottom: "8px",
                       }}>
                         {t("customize.interests", "Interests")} <span style={{ fontWeight: 400, textTransform: "none", letterSpacing: 0 }}>(optional — makes examples fun)</span>
+                      </div>
+                      {/* Preset interest chips */}
+                      <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", marginBottom: "8px" }}>
+                        {[
+                          { id: "Sports", emoji: "⚽" },
+                          { id: "Gaming", emoji: "🎮" },
+                          { id: "Music", emoji: "🎵" },
+                          { id: "Movies", emoji: "🎬" },
+                          { id: "Food", emoji: "🍕" },
+                          { id: "Animals", emoji: "🐾" },
+                          { id: "Space", emoji: "🚀" },
+                          { id: "Technology", emoji: "💻" },
+                          { id: "Art", emoji: "🎨" },
+                          { id: "Nature", emoji: "🌿" },
+                        ].map(({ id, emoji }) => {
+                          const selected = chunkInterests.includes(id);
+                          return (
+                            <button
+                              key={id}
+                              onClick={() => setChunkInterests((prev) =>
+                                selected ? prev.filter((i) => i !== id) : [...new Set([...prev, id])]
+                              )}
+                              style={{
+                                padding: "4px 10px",
+                                borderRadius: "9999px",
+                                border: selected
+                                  ? "2px solid var(--color-primary)"
+                                  : "1.5px solid var(--color-border-strong, var(--color-border))",
+                                background: selected ? "var(--color-primary-light)" : "transparent",
+                                color: selected ? "var(--color-primary)" : "var(--color-text-muted)",
+                                fontSize: "12px", fontWeight: 600,
+                                cursor: "pointer", fontFamily: "inherit",
+                                transition: "all 0.15s",
+                              }}
+                            >
+                              {emoji} {id}
+                            </button>
+                          );
+                        })}
                       </div>
                       <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginBottom: chunkInterests.length > 0 ? "8px" : 0 }}>
                         {chunkInterests.map((interest) => (

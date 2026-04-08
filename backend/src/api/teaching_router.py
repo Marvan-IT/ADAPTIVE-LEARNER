@@ -28,9 +28,6 @@ from config import (
     XP_CONSOLATION,
     DEFAULT_BOOK_SLUG,
     CHUNK_EXAM_PASS_RATE,
-    CHUNK_EXAM_QUESTIONS_PER_CHUNK,
-    CHUNK_MAX_TOKENS_EXAM_Q,
-    CHUNK_MAX_TOKENS_EXAM_EVAL,
     OPENAI_MODEL_MINI,
 )
 from adaptive.adaptive_engine import build_blended_analytics, load_student_history
@@ -42,18 +39,15 @@ from api.teaching_schemas import (
     CreateStudentRequest, StudentResponse,
     StartSessionRequest, SessionResponse,
     PresentationResponse,
-    StudentResponseRequest, SocraticResponse,
+    StudentResponseRequest,
     SwitchStyleRequest,
     SessionHistoryResponse, MessageResponse,
     CardsResponse, LessonCard,
     AssistRequest, AssistResponse,
     UpdateLanguageRequest,
-    RemediationCardsResponse,
-    RecheckResponse,
     StudentAnalyticsResponse,
     ConceptReadinessResponse,
     RegenerateMCQRequest, RegenerateMCQResponse,
-    SectionCompleteRequest, SectionCompleteResponse,
     UpdateSessionInterestsRequest,
     CompleteCardRequest, CompleteCardResponse,
     ChunkCardsRequest, ChunkCardsResponse,
@@ -66,9 +60,6 @@ from api.teaching_schemas import (
     CompleteChunkItemResponse,
     ChunkSummary, ChunkListResponse,
     StudentLanguageResponse,
-    ExamStartRequest, ExamStartResponse, ExamQuestion,
-    ExamSubmitRequest, ExamSubmitResponse, PerChunkScore,
-    ExamRetryRequest, ExamRetryResponse,
 )
 from api.rate_limiter import limiter
 
@@ -100,8 +91,8 @@ def _get_chunk_type(heading: str, text: str = "") -> str:
     elif any(p in h for p in ("learning objectives", "be prepared", "key terms", "key concepts", "summary")):
         chunk_type = "learning_objective"
 
-    # 3. Optional writing exercise chunks
-    elif "writing exercises" in h:
+    # 3. Optional writing exercise chunks (singular and plural)
+    elif "writing exercise" in h:
         chunk_type = "exercise"
 
     # 4. Required exercise chunks (practice, everyday math, mixed practice)
@@ -677,105 +668,6 @@ async def get_presentation(request: Request, session_id: UUID, db: AsyncSession 
     )
 
 
-@router.post("/sessions/{session_id}/check", response_model=SocraticResponse)
-@limiter.limit("10/minute")
-async def begin_check(request: Request, session_id: UUID, db: AsyncSession = Depends(get_db)):
-    """Transition from Presentation to Socratic Check. Returns first question."""
-    session = await db.get(TeachingSession, session_id)
-    if not session:
-        raise HTTPException(404, "Session not found")
-    if session.phase not in ("PRESENTING", "CARDS_DONE"):
-        raise HTTPException(
-            400, f"Cannot begin check: session is in {session.phase} phase"
-        )
-
-    student = await db.get(Student, session.student_id)
-    first_question, first_image = await teaching_svc.begin_socratic_check(db, session, student)
-
-    return SocraticResponse(
-        session_id=session.id,
-        response=first_question,
-        phase=session.phase,
-        check_complete=False,
-        exchange_count=1,
-        image=first_image,
-    )
-
-
-@router.post("/sessions/{session_id}/respond", response_model=SocraticResponse)
-@limiter.limit("10/minute")
-async def respond_to_check(
-    request: Request,
-    session_id: UUID,
-    req: StudentResponseRequest,
-    db: AsyncSession = Depends(get_db),
-):
-    """Submit student response during Socratic check. Returns AI's next question or completion."""
-    session = await db.get(TeachingSession, session_id)
-    if not session:
-        raise HTTPException(404, "Session not found")
-    if session.phase not in ("CHECKING", "RECHECKING", "RECHECKING_2"):
-        raise HTTPException(
-            400, f"Cannot respond: session is in {session.phase} phase"
-        )
-
-    result = await teaching_svc.handle_student_response(db, session, req.message)
-
-    # Count student exchanges across all check phases (CHECKING, RECHECKING, RECHECKING_2)
-    exchange_result = await db.execute(
-        select(ConversationMessage)
-        .where(ConversationMessage.session_id == session_id)
-        .where(ConversationMessage.phase.in_(["CHECKING", "RECHECKING", "RECHECKING_2"]))
-        .where(ConversationMessage.role == "user")
-    )
-    exchange_count = len(exchange_result.scalars().all())
-
-    # Award XP only when the session truly completes (phase == COMPLETED).
-    # When remediation_needed=True the session moves to REMEDIATING, not COMPLETED,
-    # so no XP is awarded yet — it will be awarded on the final successful (or exhausted) check.
-    xp_awarded = None
-    if result.get("check_complete") and result.get("phase") == "COMPLETED":
-        mastered = result.get("mastered") or False
-        score = result.get("score") or 0
-
-        xp_delta = (
-            XP_MASTERY + (XP_MASTERY_BONUS if score >= XP_MASTERY_BONUS_THRESHOLD else 0)
-            if mastered
-            else XP_CONSOLATION
-        )
-
-        # Fetch the student to get the current streak for the update
-        student_for_xp = await db.get(Student, session.student_id)
-        if student_for_xp is not None:
-            current_streak = student_for_xp.streak or 0
-            new_streak = (current_streak + 1) if mastered else current_streak
-            await _award_xp(
-                student_id=session.student_id,
-                xp_delta=xp_delta,
-                new_streak=new_streak,
-                mastered=mastered,
-                score=score,
-                db=db,
-            )
-        xp_awarded = xp_delta
-
-    return SocraticResponse(
-        session_id=session.id,
-        response=result["response"],
-        phase=result["phase"],
-        check_complete=result["check_complete"],
-        score=result["score"],
-        mastered=result["mastered"],
-        exchange_count=exchange_count,
-        xp_awarded=xp_awarded,
-        remediation_needed=result.get("remediation_needed", False),
-        attempt=result.get("attempt", 0),
-        locked=result.get("locked", False),
-        best_score=result.get("best_score"),
-        image=result.get("image"),
-    )
-
-
 @router.put("/sessions/{session_id}/style")
 @limiter.limit("30/minute")
 async def switch_style(
@@ -1004,11 +896,15 @@ async def generate_chunk_cards(
             _q_system = (
                 "You are a friendly quiz writer for math students. "
                 "Based ONLY on the content provided, generate exactly "
-                f"{_target_q} simple, short question{'s' if _target_q > 1 else ''}. "
-                "Rules:\n"
-                "- Questions must be directly answerable from the content — no inference beyond what is written.\n"
-                "- Ask for a definition, a key fact, or what a term means — simple recall only.\n"
-                "- One sentence per question. No multi-part questions.\n"
+                f"{_target_q} short, direct question{'s' if _target_q > 1 else ''}.\n"
+                "RULES:\n"
+                "- Ask DIRECT questions with ONE clear correct answer.\n"
+                "- GOOD forms: 'Does X include zero — yes or no?', "
+                "'True or false: [simple statement].', "
+                "'What is the name for numbers that start at 1, 2, 3?'\n"
+                "- NEVER use 'explain', 'discuss', 'describe', 'how does X help', "
+                "'what is the significance of' — too abstract.\n"
+                "- Simple vocabulary (age 10–14). One sentence per question.\n"
                 "Return ONLY valid JSON with no markdown: "
                 '{"questions": [{"index": 0, "text": "..."}, ...]}'
             )
@@ -1482,7 +1378,7 @@ def _heading_has_mcq(heading: str) -> bool:
     return not any(pattern in lower for pattern in _NO_MCQ_HEADING_PATTERNS)
 
 
-_OPTIONAL_HEADING_PATTERNS = ("writing exercises",)
+_OPTIONAL_HEADING_PATTERNS = ("writing exercises", "writing exercise")
 
 def _heading_is_optional(heading: str) -> bool:
     h = heading.lower()
@@ -1651,407 +1547,6 @@ async def _call_llm_json(
         if attempt < 3:
             await asyncio.sleep(2 * attempt)
     raise ValueError(f"LLM call failed after 3 attempts: {last_exc}")
-
-
-@router.post(
-    "/sessions/{session_id}/exam/start",
-    response_model=ExamStartResponse,
-    summary="Generate typed-answer exam questions for all chunks",
-)
-@limiter.limit("10/minute")
-async def start_exam(
-    request: Request,
-    session_id: UUID,
-    req: ExamStartRequest,
-    db: AsyncSession = Depends(get_db),
-):
-    """Generate one open-ended question per teaching chunk.
-
-    Questions are stored in session.exam_scores JSONB so submit can evaluate
-    them without re-generating. Sets exam_phase = 'exam'.
-    """
-    session = await db.get(TeachingSession, session_id)
-    if not session:
-        raise HTTPException(404, "Session not found")
-
-    book_slug = session.book_slug or DEFAULT_BOOK_SLUG
-    chunks = await chunk_ksvc.get_chunks_for_concept(db, book_slug, req.concept_id)
-
-    if not chunks:
-        raise HTTPException(404, f"No chunks found for concept '{req.concept_id}'")
-
-    # Filter to teaching and practice chunks as exam source material
-    exam_source_chunks = [
-        c for c in chunks
-        if _get_chunk_type(c["heading"]) in ("teaching", "practice")
-    ]
-
-    if not exam_source_chunks:
-        raise HTTPException(409, "No exam source chunks available for exam")
-
-    llm = teaching_svc.openai
-
-    q_system = (
-        "You are an educational assessor. Generate one open-ended question that tests "
-        "deep understanding of the subsection below. The question must require a "
-        "sentence answer (not a single word or number). "
-        'Return JSON only: {"question": "..."}'
-    )
-
-    questions_data: list[dict] = []
-    exam_questions: list[ExamQuestion] = []
-    global_idx = 0
-
-    for chunk in exam_source_chunks:
-        for _ in range(CHUNK_EXAM_QUESTIONS_PER_CHUNK):
-            user_prompt = f"Heading: {chunk['heading']}\n\n{chunk['text'][:500]}"
-            try:
-                parsed = await _call_llm_json(llm, q_system, user_prompt, CHUNK_MAX_TOKENS_EXAM_Q)
-                question_text = parsed.get("question", "").strip()
-                if not question_text:
-                    raise ValueError("empty question returned")
-            except Exception as exc:
-                logger.error(
-                    "[exam-start] question_gen_failed: session_id=%s chunk_id=%s error=%s",
-                    session_id, chunk["id"], exc,
-                )
-                raise HTTPException(500, f"Question generation failed for chunk '{chunk['heading']}'")
-
-            questions_data.append({
-                "question_index": global_idx,
-                "chunk_id": chunk["id"],
-                "chunk_heading": chunk["heading"],
-                "question_text": question_text,
-            })
-            exam_questions.append(ExamQuestion(
-                question_index=global_idx,
-                chunk_id=chunk["id"],
-                chunk_heading=chunk["heading"],
-                question_text=question_text,
-            ))
-            global_idx += 1
-
-    # Persist questions in session; answers will be filled on submit
-    session.exam_phase = "exam"
-    session.exam_scores = {"questions": questions_data, "answers": {}}
-    await db.commit()
-
-    logger.info(
-        "[exam-start] session_id=%s total_questions=%d",
-        session_id, len(questions_data),
-    )
-
-    return ExamStartResponse(
-        exam_id=str(session_id),
-        questions=exam_questions,
-        total_questions=len(exam_questions),
-        pass_threshold=CHUNK_EXAM_PASS_RATE,
-    )
-
-
-@router.post(
-    "/sessions/{session_id}/exam/submit",
-    response_model=ExamSubmitResponse,
-    summary="Submit typed answers for LLM evaluation",
-)
-@limiter.limit("10/minute")
-async def submit_exam(
-    request: Request,
-    session_id: UUID,
-    req: ExamSubmitRequest,
-    db: AsyncSession = Depends(get_db),
-):
-    """Evaluate student answers via LLM; compute per-chunk and overall scores.
-
-    On pass: inserts StudentMastery row (with race-condition guard).
-    Increments exam_attempt; stores failed_chunk_ids for retry routing.
-    """
-    session = await db.get(TeachingSession, session_id)
-    if not session:
-        raise HTTPException(404, "Session not found")
-
-    stored = session.exam_scores or {}
-    questions_data: list[dict] = stored.get("questions", [])
-
-    if not questions_data:
-        raise HTTPException(400, "No exam questions found — call exam/start first")
-    if len(req.answers) != len(questions_data):
-        raise HTTPException(
-            400,
-            f"Expected {len(questions_data)} answers, received {len(req.answers)}",
-        )
-
-    llm = teaching_svc.openai
-
-    eval_system = (
-        "You are a math educator evaluating a student answer. "
-        "Mark it correct if it demonstrates understanding of the key concept — "
-        "exact wording is not required. "
-        'Return JSON only: {"correct": true or false, "feedback": "one sentence"}'
-    )
-
-    # Build answer lookup by question_index
-    answer_map: dict[int, str] = {a.question_index: a.answer_text for a in req.answers}
-
-    # Per-chunk bookkeeping: each teaching chunk has exactly one question
-    chunk_correct: dict[str, int] = {}   # chunk_id -> 1 (correct) or 0 (wrong)
-    chunk_headings: dict[str, str] = {}  # chunk_id -> heading
-
-    for qdata in questions_data:
-        qidx = qdata["question_index"]
-        chunk_id = qdata["chunk_id"]
-        chunk_heading = qdata["chunk_heading"]
-        chunk_headings[chunk_id] = chunk_heading
-
-        answer_text = answer_map.get(qidx, "").strip()
-
-        user_prompt = (
-            f"Question: {qdata['question_text']}\n"
-            f"Student answer: {answer_text}\n"
-            "Correct if the answer demonstrates understanding of the key concept."
-        )
-        try:
-            parsed = await _call_llm_json(
-                llm, eval_system, user_prompt, CHUNK_MAX_TOKENS_EXAM_EVAL
-            )
-            is_correct = bool(parsed.get("correct", False))
-        except Exception as exc:
-            logger.error(
-                "[exam-submit] eval_failed: session_id=%s q_index=%d error=%s",
-                session_id, qidx, exc,
-            )
-            # Treat evaluation failure as incorrect to avoid inflating scores
-            is_correct = False
-
-        chunk_correct[chunk_id] = 1 if is_correct else 0
-
-    total_questions = len(questions_data)
-    total_correct = sum(chunk_correct.values())
-    score = total_correct / total_questions if total_questions else 0.0
-    passed = score >= CHUNK_EXAM_PASS_RATE
-
-    # Per-chunk score fractions (one question per chunk → binary 0.0 or 1.0)
-    per_chunk_scores: dict[str, float] = {
-        cid: float(correct) for cid, correct in chunk_correct.items()
-    }
-
-    failed_chunks = [
-        PerChunkScore(
-            chunk_id=cid,
-            heading=chunk_headings.get(cid, ""),
-            score=per_chunk_scores[cid],
-        )
-        for cid, sc in per_chunk_scores.items()
-        if sc < 1.0
-    ]
-
-    failed_chunk_id_list = [fc.chunk_id for fc in failed_chunks]
-
-    # Update session
-    new_attempt = (session.exam_attempt or 0) + 1
-    session.exam_attempt = new_attempt
-    session.failed_chunk_ids = failed_chunk_id_list
-
-    # Merge answers into stored state for audit
-    updated_scores = dict(stored)
-    updated_scores["answers"] = answer_map
-    updated_scores["per_chunk_scores"] = per_chunk_scores
-    session.exam_scores = updated_scores
-
-    if passed:
-        session.exam_phase = None
-        session.concept_mastered = True
-        session.phase = "COMPLETED"
-        session.completed_at = datetime.now(timezone.utc)
-
-        # Insert StudentMastery with race-condition guard
-        existing = await db.execute(
-            select(StudentMastery).where(
-                StudentMastery.student_id == session.student_id,
-                StudentMastery.concept_id == session.concept_id,
-            )
-        )
-        existing_mastery = existing.scalar_one_or_none()
-        if existing_mastery:
-            existing_mastery.session_id = session.id
-            existing_mastery.mastered_at = datetime.now(timezone.utc)
-        else:
-            db.add(StudentMastery(
-                student_id=session.student_id,
-                concept_id=session.concept_id,
-                session_id=session.id,
-            ))
-        logger.info(
-            "[exam-submit] PASSED: session_id=%s score=%.2f attempt=%d",
-            session_id, score, new_attempt,
-        )
-    else:
-        logger.info(
-            "[exam-submit] FAILED: session_id=%s score=%.2f attempt=%d failed_chunks=%d",
-            session_id, score, new_attempt, len(failed_chunks),
-        )
-
-    await db.commit()
-
-    # retry_options: targeted is only available if attempt < 3
-    retry_options = ["targeted", "full_redo"] if new_attempt < 3 else ["full_redo"]
-
-    return ExamSubmitResponse(
-        score=round(score, 4),
-        passed=passed,
-        total_correct=total_correct,
-        total_questions=total_questions,
-        per_chunk_scores=per_chunk_scores,
-        failed_chunks=failed_chunks,
-        exam_attempt=new_attempt,
-        retry_options=retry_options,
-    )
-
-
-@router.post(
-    "/sessions/{session_id}/exam/retry",
-    response_model=ExamRetryResponse,
-    summary="Initiate targeted or full-redo retry after a failed exam",
-)
-@limiter.limit("10/minute")
-async def retry_exam(
-    request: Request,
-    session_id: UUID,
-    req: ExamRetryRequest,
-    db: AsyncSession = Depends(get_db),
-):
-    """Set exam_phase to 'retry_study' and return the chunks to re-study.
-
-    targeted: returns only the chunks where the student scored 0.
-    full_redo: returns all chunks for the concept.
-    Targeted retry is blocked after 3 attempts (HTTP 409).
-    """
-    session = await db.get(TeachingSession, session_id)
-    if not session:
-        raise HTTPException(404, "Session not found")
-
-    if req.retry_type not in ("targeted", "full_redo"):
-        raise HTTPException(400, "retry_type must be 'targeted' or 'full_redo'")
-
-    current_attempt = session.exam_attempt or 0
-
-    if req.retry_type == "targeted" and current_attempt >= 3:
-        raise HTTPException(
-            409, "Targeted retry not available after 3 attempts — use full_redo"
-        )
-
-    book_slug = session.book_slug or DEFAULT_BOOK_SLUG
-    all_chunks = await chunk_ksvc.get_chunks_for_concept(db, book_slug, session.concept_id)
-
-    if req.retry_type == "targeted":
-        # Return only the failed chunks identified in the last submit
-        failed_ids: set[str] = set(req.failed_chunk_ids or session.failed_chunk_ids or [])
-        retry_raw = [c for c in all_chunks if c["id"] in failed_ids]
-    else:
-        retry_raw = all_chunks
-
-    # Check image existence for returned chunks
-    if retry_raw:
-        retry_ids = [UUID(c["id"]) for c in retry_raw]
-        img_result = await db.execute(
-            select(ChunkImage.chunk_id)
-            .where(ChunkImage.chunk_id.in_(retry_ids))
-            .distinct()
-        )
-        chunks_with_images: set = {row[0] for row in img_result.fetchall()}
-    else:
-        chunks_with_images = set()
-
-    retry_summaries = [
-        ChunkSummary(
-            chunk_id=c["id"],
-            order_index=c["order_index"],
-            heading=c["heading"],
-            has_images=UUID(c["id"]) in chunks_with_images,
-            has_mcq=_heading_has_mcq(c["heading"]),
-            chunk_type=c.get("chunk_type") or _get_chunk_type(c.get("heading", "")),
-            is_optional=c.get("is_optional", False),
-        )
-        for c in retry_raw
-    ]
-
-    session.exam_phase = "retry_study"
-    await db.commit()
-
-    logger.info(
-        "[exam-retry] session_id=%s retry_type=%s retry_chunks=%d attempt=%d",
-        session_id, req.retry_type, len(retry_summaries), current_attempt,
-    )
-
-    return ExamRetryResponse(
-        retry_chunks=retry_summaries,
-        exam_phase="retry_study",
-        exam_attempt=current_attempt,
-    )
-
-
-@router.post(
-    "/sessions/{session_id}/remediation-cards",
-    response_model=RemediationCardsResponse,
-    summary="Generate targeted re-teaching cards for failed topics",
-)
-@limiter.limit("10/minute")
-async def get_remediation_cards(
-    request: Request,
-    session_id: UUID,
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    Generate remediation cards after a failed Socratic check.
-    Session must be in REMEDIATING or REMEDIATING_2 phase.
-    Returns TEACH + EXAMPLE + RECAP cards focused on the failed topics.
-    """
-    session = await db.get(TeachingSession, session_id)
-    if not session:
-        raise HTTPException(404, "Session not found")
-    if session.phase not in ("REMEDIATING", "REMEDIATING_2"):
-        raise HTTPException(
-            400,
-            f"Cannot generate remediation cards: session is in {session.phase} phase "
-            "(expected REMEDIATING or REMEDIATING_2)"
-        )
-
-    cards = await teaching_svc.generate_remediation_cards(session_id, db)
-    return RemediationCardsResponse(cards=cards, session_phase=session.phase)
-
-
-@router.post(
-    "/sessions/{session_id}/recheck",
-    response_model=RecheckResponse,
-    summary="Begin a new Socratic check focused on previously failed topics",
-)
-@limiter.limit("10/minute")
-async def begin_recheck(
-    request: Request,
-    session_id: UUID,
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    Start a re-check Socratic session after remediation cards have been studied.
-    Session must be in REMEDIATING or REMEDIATING_2 phase.
-    Transitions session to RECHECKING or RECHECKING_2 and returns the opening question.
-    """
-    session = await db.get(TeachingSession, session_id)
-    if not session:
-        raise HTTPException(404, "Session not found")
-    if session.phase not in ("REMEDIATING", "REMEDIATING_2"):
-        raise HTTPException(
-            400,
-            f"Cannot begin recheck: session is in {session.phase} phase "
-            "(expected REMEDIATING or REMEDIATING_2)"
-        )
-
-    result = await teaching_svc.begin_recheck(session_id, db)
-    return RecheckResponse(
-        response=result["response"],
-        phase=result["phase"],
-        attempt=result["attempt"],
-    )
 
 
 @router.post("/sessions/{session_id}/record-interaction")
@@ -2264,62 +1759,6 @@ async def regenerate_mcq_endpoint(
         raise HTTPException(status_code=404, detail="Session not found")
     new_mcq = await teaching_svc.regenerate_mcq(body)
     return RegenerateMCQResponse(question=new_mcq)
-
-
-@router.post("/sessions/{session_id}/section-complete", response_model=SectionCompleteResponse)
-@limiter.limit("60/minute")
-async def complete_section(
-    request: Request,
-    session_id: UUID,
-    body: SectionCompleteRequest,
-    db: AsyncSession = Depends(get_db),
-):
-    """Called when student completes all cards in a section.
-    Increments section_count, recalculates avg_state_score, updates state_distribution.
-    """
-    # 1. Load session to get student_id
-    session = await db.get(TeachingSession, session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    # 2. Load student
-    student = await db.get(Student, session.student_id)
-    if not student:
-        raise HTTPException(status_code=404, detail="Student not found")
-
-    # 3. Increment section_count
-    student.section_count = (student.section_count or 0) + 1
-
-    # 4. Update avg_state_score as rolling average
-    n = student.section_count
-    old_avg = student.avg_state_score or 2.0
-    student.avg_state_score = ((old_avg * (n - 1)) + body.state_score) / n
-
-    # 5. Update state_distribution
-    dist = dict(student.state_distribution or {"struggling": 0, "normal": 0, "fast": 0})
-    if body.state_score < 1.5:
-        dist["struggling"] = dist.get("struggling", 0) + 1
-    elif body.state_score >= 2.5:
-        dist["fast"] = dist.get("fast", 0) + 1
-    else:
-        dist["normal"] = dist.get("normal", 0) + 1
-    student.state_distribution = dist
-
-    await db.commit()
-    await db.refresh(student)
-
-    logger.info(
-        "[section-complete] session_id=%s student_id=%s section_count=%d "
-        "avg_state_score=%.2f state_score=%.2f",
-        session_id, session.student_id, student.section_count,
-        student.avg_state_score, body.state_score,
-    )
-
-    return SectionCompleteResponse(
-        section_count=student.section_count,
-        avg_state_score=student.avg_state_score,
-        state_distribution=student.state_distribution,
-    )
 
 
 @router.get("/sessions/{session_id}/card-interactions")

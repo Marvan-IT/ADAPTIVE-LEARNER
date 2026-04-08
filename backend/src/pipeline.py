@@ -473,6 +473,18 @@ if __name__ == "__main__":
                 await _build_chunks(_book_slug, _mmd_path, session, rebuild=True)
 
         _asyncio.run(_run_chunks())
+
+        # Auto-build graph.json from freshly-saved concept_chunks
+        _graph_path = _OUTPUT_DIR / _book_slug / "graph.json"
+        logger.info("Building graph.json for %s → %s", _book_slug, _graph_path)
+
+        async def _run_graph():
+            async with _async_session_factory() as _graph_session:
+                await _build_graph(_graph_session, _book_slug, _graph_path)
+
+        from extraction.graph_builder import build_graph as _build_graph
+        _asyncio.run(_run_graph())
+        logger.info("graph.json written: %s", _graph_path)
         sys.exit(0)
 
     # Clear Mathpix cache if requested (legacy pipeline only)
