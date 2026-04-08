@@ -20,7 +20,6 @@ from openai import AsyncOpenAI
 
 from config import (
     OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, OPENAI_MODEL_MINI,
-    MASTERY_THRESHOLD, MAX_SOCRATIC_EXCHANGES, SOCRATIC_MAX_ATTEMPTS,
     DEFAULT_BOOK_SLUG, NEXT_CARD_MAX_TOKENS,
     CHUNK_MAX_TOKENS_STRUGGLING, CHUNK_MAX_TOKENS_NORMAL, CHUNK_MAX_TOKENS_FAST, CHUNK_MAX_TOKENS_RECOVERY,
 )
@@ -31,7 +30,7 @@ from api.prompts import (
     build_cards_user_prompt,
     build_assistant_system_prompt,
 )
-from db.models import TeachingSession, ConversationMessage, StudentMastery, Student, SpacedReview, CardInteraction, ConceptChunk
+from db.models import TeachingSession, ConversationMessage, Student, CardInteraction, ConceptChunk
 from api.teaching_schemas import CardMCQ, RegenerateMCQRequest
 
 logger = logging.getLogger(__name__)
@@ -1606,7 +1605,6 @@ class TeachingService:
         )
         from adaptive.schemas import CardBehaviorSignals
         import uuid as _uuid
-        from datetime import datetime, timezone
 
         # 1. Record CardInteraction to DB
         interaction = CardInteraction(
