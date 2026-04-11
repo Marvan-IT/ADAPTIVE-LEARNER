@@ -19,7 +19,7 @@
 - **compare_type=True**: set in `context.configure()` so column type changes are detected by autogenerate
 - **Migration runbook**: `cd backend && alembic upgrade head` | rollback: `alembic downgrade -1`
 - **connection.py init_db()**: replaced `create_all` with a connectivity ping (`SELECT 1`) — no DDL in app startup
-- **Migration chain**: 0001 → e3c02cf4c22e → 92b08c7eb40b → 003 → 004 → 005_add_adaptive_history_columns → 006_chunk_architecture (head)
+- **Migration chain**: 0001 → e3c02cf4c22e → 92b08c7eb40b → 003 → 004 → 005_add_adaptive_history_columns → 006_chunk_architecture → 007_chunk_progress → 008_remove_book_slug_server_default → 009_add_admin_tables (head)
 - **0001 is the baseline**: tables students/teaching_sessions/conversation_messages/student_mastery pre-existed; 0001 uses SELECT 1 no-op + idempotent DO $$ blocks for CHECK constraints
 - See `migrations.md` for detailed migration history
 
@@ -43,7 +43,10 @@
 | `frontend/Dockerfile` | Multi-stage: node:20-alpine builder → nginx:alpine, port 80 |
 | `frontend/nginx.conf` | SPA fallback + /api/ /images/ /static/ proxy to backend:8889 |
 | `docker-compose.yml` (project root) | db (pgvector/pgvector:pg16-alpine) + backend + frontend; postgres_data named volume |
-| `.github/workflows/ci.yml` | backend-lint (ruff) + frontend-build jobs; runs on push/PR to main |
+| `.github/workflows/ci.yml` | backend-lint + frontend-build + deploy jobs; deploy uses appleboy/ssh-action@v1, runs only on push to main after both jobs pass |
+| `scripts/s3_pipeline_poller.py` | SQS poller: S3 PDF download → docker compose exec pipeline → hot-reload webhook; reads ADA_SQS_QUEUE_URL, ADA_S3_BUCKET, ADA_API_SECRET_KEY, ADA_PROJECT_PATH |
+| `scripts/ada-pipeline.service` | systemd unit for the SQS poller; User=ubuntu, EnvironmentFile=scripts/.pipeline.env, RestartSec=30s |
+| `scripts/aws-setup.md` | One-time AWS setup runbook: S3 bucket, SQS queue, S3→SQS notification, IAM instance profile, systemd deploy, GitHub Secrets |
 
 ## Rate Limiting Reference
 
@@ -72,7 +75,7 @@ All endpoints in `teaching_router.py` use `@limiter.limit()`. The `adaptive_rout
 | No rate limit on complete-card endpoint | Done (2026-03-10 health check) |
 | No Dockerfile | Done — backend/Dockerfile + frontend/Dockerfile |
 | No docker-compose.yml | Done — docker-compose.yml at project root |
-| No CI/CD pipeline | Done — .github/workflows/ci.yml (lint + build) |
+| No CI/CD pipeline | Done — .github/workflows/ci.yml (lint + build + deploy to EC2 via SSH) |
 | No frontend test framework (vitest) | Pending |
 | No startup env validation in config.py | Done — validate_required_env_vars() in config.py; called first in lifespan |
 

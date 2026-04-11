@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { useSession } from "../context/SessionContext";
 import { useStudent } from "../context/StudentContext";
 import { useTheme } from "../context/ThemeContext";
@@ -17,6 +17,8 @@ export default function LearningPage() {
   const { t } = useTranslation();
   const { conceptId } = useParams();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const bookSlug = searchParams.get("book_slug") || "prealgebra";
   const {
     phase, startLesson, error, reset,
     session, conceptTitle, currentCardIndex,
@@ -73,7 +75,7 @@ export default function LearningPage() {
         }
       };
 
-      checkConceptReadiness(decodedConceptId, student.id)
+      checkConceptReadiness(decodedConceptId, student.id, bookSlug)
         .then(res => {
           const data = res.data;
           if (!data.all_prerequisites_met && data.unmet_prerequisites.length > 0) {
@@ -1209,7 +1211,6 @@ export default function LearningPage() {
           </div>
         </div>
       )}
-      {phase === "CHECKING" && <SocraticChat />}
       {phase === "COMPLETED" && <CompletionView />}
 
       {/* Remediation phases — cards with remediation banner */}
@@ -1236,10 +1237,7 @@ export default function LearningPage() {
         </div>
       )}
 
-      {/* Re-check phases — Socratic chat with recheck banner */}
-      {(phase === "RECHECKING" || phase === "RECHECKING_2") && (
-        <SocraticChat recheckMode={true} />
-      )}
+
     </div>
   );
 }

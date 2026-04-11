@@ -5,6 +5,7 @@ Tables: students, teaching_sessions, conversation_messages, student_mastery.
 
 import uuid
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     String, Text, Boolean, SmallInteger, Integer, Float, DateTime,
@@ -13,6 +14,9 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import UUID, ARRAY, JSONB, TIMESTAMP as TIMESTAMPTZ
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from pgvector.sqlalchemy import Vector
+
+if TYPE_CHECKING:
+    from auth.models import User
 
 
 class Base(DeclarativeBase):
@@ -58,6 +62,17 @@ class Student(Base):
         nullable=False,
     )
 
+    # ── Auth link ─────────────────────────────────────────────────────────────
+    # Nullable so that legacy Student rows (created before auth was added) are
+    # not broken.  SET NULL on user delete keeps the learning history intact.
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        unique=True,
+    )
+    user: Mapped["User"] = relationship(back_populates="student")
+
     sessions: Mapped[list["TeachingSession"]] = relationship(
         back_populates="student", cascade="all, delete-orphan"
     )
@@ -84,7 +99,7 @@ class TeachingSession(Base):
         nullable=False,
     )
     concept_id: Mapped[str] = mapped_column(String(200), nullable=False)
-    book_slug: Mapped[str] = mapped_column(String(50), default="prealgebra")
+    book_slug: Mapped[str] = mapped_column(String(50))
     phase: Mapped[str] = mapped_column(String(20), default="PRESENTING")
     style: Mapped[str] = mapped_column(String(20), default="default")
     lesson_interests: Mapped[list[str] | None] = mapped_column(ARRAY(String), nullable=True)
@@ -285,3 +300,31 @@ class ChunkImage(Base):
     order_index = Column(Integer, default=0)
 
     chunk = relationship("ConceptChunk", back_populates="images")
+
+
+class Book(Base):
+    __tablename__ = "books"
+
+    id           = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    book_slug    = Column(Text, unique=True, nullable=False)
+    title        = Column(Text, nullable=False)
+    subject      = Column(Text, nullable=False)
+    status       = Column(Text, nullable=False, default="PROCESSING")
+    pdf_filename = Column(Text, nullable=True)
+    created_at   = Column(DateTime(timezone=True), server_default=func.now())
+    published_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class Subject(Base):
+    __tablename__ = "subjects"
+
+    id         = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    slug       = Column(Text, unique=True, nullable=False)
+    label      = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+# Register auth tables with Base.metadata so Alembic autogenerate and
+# SQLAlchemy relationship resolution both see them.  This import must come
+# AFTER the Base class is defined above.
+import auth.models  # noqa: E402, F401

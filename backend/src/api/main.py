@@ -9,11 +9,12 @@ import json
 import logging
 import os
 import secrets
+import subprocess
 import sys
 from pathlib import Path
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -37,8 +38,13 @@ from api.teaching_service import TeachingService
 import api.teaching_router as teaching_router_module
 from adaptive.adaptive_router import router as adaptive_router, cards_router as adaptive_cards_router
 import adaptive.adaptive_router as adaptive_router_module
-from db.connection import init_db, close_db
-from config import OUTPUT_DIR, OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL_MINI, validate_required_env_vars, DEFAULT_BOOK_SLUG
+from api.admin_router import router as admin_router
+from auth.router import router as auth_router
+from sqlalchemy import select, text
+from sqlalchemy.ext.asyncio import AsyncSession
+from db.connection import init_db, close_db, get_db
+from config import OUTPUT_DIR, DATA_DIR, OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL_MINI, validate_required_env_vars
+from extraction.calibrate import derive_slug
 from api.prompts import LANGUAGE_NAMES
 
 
@@ -50,6 +56,9 @@ from api.rate_limiter import limiter  # noqa: E402
 # ── Auth constants ─────────────────────────────────────────────────────
 _API_KEY = os.getenv("API_SECRET_KEY", "")
 _SKIP_AUTH = {"/health", "/docs", "/openapi.json", "/redoc"}
+# Auth endpoints use their own JWT-based security; exclude them from the
+# X-API-Key middleware so browsers can reach them without the internal key.
+_SKIP_AUTH_PREFIXES = ("/images/", "/static/", "/api/v1/auth/")
 
 
 # ── Lifespan: load services once at startup ────────────────────────
@@ -107,6 +116,31 @@ async def lifespan(app: FastAPI):
     )
     _openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
     _load_translation_cache()
+
+    # ── Recover PROCESSING books after restart (handles EC2 crash mid-pipeline) ──
+    try:
+        from db.connection import get_db as _get_db_startup_recover
+        from db.models import Book as _BookModel
+        async for _recover_db in _get_db_startup_recover():
+            _processing = (await _recover_db.execute(
+                select(_BookModel).where(_BookModel.status == "PROCESSING")
+            )).scalars().all()
+            for _bk in _processing:
+                _pdf_matches = list(DATA_DIR.rglob("*.pdf"))
+                _matched = [_p for _p in _pdf_matches if derive_slug(_p.name) == _bk.book_slug]
+                if _matched:
+                    _subj = _matched[0].parent.name.lower()
+                    if _subj == "maths":
+                        _subj = "mathematics"
+                    subprocess.Popen([
+                        sys.executable, "-m", "src.watcher.pipeline_runner",
+                        "--pdf", str(_matched[0]),
+                        "--subject", _subj,
+                    ])
+                    logger.info("[startup] Re-spawned pipeline for PROCESSING book: %s", _bk.book_slug)
+            break
+    except Exception:
+        logger.exception("[startup] PROCESSING recovery check failed")
 
     # ── Self-healing multi-book startup ──────────────────────────────────────────
     # 1. Query DB for all books that have concept_chunks
@@ -170,9 +204,6 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down.")
 
 
-# ── Hot-reload lock (used by lifespan and admin_load_book) ───────────────────
-_reload_lock: asyncio.Lock | None = None
-
 app = FastAPI(
     title="ADA - Adaptive Math Learning API",
     description="Hybrid RAG + Graph engine for adaptive math tutoring",
@@ -195,14 +226,32 @@ app.add_middleware(
 # ── API-key authentication middleware ──────────────────────────────
 @app.middleware("http")
 async def api_key_middleware(request: Request, call_next):
-    """Reject requests missing a valid X-API-Key header, except for public paths."""
+    """Dual-auth middleware: accept either a Bearer JWT or an X-API-Key header.
+
+    Decision order:
+    1. Always allow OPTIONS (CORS pre-flight) and public/auth paths.
+    2. If an `Authorization: Bearer …` header is present, let the request
+       pass through — JWT validation happens at the endpoint level via
+       `Depends(get_current_user)` / `Depends(require_admin)`.
+    3. Otherwise fall back to the legacy X-API-Key check so that the
+       pipeline runner (server-to-server) continues to work unchanged.
+    """
     from config import ENVIRONMENT
     api_key = os.getenv("API_SECRET_KEY", "")
     if (request.method == "OPTIONS"
             or request.url.path in _SKIP_AUTH
-            or request.url.path.startswith("/images/")
-            or request.url.path.startswith("/static/")):
+            or any(request.url.path.startswith(p) for p in _SKIP_AUTH_PREFIXES)):
         return await call_next(request)
+
+    # If the client is presenting a Bearer token, skip the X-API-Key check.
+    # The individual endpoint dependencies (get_current_user / require_admin)
+    # will validate the JWT and reject invalid tokens with a clean 401/403.
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        return await call_next(request)
+
+    # Legacy X-API-Key path — used by the pipeline runner and any tooling
+    # that has not yet been migrated to JWT.
     if not api_key:
         if ENVIRONMENT == "production":
             return JSONResponse(
@@ -223,6 +272,12 @@ app.include_router(teaching_router)
 # ── Week 3: Adaptive Learning Engine router ───────────────────────
 app.include_router(adaptive_router)
 app.include_router(adaptive_cards_router)
+
+# ── Admin Console router ──────────────────────────────────────────
+app.include_router(admin_router)
+
+# ── Auth router ────────────────────────────────────────────────────
+app.include_router(auth_router)
 
 # Serve whole-PDF extracted images (Mathpix /v3/pdf output)
 # Mounted at /static/output/{book_slug}/mathpix_extracted/{filename}
@@ -248,7 +303,7 @@ async def health():
         logger.warning("[health] chunk_count query failed: %s", exc)
     try:
         if _chunk_knowledge_svc:
-            graph_info = _chunk_knowledge_svc.get_graph_info(DEFAULT_BOOK_SLUG)
+            graph_info = _chunk_knowledge_svc.get_graph_info("prealgebra")
             graph_nodes = graph_info["num_nodes"]
             graph_edges = graph_info["num_edges"]
     except Exception as exc:
@@ -267,7 +322,7 @@ async def health():
 
 @app.post("/api/v1/concepts/query", response_model=ConceptQueryResponse)
 @limiter.limit("60/minute")
-async def query_concepts(request: Request, req: ConceptQuery, book_slug: str = DEFAULT_BOOK_SLUG):
+async def query_concepts(request: Request, req: ConceptQuery, book_slug: str = "prealgebra"):
     """
     Semantic search using pgvector similarity.
     Combines PostgreSQL vector search (RAG) with NetworkX prerequisite checking (Graph).
@@ -326,7 +381,7 @@ async def query_concepts(request: Request, req: ConceptQuery, book_slug: str = D
 
 @app.post("/api/v1/concepts/next", response_model=NextConceptsResponse)
 @limiter.limit("60/minute")
-async def next_concepts(request: Request, req: NextConceptsRequest, book_slug: str = DEFAULT_BOOK_SLUG):
+async def next_concepts(request: Request, req: NextConceptsRequest, book_slug: str = "prealgebra"):
     """Given mastered concepts, return all concepts now ready to learn and locked ones."""
     ready = _chunk_knowledge_svc.get_next_concepts(book_slug, req.mastered_concepts)
     locked = _chunk_knowledge_svc.get_locked_concepts(book_slug, req.mastered_concepts)
@@ -338,7 +393,7 @@ async def next_concepts(request: Request, req: NextConceptsRequest, book_slug: s
 
 
 @app.get("/api/v1/concepts/{concept_id}", response_model=ConceptDetailResponse)
-async def get_concept(concept_id: str, book_slug: str = DEFAULT_BOOK_SLUG):
+async def get_concept(concept_id: str, book_slug: str = "prealgebra"):
     """Full detail for a single concept including prerequisites and dependents."""
     from db.connection import get_db as _get_db
     async for _db in _get_db():
@@ -350,7 +405,7 @@ async def get_concept(concept_id: str, book_slug: str = DEFAULT_BOOK_SLUG):
 
 
 @app.get("/api/v1/concepts/{concept_id}/prerequisites")
-async def get_prerequisites(concept_id: str, book_slug: str = DEFAULT_BOOK_SLUG):
+async def get_prerequisites(concept_id: str, book_slug: str = "prealgebra"):
     """All transitive prerequisites for a concept."""
     all_prereqs = _chunk_knowledge_svc.get_all_prerequisites(book_slug, concept_id)
     return {
@@ -365,7 +420,7 @@ async def get_prerequisites(concept_id: str, book_slug: str = DEFAULT_BOOK_SLUG)
 # ═══════════════════════════════════════════════════════════════════
 
 @app.get("/api/v1/concepts/{concept_id}/images")
-async def get_concept_images(concept_id: str, book_slug: str = DEFAULT_BOOK_SLUG):
+async def get_concept_images(concept_id: str, book_slug: str = "prealgebra"):
     """List all extracted images for a concept."""
     from db.connection import get_db as _get_db
     async for _db in _get_db():
@@ -387,7 +442,7 @@ def _require_book(book_slug: str) -> None:
 
 
 @app.get("/api/v1/graph/info", response_model=GraphInfoResponse)
-async def graph_info(book_slug: str = DEFAULT_BOOK_SLUG):
+async def graph_info(book_slug: str = "prealgebra"):
     """Dependency graph statistics."""
     _require_book(book_slug)
     info = _chunk_knowledge_svc.get_graph_info(book_slug)
@@ -401,7 +456,7 @@ async def graph_info(book_slug: str = DEFAULT_BOOK_SLUG):
 
 
 @app.get("/api/v1/graph/nodes")
-async def graph_nodes(book_slug: str = DEFAULT_BOOK_SLUG):
+async def graph_nodes(book_slug: str = "prealgebra"):
     """List all concept nodes with graph properties."""
     _require_book(book_slug)
     nodes = _chunk_knowledge_svc.get_all_nodes(book_slug)
@@ -410,7 +465,7 @@ async def graph_nodes(book_slug: str = DEFAULT_BOOK_SLUG):
 
 @app.post("/api/v1/graph/learning-path", response_model=LearningPathResponse)
 @limiter.limit("60/minute")
-async def learning_path(request: Request, req: LearningPathRequest, book_slug: str = DEFAULT_BOOK_SLUG):
+async def learning_path(request: Request, req: LearningPathRequest, book_slug: str = "prealgebra"):
     """Compute the optimal learning path to reach a target concept."""
     _require_book(book_slug)
     result = _chunk_knowledge_svc.get_learning_path(book_slug, req.target_concept_id, req.mastered_concepts)
@@ -422,7 +477,7 @@ async def learning_path(request: Request, req: LearningPathRequest, book_slug: s
 
 
 @app.get("/api/v1/graph/full")
-async def graph_full(book_slug: str = DEFAULT_BOOK_SLUG):
+async def graph_full(book_slug: str = "prealgebra"):
     """Full graph with nodes and edges for frontend visualization."""
     _require_book(book_slug)
     nodes = _chunk_knowledge_svc.get_all_nodes(book_slug)
@@ -431,7 +486,7 @@ async def graph_full(book_slug: str = DEFAULT_BOOK_SLUG):
 
 
 @app.get("/api/v1/graph/topological-order")
-async def topological_order(book_slug: str = DEFAULT_BOOK_SLUG):
+async def topological_order(book_slug: str = "prealgebra"):
     """Return all concepts in a valid learning sequence."""
     _require_book(book_slug)
     order = _chunk_knowledge_svc.get_topological_order(book_slug)
@@ -439,25 +494,16 @@ async def topological_order(book_slug: str = DEFAULT_BOOK_SLUG):
 
 
 @app.get("/api/v1/books")
-async def list_books_v1():
-    from config import BOOK_REGISTRY
-    from db.connection import get_db as _get_db
-    _slug_to_title = {cfg["book_slug"]: cfg.get("title", cfg["book_slug"]) for cfg in BOOK_REGISTRY.values()}
-    all_slugs = sorted(_slug_to_title.keys())
-    active_books: set[str] = set()
-    try:
-        async for _db in _get_db():
-            active_books = await _chunk_knowledge_svc.get_active_books(_db)
-            break
-    except Exception as exc:
-        logger.warning("[list_books_v1] get_active_books failed: %s", exc)
+async def list_books_v1(db: AsyncSession = Depends(get_db)):
+    from db.models import Book as BookModel
+    rows = (await db.execute(
+        select(BookModel)
+        .where(BookModel.status == "PUBLISHED")
+        .order_by(BookModel.subject, BookModel.title)
+    )).scalars().all()
     return [
-        {
-            "slug": s,
-            "title": _slug_to_title.get(s, s),
-            "processed": s in active_books,
-        }
-        for s in all_slugs
+        {"slug": b.book_slug, "title": b.title, "subject": b.subject, "processed": True}
+        for b in rows
     ]
 
 
@@ -552,58 +598,6 @@ async def translate_concept_titles(request: Request, req: TranslateTitlesRequest
             translations[cid] = title
 
     return {"translations": translations}
-
-
-@app.post("/api/admin/load-book/{book_slug}")
-async def admin_load_book(book_slug: str, request: Request):
-    """
-    Hot-load a newly processed book into the running server without restart.
-    Called automatically by the pipeline poller after --chunks completes.
-    Secured by X-API-Key header (must match API_SECRET_KEY).
-    """
-    if request.headers.get("X-API-Key") != _API_KEY:
-        raise HTTPException(status_code=403, detail="Forbidden")
-
-    global _reload_lock
-    if _reload_lock is None:
-        _reload_lock = asyncio.Lock()
-
-    from extraction.graph_builder import build_graph as _bgfn
-    from db.connection import get_db as _get_db_r
-
-    async with _reload_lock:
-        graph_path = OUTPUT_DIR / book_slug / "graph.json"
-        if not graph_path.exists():
-            logger.info("[load-book] Building graph.json for %s", book_slug)
-            try:
-                async for db in _get_db_r():
-                    await _bgfn(db, book_slug, graph_path)
-                    break
-            except Exception:
-                logger.exception("[load-book] Failed to build graph.json for %s", book_slug)
-                raise HTTPException(500, f"Failed to build graph.json for {book_slug}")
-
-        loop = asyncio.get_event_loop()
-        try:
-            await loop.run_in_executor(None, _chunk_knowledge_svc.preload_graph, book_slug)
-            logger.info("[load-book] Graph preloaded: %s", book_slug)
-        except Exception:
-            logger.exception("[load-book] Failed to preload graph for %s", book_slug)
-
-        book_out_dir = OUTPUT_DIR / book_slug
-        if book_out_dir.exists():
-            try:
-                app.mount(
-                    f"/images/{book_slug}",
-                    StaticFiles(directory=str(book_out_dir)),
-                    name=f"images_{book_slug}",
-                )
-                logger.info("[load-book] Mounted /images/%s", book_slug)
-            except Exception:
-                pass  # Already mounted — not an error
-
-    logger.info("[load-book] Book loaded: %s", book_slug)
-    return {"status": "loaded", "book_slug": book_slug}
 
 
 # ── Run with uvicorn ───────────────────────────────────────────────

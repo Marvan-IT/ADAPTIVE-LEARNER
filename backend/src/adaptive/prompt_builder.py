@@ -41,7 +41,7 @@ Analogy density: ~80%. Numbered steps: ALWAYS — every step on its own numbered
 MCQ: EASY (confidence-building). QUESTION hint: Use a concrete, visual, or real-world description — for counting/quantity topics use dot arrays (● ● ●) or number lines; for other topics use a real-world comparison.
 FUN ENGAGEMENT: Add 1 brief surprising or fun fact (1 sentence) to one card — warm and concept-related.
 COMPLETENESS RULE: Write each definition, formula, and worked example out IN FULL. Never abbreviate, summarize, or say "as shown above." If a chunk contains a 3-step worked example, all 3 steps must appear on the card. Write as much as needed to genuinely teach — do not stop early.
-Tone: warm, patient, encouraging.
+Tone: warm, patient, encouraging. Use simpler vocabulary and shorter sentences. For complex concepts, break them down and use everyday analogies. Repeat key definitions when they're needed for understanding. Be patient and thorough — explain naturally, not as robotic numbered steps.
 JARGON BAN: Never use a math term (e.g. "integer", "denominator", "coefficient") without immediately defining it in simple words a 9-year-old understands. Pattern: plain-English explanation FIRST, math term SECOND.
 MCQ wrong-answer explanation: full step-by-step numbered walkthrough — show exactly what went wrong and the correct path.""",
 
@@ -51,6 +51,7 @@ Language: high school level. Define terms on first use. Analogy density: ~50%.
 Numbered steps: for all worked examples. MCQ: MEDIUM (real understanding, common-mistake distractors).
 FUN ENGAGEMENT: Add 1 real-world application hook to one card where it fits naturally.
 COMPLETENESS RULE: Write each definition, formula, and worked example out IN FULL. Never abbreviate, summarize, or say "as shown above." If a chunk contains a 3-step worked example, all 3 steps must appear on the card. Write as much as needed to genuinely teach — do not stop early.
+Tone: clear and supportive. When explaining concepts, don't just repeat the textbook. Add clarity with simple language and relatable examples. Make complex ideas accessible while staying faithful to the source material. Use a natural, conversational teaching tone.
 QUESTION hint: concrete approach description (not just 'try it').
 MCQ wrong-answer explanation: 2–3 sentence explanation of the correct approach — do NOT shorten card content.
 PROSE QUALITY — NON-NEGOTIABLE:
@@ -64,6 +65,7 @@ Language: technical terminology freely used. 'Why it works' reasoning included.
 ALL procedural steps MUST appear — written as connected technical prose (no "Step 1/2/3" labels).
 MCQ: HARD (edge cases, traps, reversed questions). Analogy density: ~20%. Lead with formula/rule directly.
 FAST means technically denser language and harder MCQs — NOT shorter cards. Write out every definition, formula, and worked example step in full. Never omit or abbreviate a formula or example step.
+Tone: direct and clear. Cover all key concepts concisely but completely. Don't skip important details — just present them efficiently without extra elaboration.
 FUN ENGAGEMENT: Add 1 intellectually stimulating challenge or 'did you know?' to one card — only content that deepens understanding.
 COMPLETENESS RULE: Write each definition, formula, and worked example out IN FULL. Never abbreviate, summarize, or say "as shown above." If a chunk contains a 3-step worked example, all 3 steps must appear on the card. Write as much as needed to genuinely teach — do not stop early.
 Never produce a card with only images and no explanatory text.

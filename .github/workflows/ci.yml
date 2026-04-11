@@ -68,5 +68,5 @@ jobs:
           script: |
             cd ${{ secrets.EC2_PROJECT_PATH }}
             git pull origin main
-            docker compose up --build -d backend frontend
+            docker compose up --build -d backend frontend book-watcher
             docker compose exec -T backend python -m alembic upgrade head

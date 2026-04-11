@@ -5,7 +5,10 @@ Contains all paths, API keys, book registry, and shared constants.
 
 import os
 from pathlib import Path
+from typing import Optional
 from dotenv import load_dotenv
+import yaml as _yaml
+from pydantic import BaseModel
 
 # Load .env from backend directory
 _backend_dir = Path(__file__).resolve().parent.parent
@@ -30,11 +33,29 @@ MATHPIX_APP_KEY = os.getenv("MATHPIX_APP_KEY", "")
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
 
+# ── JWT ───────────────────────────────────────────────────────────────
+JWT_SECRET_KEY: str = os.getenv("JWT_SECRET_KEY", "")
+JWT_ALGORITHM: str = "HS256"
+JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
+JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 30
+
+# ── Email / SMTP ──────────────────────────────────────────────────────
+SMTP_HOST: str = os.getenv("SMTP_HOST", "")
+SMTP_PORT: int = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER: str = os.getenv("SMTP_USER", "")
+SMTP_PASSWORD: str = os.getenv("SMTP_PASSWORD", "")
+SMTP_FROM: str = os.getenv("SMTP_FROM", "")
+
+# ── OTP settings ──────────────────────────────────────────────────────
+OTP_EXPIRE_MINUTES: int = 10
+OTP_RESEND_COOLDOWN_SECONDS: int = 60
+
+# ── Account security ─────────────────────────────────────────────────
+MAX_FAILED_LOGIN_ATTEMPTS: int = 5
+ACCOUNT_LOCKOUT_MINUTES: int = 15
+
 # ── Embedding ──────────────────────────────────────────────────────────
 EMBEDDING_MODEL = "text-embedding-3-small"
-
-# ── Default book ──────────────────────────────────────────────────────────────
-DEFAULT_BOOK_SLUG = "prealgebra"
 
 # ── Adaptive Learning Engine ────────────────────────────────────────────────
 ADAPTIVE_ERROR_PENALTY_WEIGHT: float = 0.4   # Weight for error rate in confidence score
@@ -61,9 +82,9 @@ ADAPTIVE_CARD_MODEL   = OPENAI_MODEL_MINI   # gpt-4o-mini: fast for single-card 
 NEXT_CARD_MAX_TOKENS: int = 1200   # Single card: title + content + 1 MCQ + motivational note
 
 # ── Chunk-based card generation token budgets (per-chunk, per-mode) ────────────
-CHUNK_MAX_TOKENS_STRUGGLING = 6000   # ~6 content+MCQ pairs
-CHUNK_MAX_TOKENS_NORMAL     = 5000   # ~5 content+MCQ pairs
-CHUNK_MAX_TOKENS_FAST       = 3000   # ~2 content+MCQ pairs
+CHUNK_MAX_TOKENS_STRUGGLING = 8000   # room for thorough scaffolded explanations
+CHUNK_MAX_TOKENS_NORMAL     = 6000   # room for clear explanations with examples
+CHUNK_MAX_TOKENS_FAST       = 5000   # enough for complete coverage at technical density
 CHUNK_MAX_TOKENS_RECOVERY   = 800    # single recovery card+MCQ
 
 # ── Socratic exam pass threshold for chunk-based architecture ─────────────────
@@ -89,7 +110,7 @@ CARDS_MAX_TOKENS_FAST_PER_SECTION: int = 3_000   # raised for rolling per-sectio
 # ── XP Award Values ────────────────────────────────────────────────────────────
 XP_MASTERY: int = 50                  # Base XP awarded on concept mastery
 XP_MASTERY_BONUS: int = 25            # Bonus XP when check_score >= XP_MASTERY_BONUS_THRESHOLD
-XP_MASTERY_BONUS_THRESHOLD: int = 90  # Score (0–100) qualifying for mastery bonus
+XP_MASTERY_BONUS_THRESHOLD: int = 90  # Score (0-100) qualifying for mastery bonus
 XP_CONSOLATION: int = 10              # Consolation XP when session completes without mastery
 
 # ── Adaptive Transparency ─────────────────────────────────────────────────────
@@ -99,9 +120,9 @@ CARD_HISTORY_MAX_LIMIT: int = 200        # Hard cap — prevents runaway queries
 
 # ── Deviation-aware blending ──────────────────────────────────────────────────
 ADAPTIVE_MIN_HISTORY_CARDS     = 5    # Minimum cards before history is blended in
-ADAPTIVE_ACUTE_HIGH_TIME_RATIO = 2.0  # time_ratio > this → distraction/illness detected
-ADAPTIVE_ACUTE_LOW_TIME_RATIO  = 0.4  # time_ratio < this → recovery/acceleration detected
-ADAPTIVE_ACUTE_WRONG_RATIO     = 1.8  # wrong_ratio > this → acute struggle detected
+ADAPTIVE_ACUTE_HIGH_TIME_RATIO = 2.0  # time_ratio > this -> distraction/illness detected
+ADAPTIVE_ACUTE_LOW_TIME_RATIO  = 0.4  # time_ratio < this -> recovery/acceleration detected
+ADAPTIVE_ACUTE_WRONG_RATIO     = 1.8  # wrong_ratio > this -> acute struggle detected
 ADAPTIVE_ACUTE_CURRENT_WEIGHT  = 0.9  # Current-signal weight in acute deviation mode
 ADAPTIVE_ACUTE_HISTORY_WEIGHT  = 0.1  # History weight in acute deviation mode
 ADAPTIVE_NORMAL_CURRENT_WEIGHT = 0.6  # Current-signal weight in normal variance mode
@@ -119,7 +140,6 @@ ADAPTIVE_STATE_BLEND_HISTORY_WEIGHT = 0.40
 
 # ── Image serving ─────────────────────────────────────────────────────
 IMAGE_BASE_URL = os.getenv("IMAGE_BASE_URL", "http://localhost:8889/images")
-IMAGE_STORAGE = os.getenv("IMAGE_STORAGE", "local")
 
 # ── Boilerplate patterns to strip (line-level) ─────────────────────────
 BOILERPLATE_PATTERNS = [
@@ -156,275 +176,38 @@ MATHPIX_RATE_LIMIT = 0.5   # Seconds between Mathpix API requests
 # ── Vision annotation settings ────────────────────────────────────────
 VISION_RATE_LIMIT: float = 0.5   # Seconds between GPT-4o Vision API requests
 
-# ── Book-slug to book-code mapping ─────────────────────────────────────
-BOOK_CODE_MAP = {
-    "prealgebra": "PREALG",
-    "elementary_algebra": "ELEMALG",
-    "algebra_1": "ALG1",
-    "intermediate_algebra": "INTERALG",
-    "college_algebra_coreq": "COLALGCRQ",
-    "college_algebra": "COLALG",
-    "algebra_trigonometry": "ALGTRIG",
-    "precalculus": "PRECALC",
-    "calculus_1": "CALC1",
-    "calculus_2": "CALC2",
-    "calculus_3": "CALC3",
-    "intro_statistics": "INSTATS",
-    "statistics": "STATS",
-    "business_statistics": "BUSTATS",
-    "contemporary_math": "CONTMATH",
-    "principles_data_science": "PDS",
-}
+
+class BookConfig(BaseModel):
+    book_code: str
+    book_slug: str
+    pdf_filename: str
+    title: str
+    subject: str
+    section_header_font: Optional[str] = None
+    section_header_size_min: Optional[float] = None
+    section_header_size_max: Optional[float] = None
+    chapter_header_font: Optional[str] = None
+    chapter_header_size_min: Optional[float] = None
+    chapter_header_size_max: Optional[float] = None
+    front_matter_end_page: int = 0
+    section_pattern: Optional[str] = None
+    toc_section_pattern: Optional[str] = None
+    exercise_marker_pattern: Optional[str] = None
 
 
-# ── Book Registry ──────────────────────────────────────────────────────
-# Each entry maps a book_code to its PDF-specific configuration.
-# These values are discovered empirically by inspecting each PDF.
+def _load_book_registry() -> dict:
+    """Load book registry from books.yaml at runtime. Validates each entry with BookConfig."""
+    _yaml_path = BACKEND_DIR / "books.yaml"
+    _data = _yaml.safe_load(_yaml_path.read_text(encoding="utf-8"))
+    registry = {}
+    for b in _data["books"]:
+        cfg = BookConfig(**b)
+        registry[cfg.book_code] = cfg.model_dump()
+    return registry
 
-BOOK_REGISTRY = {
-    "PREALG": {
-        "book_code": "PREALG",
-        "book_slug": "prealgebra",
-        "pdf_filename": "prealgebra.pdf",
-        "title": "Prealgebra 2e",
-        "section_header_font": "RobotoSlab-Bold",
-        "section_header_size_min": 14.0,
-        "section_header_size_max": 14.6,
-        "chapter_header_font": "RobotoSlab-Bold",
-        "chapter_header_size_min": 17.0,
-        "chapter_header_size_max": 17.5,
-        "section_pattern": r"^(\d+)\.(\d+)\s+(.+)",
-        "front_matter_end_page": 16,  # 0-indexed; content starts at index 16
-        "exercise_marker_pattern": r"Section\s+\d+\.\d+\s+Exercises",
-    },
-    "ELEMALG": {
-        "book_code": "ELEMALG",
-        "book_slug": "elementary_algebra",
-        "pdf_filename": "elementary_algebra.pdf",
-        "title": "Elementary Algebra 2e",
-        "section_header_font": "RobotoSlab-Bold",
-        "section_header_size_min": 14.0,
-        "section_header_size_max": 14.6,
-        "chapter_header_font": "RobotoSlab-Bold",
-        "chapter_header_size_min": 17.0,
-        "chapter_header_size_max": 17.5,
-        "section_pattern": r"^(\d+)\.(\d+)\s+(.+)",
-        "front_matter_end_page": 14,
-        "exercise_marker_pattern": r"Section\s+\d+\.\d+\s+Exercises",
-    },
-    "INTERALG": {
-        "book_code": "INTERALG",
-        "book_slug": "intermediate_algebra",
-        "pdf_filename": "intermediate_algebra.pdf",
-        "title": "Intermediate Algebra 2e",
-        "section_header_font": "RobotoSlab-Bold",
-        "section_header_size_min": 14.0,
-        "section_header_size_max": 14.6,
-        "chapter_header_font": "RobotoSlab-Bold",
-        "chapter_header_size_min": 17.0,
-        "chapter_header_size_max": 17.5,
-        "section_pattern": r"^(\d+)\.(\d+)\s+(.+)",
-        "front_matter_end_page": 14,
-        "exercise_marker_pattern": r"Section\s+\d+\.\d+\s+Exercises",
-    },
-    "COLALG": {
-        "book_code": "COLALG",
-        "book_slug": "college_algebra",
-        "pdf_filename": "college_algebra.pdf",
-        "title": "College Algebra 2e",
-        "section_header_font": "RobotoSlab-Bold",
-        "section_header_size_min": 14.0,
-        "section_header_size_max": 14.6,
-        "chapter_header_font": "RobotoSlab-Bold",
-        "chapter_header_size_min": 17.0,
-        "chapter_header_size_max": 17.5,
-        "section_pattern": r"^(\d+)\.(\d+)\s+(.+)",
-        "front_matter_end_page": 14,
-        "exercise_marker_pattern": r"Section\s+\d+\.\d+\s+Exercises",
-    },
-    "COLALGCRQ": {
-        "book_code": "COLALGCRQ",
-        "book_slug": "college_algebra_coreq",
-        "pdf_filename": "college_algebra_corequisite.pdf",
-        "title": "College Algebra with Corequisite Support 2e",
-        "section_header_font": "RobotoSlab-Bold",
-        "section_header_size_min": 14.0,
-        "section_header_size_max": 14.6,
-        "chapter_header_font": "RobotoSlab-Bold",
-        "chapter_header_size_min": 17.0,
-        "chapter_header_size_max": 17.5,
-        "section_pattern": r"^(\d+)\.(\d+)\s+(.+)",
-        "front_matter_end_page": 14,
-        "exercise_marker_pattern": r"Section\s+\d+\.\d+\s+Exercises",
-    },
-    "ALGTRIG": {
-        "book_code": "ALGTRIG",
-        "book_slug": "algebra_trigonometry",
-        "pdf_filename": "algebra_trigonometry.pdf",
-        "title": "Algebra and Trigonometry 2e",
-        "section_header_font": "RobotoSlab-Bold",
-        "section_header_size_min": 14.0,
-        "section_header_size_max": 14.6,
-        "chapter_header_font": "RobotoSlab-Bold",
-        "chapter_header_size_min": 17.0,
-        "chapter_header_size_max": 17.5,
-        "section_pattern": r"^(\d+)\.(\d+)\s+(.+)",
-        "front_matter_end_page": 14,
-        "exercise_marker_pattern": r"Section\s+\d+\.\d+\s+Exercises",
-    },
-    "PRECALC": {
-        "book_code": "PRECALC",
-        "book_slug": "precalculus",
-        "pdf_filename": "precalculus.pdf",
-        "title": "Precalculus 2e",
-        "section_header_font": "RobotoSlab-Bold",
-        "section_header_size_min": 14.0,
-        "section_header_size_max": 14.6,
-        "chapter_header_font": "RobotoSlab-Bold",
-        "chapter_header_size_min": 17.0,
-        "chapter_header_size_max": 17.5,
-        "section_pattern": r"^(\d+)\.(\d+)\s+(.+)",
-        "front_matter_end_page": 14,
-        "exercise_marker_pattern": r"Section\s+\d+\.\d+\s+Exercises",
-    },
-    "CALC1": {
-        "book_code": "CALC1",
-        "book_slug": "calculus_1",
-        "pdf_filename": "calculus_1.pdf",
-        "title": "Calculus Volume 1",
-        "section_header_font": "LiberationSans-Bold",
-        "section_header_size_min": 13.8,
-        "section_header_size_max": 14.4,
-        "chapter_header_font": "LiberationSans-Bold",
-        "chapter_header_size_min": 17.0,
-        "chapter_header_size_max": 17.5,
-        "section_pattern": r"^(\d+)\.(\d+)\s+(.+)",
-        "front_matter_end_page": 14,
-        "exercise_marker_pattern": r"Section\s+\d+\.\d+\s+Exercises",
-    },
-    "CALC2": {
-        "book_code": "CALC2",
-        "book_slug": "calculus_2",
-        "pdf_filename": "calculus_2.pdf",
-        "title": "Calculus Volume 2",
-        "section_header_font": "LiberationSans-Bold",
-        "section_header_size_min": 13.8,
-        "section_header_size_max": 14.4,
-        "chapter_header_font": "LiberationSans-Bold",
-        "chapter_header_size_min": 17.0,
-        "chapter_header_size_max": 17.5,
-        "section_pattern": r"^(\d+)\.(\d+)\s+(.+)",
-        "front_matter_end_page": 14,
-        "exercise_marker_pattern": r"Section\s+\d+\.\d+\s+Exercises",
-    },
-    "CALC3": {
-        "book_code": "CALC3",
-        "book_slug": "calculus_3",
-        "pdf_filename": "calculus_3.pdf",
-        "title": "Calculus Volume 3",
-        "section_header_font": "LiberationSans-Bold",
-        "section_header_size_min": 13.8,
-        "section_header_size_max": 14.4,
-        "chapter_header_font": "LiberationSans-Bold",
-        "chapter_header_size_min": 17.0,
-        "chapter_header_size_max": 17.5,
-        "section_pattern": r"^(\d+)\.(\d+)\s+(.+)",
-        "front_matter_end_page": 14,
-        "exercise_marker_pattern": r"Section\s+\d+\.\d+\s+Exercises",
-    },
-    "INSTATS": {
-        "book_code": "INSTATS",
-        "book_slug": "intro_statistics",
-        "pdf_filename": "intro_statistics.pdf",
-        "title": "Introductory Statistics 2e",
-        "section_header_font": "RobotoSlab-Bold",
-        "section_header_size_min": 14.0,
-        "section_header_size_max": 14.6,
-        "chapter_header_font": "RobotoSlab-Bold",
-        "chapter_header_size_min": 17.0,
-        "chapter_header_size_max": 17.5,
-        "section_pattern": r"^(\d+)\.(\d+)\s+(.+)",
-        "front_matter_end_page": 14,
-        "exercise_marker_pattern": r"Section\s+\d+\.\d+\s+Exercises",
-    },
-    "STATS": {
-        "book_code": "STATS",
-        "book_slug": "statistics",
-        "pdf_filename": "statistics.pdf",
-        "title": "Introductory Statistics",
-        "section_header_font": "LiberationSans-Bold",
-        "section_header_size_min": 13.8,
-        "section_header_size_max": 14.4,
-        "chapter_header_font": "LiberationSans-Bold",
-        "chapter_header_size_min": 17.0,
-        "chapter_header_size_max": 17.5,
-        "section_pattern": r"^(\d+)\.(\d+)\s+(.+)",
-        "front_matter_end_page": 14,
-        "exercise_marker_pattern": r"Section\s+\d+\.\d+\s+Exercises",
-    },
-    "BUSTATS": {
-        "book_code": "BUSTATS",
-        "book_slug": "business_statistics",
-        "pdf_filename": "business_statistics.pdf",
-        "title": "Introductory Business Statistics 2e",
-        "section_header_font": "RobotoSlab-Bold",
-        "section_header_size_min": 14.0,
-        "section_header_size_max": 14.6,
-        "chapter_header_font": "RobotoSlab-Bold",
-        "chapter_header_size_min": 17.0,
-        "chapter_header_size_max": 17.5,
-        "section_pattern": r"^(\d+)\.(\d+)\s+(.+)",
-        "front_matter_end_page": 14,
-        "exercise_marker_pattern": r"Section\s+\d+\.\d+\s+Exercises",
-    },
-    "CONTMATH": {
-        "book_code": "CONTMATH",
-        "book_slug": "contemporary_math",
-        "pdf_filename": "contemporary_maths.pdf",
-        "title": "Contemporary Mathematics",
-        "section_header_font": "RobotoSlab-Bold",
-        "section_header_size_min": 14.0,
-        "section_header_size_max": 14.6,
-        "chapter_header_font": "RobotoSlab-Bold",
-        "chapter_header_size_min": 17.0,
-        "chapter_header_size_max": 17.5,
-        "section_pattern": r"^(\d+)\.(\d+)\s+(.+)",
-        "front_matter_end_page": 14,
-        "exercise_marker_pattern": r"Section\s+\d+\.\d+\s+Exercises",
-    },
-    "ALG1": {
-        "book_code": "ALG1",
-        "book_slug": "algebra_1",
-        "pdf_filename": "algebra_1.pdf",
-        "title": "Algebra 1",
-        "section_header_font": "RobotoSlab-Bold",
-        "section_header_size_min": 14.0,
-        "section_header_size_max": 14.6,
-        "chapter_header_font": "RobotoSlab-Bold",
-        "chapter_header_size_min": 17.0,
-        "chapter_header_size_max": 17.5,
-        "section_pattern": r"^(\d+)\.(\d+)\s+(.+)",
-        # ALG1 PDF TOC uses "Lesson N.N Title" format instead of bare "N.N Title"
-        "toc_section_pattern": r"^Lesson\s+(\d+)\.(\d+)\s+(.+)",
-        "front_matter_end_page": 14,
-        "exercise_marker_pattern": r"Section\s+\d+\.\d+\s+Exercises",
-    },
-    "PDS": {
-        "book_code": "PDS",
-        "book_slug": "principles_data_science",
-        "pdf_filename": "principles_data_science.pdf",
-        "title": "Principles of Data Science",
-        "section_header_font": "RobotoCondensed-Bold",
-        "section_header_size_min": 15.0,
-        "section_header_size_max": 16.0,
-        "chapter_header_font": "RobotoCondensed-Bold",
-        "chapter_header_size_min": 17.0,
-        "chapter_header_size_max": 18.0,
-        "section_pattern": r"^(\d+)\.(\d+)\s+(.+)",
-        "front_matter_end_page": 14,
-        "exercise_marker_pattern": r"Section\s+\d+\.\d+\s+Exercises",
-    },
-}
+
+BOOK_REGISTRY = _load_book_registry()
+BOOK_CODE_MAP = {b["book_slug"]: b["book_code"] for b in BOOK_REGISTRY.values()}
 
 
 def get_book_config(book_code: str) -> dict:
@@ -449,6 +232,8 @@ if ENVIRONMENT == "production":
     _API_SECRET_KEY_VAL = os.getenv("API_SECRET_KEY", "")
     if not _API_SECRET_KEY_VAL:
         _REQUIRED_ENV_VARS["API_SECRET_KEY"] = ""
+    if not JWT_SECRET_KEY:
+        _REQUIRED_ENV_VARS["JWT_SECRET_KEY"] = ""
 
 def validate_required_env_vars() -> None:
     """Raise ValueError with a clear message if required env vars are missing."""

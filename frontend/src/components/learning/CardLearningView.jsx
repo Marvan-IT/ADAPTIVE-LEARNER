@@ -20,6 +20,7 @@ import {
 import { useAdaptiveStore } from "../../store/adaptiveStore";
 import { updateStudentProgress } from "../../api/students";
 import { regenerateMCQ } from "../../api/sessions";
+import { resolveImageUrl } from "../../api/client";
 import { useStudent } from "../../context/StudentContext";
 import XPBurst from "../game/XPBurst";
 import StreakMeter from "../game/StreakMeter";
@@ -675,7 +676,7 @@ export default function CardLearningView({ remediationMode = false }) {
             {card?.image_url && (
               <div style={{ margin: "16px 0", textAlign: "center" }}>
                 <img
-                  src={card.image_url}
+                  src={resolveImageUrl(card.image_url)}
                   alt={card.caption || "Diagram"}
                   style={{ maxWidth: "100%", maxHeight: "400px", borderRadius: "8px", objectFit: "contain" }}
                 />

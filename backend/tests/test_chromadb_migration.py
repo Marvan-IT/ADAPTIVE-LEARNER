@@ -429,7 +429,7 @@ class TestChunkKnowledgeServiceConceptDetail:
         svc = ChunkKnowledgeService()
         chunk = self._make_orm_chunk()
         img = MagicMock()
-        img.image_url = "http://localhost:8889/images/prealgebra/images_downloaded/abc.jpg"
+        img.image_url = "/images/prealgebra/images_downloaded/abc.jpg"
         img.caption = "Figure 1.1"
         img.order_index = 0
         mock_db = self._make_mock_db([chunk], images=[img])
@@ -442,7 +442,7 @@ class TestChunkKnowledgeServiceConceptDetail:
         svc = ChunkKnowledgeService()
         chunk = self._make_orm_chunk()
         img = MagicMock()
-        img.image_url = "http://localhost:8889/images/prealgebra/images_downloaded/test.jpg"
+        img.image_url = "/images/prealgebra/images_downloaded/test.jpg"
         img.caption = "Test caption"
         img.order_index = 0
         mock_db = self._make_mock_db([chunk], images=[img])

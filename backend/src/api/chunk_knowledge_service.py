@@ -19,6 +19,15 @@ from config import OUTPUT_DIR
 logger = logging.getLogger(__name__)
 
 
+def _normalize_image_url(url: str) -> str:
+    if not url:
+        return url
+    idx = url.find("/images/")
+    if idx > 0:
+        return url[idx:]
+    return url
+
+
 _graph_cache: dict[str, nx.DiGraph] = {}
 
 
@@ -87,7 +96,7 @@ class ChunkKnowledgeService:
             .order_by(ChunkImage.order_index)
         )
         images = result.scalars().all()
-        return [{"image_url": img.image_url, "caption": img.caption} for img in images]
+        return [{"image_url": _normalize_image_url(img.image_url), "caption": img.caption} for img in images]
 
     async def get_active_books(self, db: AsyncSession) -> set[str]:
         """Return set of book_slugs that have concept_chunks rows."""
@@ -122,7 +131,8 @@ class ChunkKnowledgeService:
     # ── Graph methods (sync) ──────────────────────────────────────────────────
 
     def preload_graph(self, book_slug: str) -> None:
-        """Preload graph into module cache at startup."""
+        """Preload graph into module cache, clearing any stale cached version."""
+        _graph_cache.pop(book_slug, None)
         _load_graph(book_slug)
 
     def get_all_nodes(self, book_slug: str) -> list[dict]:
@@ -295,8 +305,8 @@ class ChunkKnowledgeService:
             .order_by(ChunkImage.order_index)
         )
         images = [
-            {"image_url": img.image_url, "caption": img.caption,
-             "url": img.image_url, "filename": (img.image_url or "").split("/")[-1],
+            {"image_url": _normalize_image_url(img.image_url), "caption": img.caption,
+             "url": _normalize_image_url(img.image_url), "filename": (img.image_url or "").split("/")[-1],
              "width": 0, "height": 0, "image_type": "figure",
              "page": 0, "description": img.caption or "", "relevance": "relevant"}
             for img in img_result.scalars().all()

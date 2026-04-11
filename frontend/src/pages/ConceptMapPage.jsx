@@ -17,23 +17,38 @@ import {
 
 export default function ConceptMapPage() {
   const { t } = useTranslation();
-  const [selectedBook, setSelectedBook] = useState("prealgebra");
+  const [selectedBook, setSelectedBook] = useState(null);
+  const [selectedSubject, setSelectedSubject] = useState(null);
   const [availableBooks, setAvailableBooks] = useState([]);
+  const [booksLoaded, setBooksLoaded] = useState(false);
   const { nodes, edges, nodeStatuses, loading, error } = useConceptMap(selectedBook);
   const { student, masteredConcepts } = useStudent();
   const [selectedNode, setSelectedNode] = useState(null);
   const [reviewDueConcepts, setReviewDueConcepts] = useState(new Set());
   const navigate = useNavigate();
+  const pollRef = useRef(null);
 
-  // Fetch available books on mount — non-critical, silent fail
-  useEffect(() => {
+  const fetchBooks = () => {
     getAvailableBooks()
       .then((res) => {
-        if (Array.isArray(res.data) && res.data.length > 0) {
+        if (Array.isArray(res.data)) {
           setAvailableBooks(res.data);
+          if (res.data.length > 0 && !selectedBook) {
+            const first = res.data[0];
+            setSelectedSubject(first.subject);
+            setSelectedBook(first.slug);
+          }
         }
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setBooksLoaded(true));
+  };
+
+  // Fetch on mount + poll every 30s so newly published books appear automatically
+  useEffect(() => {
+    fetchBooks();
+    pollRef.current = setInterval(fetchBooks, 30000);
+    return () => clearInterval(pollRef.current);
   }, []);
 
   // Fetch review-due concepts — non-critical, silent fail
@@ -103,7 +118,7 @@ export default function ConceptMapPage() {
   };
 
   const buildLessonUrl = (conceptId) => {
-    return `/learn/${encodeURIComponent(conceptId)}`;
+    return `/learn/${encodeURIComponent(conceptId)}?book_slug=${encodeURIComponent(selectedBook)}`;
   };
 
   const startLesson = (conceptId) => {
@@ -159,6 +174,19 @@ export default function ConceptMapPage() {
     ? nodes.find((n) => n.concept_id === selectedNode)
     : null;
 
+  // No books published yet — show empty state
+  if (booksLoaded && availableBooks.length === 0) {
+    return (
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", flexDirection: "column", gap: "1rem", color: "var(--color-text-muted)" }}>
+        <BookOpen size={48} style={{ opacity: 0.3 }} />
+        <div style={{ fontSize: "1.1rem", fontWeight: 600 }}>No books available yet</div>
+        <div style={{ fontSize: "0.875rem", textAlign: "center", maxWidth: 320 }}>
+          Ask your administrator to publish a book so you can start learning.
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={{ display: "flex", height: "100vh" }}>
       {/* ─── Left Sidebar: Concept List ─── */}
@@ -169,46 +197,55 @@ export default function ConceptMapPage() {
         overflowY: "auto",
         padding: "1.25rem",
       }}>
-        {availableBooks.length > 0 && (
-          <div style={{ marginBottom: "1rem" }}>
-            <label style={{
-              display: "block",
-              fontSize: "0.75rem",
-              fontWeight: 700,
-              color: "var(--color-text-muted)",
-              textTransform: "uppercase",
-              letterSpacing: "0.05em",
-              marginBottom: "0.35rem",
-            }}>
-              {t("map.book", "Book")}
-            </label>
-            <select
-              value={selectedBook}
-              onChange={(e) => {
-                setSelectedBook(e.target.value);
-                setSelectedNode(null);
-              }}
-              style={{
-                width: "100%",
-                padding: "0.45rem 0.75rem",
-                borderRadius: "8px",
-                border: "1.5px solid var(--color-border)",
-                backgroundColor: "var(--color-bg)",
-                color: "var(--color-text)",
-                fontSize: "0.85rem",
-                fontFamily: "inherit",
-                cursor: "pointer",
-                outline: "none",
-              }}
-            >
-              {availableBooks.map((book) => (
-                <option key={book.slug || book} value={book.slug || book} disabled={book.processed === false}>
-                  {(book.title || book.slug || book)}{book.processed === false ? " (not yet processed)" : ""}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
+        {/* Subject tabs */}
+        {availableBooks.length > 0 && (() => {
+          const bySubject = availableBooks.reduce((acc, book) => {
+            const subj = book.subject || "other";
+            if (!acc[subj]) acc[subj] = [];
+            acc[subj].push(book);
+            return acc;
+          }, {});
+          const subjects = Object.keys(bySubject).sort();
+          const booksInSubject = bySubject[selectedSubject] || [];
+          return (
+            <div style={{ marginBottom: "1rem" }}>
+              {/* Subject pill tabs */}
+              <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap", marginBottom: "0.75rem" }}>
+                {subjects.map((subj) => (
+                  <button key={subj} onClick={() => {
+                    setSelectedSubject(subj);
+                    const first = bySubject[subj][0];
+                    setSelectedBook(first.slug);
+                    setSelectedNode(null);
+                  }} style={{
+                    padding: "0.25rem 0.75rem", borderRadius: "20px", border: "1.5px solid",
+                    borderColor: selectedSubject === subj ? "var(--color-primary)" : "var(--color-border)",
+                    backgroundColor: selectedSubject === subj ? "var(--color-primary)" : "transparent",
+                    color: selectedSubject === subj ? "#fff" : "var(--color-text-muted)",
+                    fontSize: "0.75rem", fontWeight: 700, cursor: "pointer", fontFamily: "inherit",
+                    textTransform: "capitalize",
+                  }}>
+                    {subj.replace(/_/g, " ")}
+                  </button>
+                ))}
+              </div>
+              {/* Books in selected subject */}
+              {booksInSubject.length > 1 && (
+                <select value={selectedBook} onChange={(e) => { setSelectedBook(e.target.value); setSelectedNode(null); }}
+                  style={{
+                    width: "100%", padding: "0.45rem 0.75rem", borderRadius: "8px",
+                    border: "1.5px solid var(--color-border)", backgroundColor: "var(--color-bg)",
+                    color: "var(--color-text)", fontSize: "0.85rem", fontFamily: "inherit",
+                    cursor: "pointer", outline: "none",
+                  }}>
+                  {booksInSubject.map((book) => (
+                    <option key={book.slug} value={book.slug}>{book.title || book.slug}</option>
+                  ))}
+                </select>
+              )}
+            </div>
+          );
+        })()}
 
         <div style={{
           display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0.5rem",

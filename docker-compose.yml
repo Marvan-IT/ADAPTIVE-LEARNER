@@ -61,6 +61,7 @@ services:
       - ./backend/output:/app/output
       - ./backend/data:/app/data
       - ./backend/translation_cache.json:/app/translation_cache.json
+      - ./backend/books.yaml:/app/books.yaml
 
   frontend:
     build:
@@ -80,6 +81,28 @@ services:
       # Mount Certbot SSL certs and challenge dir (created by deploy.sh)
       - ./certbot/conf:/etc/letsencrypt:ro
       - ./certbot/www:/var/www/certbot:ro
+
+  # Book watcher — monitors books.yaml for new entries and triggers the
+  # extraction pipeline automatically (Zero-Touch Multi-Subject Book Pipeline)
+  book-watcher:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: python -m src.watcher.book_watcher
+    restart: always
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - MATHPIX_APP_ID=${MATHPIX_APP_ID}
+      - MATHPIX_APP_KEY=${MATHPIX_APP_KEY}
+      - API_SECRET_KEY=${API_SECRET_KEY}
+      - API_BASE_URL=http://backend:8889
+    volumes:
+      - ./backend/books.yaml:/app/books.yaml
+      - ./backend/data:/app/data
+      - ./backend/output:/app/output
+    depends_on:
+      - backend
 
   # Certbot sidecar — renews SSL certs every 12 hours
   certbot:

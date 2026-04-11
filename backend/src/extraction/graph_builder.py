@@ -101,6 +101,25 @@ async def build_graph(db: AsyncSession, book_slug: str, graph_path: Path) -> Non
         for i in range(len(chapter_concepts) - 1):
             G.add_edge(chapter_concepts[i], chapter_concepts[i + 1])
 
+    # Cross-chapter edges: last section of chapter N → first section of chapter N+1
+    # This creates a proper prerequisite chain: must complete chapter 1 before starting chapter 2
+    _ch_sections: dict[str, list[str]] = {}
+    for concept_id, _ in ordered_sections:
+        ch = _chapter_num(concept_id)
+        if ch not in _ch_sections:
+            _ch_sections[ch] = []
+        if concept_id not in _ch_sections[ch]:
+            _ch_sections[ch].append(concept_id)
+
+    for ch in _ch_sections:
+        _ch_sections[ch].sort(key=_section_sort_key)
+
+    _ch_keys = sorted(_ch_sections.keys(), key=lambda c: int(c) if c.isdigit() else 999)
+    for _ci in range(len(_ch_keys) - 1):
+        last_of_current = _ch_sections[_ch_keys[_ci]][-1]
+        first_of_next = _ch_sections[_ch_keys[_ci + 1]][0]
+        G.add_edge(last_of_current, first_of_next)
+
     # Serialize to graph.json
     data = {
         "nodes": [

@@ -21,12 +21,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from uuid import UUID
 
+from auth.dependencies import get_current_user
+from auth.models import User
 from adaptive.schemas import AdaptiveLessonRequest, AdaptiveLesson, NextCardRequest, NextCardResponse
 from adaptive.adaptive_engine import generate_adaptive_lesson, generate_recovery_card
 from api.rate_limiter import limiter
 from db.connection import get_db
 from db.models import Student, StudentMastery
-from config import ADAPTIVE_CARD_MODEL, DEFAULT_BOOK_SLUG
+from config import ADAPTIVE_CARD_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +60,7 @@ adaptive_llm_client: AsyncOpenAI | None = None
 async def generate_lesson(
     request: Request,
     req: AdaptiveLessonRequest,
+    _user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> AdaptiveLesson:
     """
@@ -101,7 +104,7 @@ async def generate_lesson(
     )
 
     # 3. Delegate to the engine
-    book_slug = getattr(req, "book_slug", None) or DEFAULT_BOOK_SLUG
+    book_slug = getattr(req, "book_slug", None) or "prealgebra"
     try:
         lesson = await generate_adaptive_lesson(
             student_id=str(req.student_id),
@@ -147,6 +150,7 @@ async def complete_card(
     request: Request,
     session_id: UUID,
     req: NextCardRequest,
+    _user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -249,7 +253,7 @@ async def complete_card(
     )
 
     # Resolve book_slug for this session
-    session_book_slug = getattr(session, "book_slug", None) or DEFAULT_BOOK_SLUG
+    session_book_slug = getattr(session, "book_slug", None) or "prealgebra"
 
     async def _maybe_recovery():
         if need_recovery:

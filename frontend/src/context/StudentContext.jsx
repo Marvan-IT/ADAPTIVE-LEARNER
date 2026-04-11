@@ -3,56 +3,57 @@ import i18n from "i18next";
 import { getStudent, getStudentMastery } from "../api/students";
 import { identifyStudent, resetUser, trackEvent } from "../utils/analytics";
 import { useAdaptiveStore } from "../store/adaptiveStore";
+import { useAuth } from "./AuthContext";
 
 const StudentContext = createContext();
 
 export function StudentProvider({ children }) {
+  const { user, logout: authLogout } = useAuth();
   const [student, setStudentState] = useState(null);
   const [masteredConcepts, setMasteredConcepts] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const initAdaptive = useAdaptiveStore((s) => s.init);
 
-  // Rehydrate from localStorage on mount
+  // Load student data whenever auth user changes (or student_id changes)
   useEffect(() => {
-    const savedId = localStorage.getItem("ada_student_id");
-    if (savedId) {
-      getStudent(savedId)
-        .then((res) => {
-          setStudentState(res.data);
-          identifyStudent(res.data);
-          trackEvent("existing_student_resumed", { student_id: res.data.id });
-          // Sync i18n language from student profile
-          if (res.data.preferred_language) {
-            i18n.changeLanguage(res.data.preferred_language);
-          }
-          // Hydrate Zustand game store from DB values if present
-          if (res.data.xp !== undefined || res.data.streak !== undefined) {
-            initAdaptive({ xp: res.data.xp ?? 0, streak: res.data.streak ?? 0 });
-          }
-          return getStudentMastery(savedId);
-        })
-        .then((res) => {
-          setMasteredConcepts(res.data.mastered_concepts || []);
-        })
-        .catch((err) => {
-          console.error("[StudentContext] Failed to load student:", err);
-          localStorage.removeItem("ada_student_id");
-        })
-        .finally(() => setLoading(false));
-    } else {
+    const studentId = user?.student_id;
+    if (!studentId) {
+      setStudentState(null);
+      setMasteredConcepts([]);
       setLoading(false);
+      return;
     }
-  }, []);
 
-  const setStudent = (studentData) => {
+    setLoading(true);
+    getStudent(studentId)
+      .then((res) => {
+        setStudentState(res.data);
+        identifyStudent(res.data);
+        trackEvent("existing_student_resumed", { student_id: res.data.id });
+        // Sync i18n language from student profile
+        if (res.data.preferred_language) {
+          i18n.changeLanguage(res.data.preferred_language);
+        }
+        // Hydrate Zustand game store from DB values if present
+        if (res.data.xp !== undefined || res.data.streak !== undefined) {
+          initAdaptive({ xp: res.data.xp ?? 0, streak: res.data.streak ?? 0 });
+        }
+        return getStudentMastery(studentId);
+      })
+      .then((res) => {
+        setMasteredConcepts(res.data.mastered_concepts || []);
+      })
+      .catch((err) => {
+        console.error("[StudentContext] Failed to load student:", err);
+      })
+      .finally(() => setLoading(false));
+  }, [user?.student_id, initAdaptive]);
+
+  // setStudent kept for compatibility — updates local state only
+  const setStudent = useCallback((studentData) => {
     setStudentState(studentData);
-    if (studentData) {
-      localStorage.setItem("ada_student_id", studentData.id);
-    } else {
-      localStorage.removeItem("ada_student_id");
-    }
-  };
+  }, []);
 
   const refreshMastery = useCallback(async () => {
     if (!student) return;
@@ -64,37 +65,47 @@ export function StudentProvider({ children }) {
     }
   }, [student]);
 
-  const selectStudent = useCallback(async (studentData) => {
-    setStudentState(studentData);
-    localStorage.setItem("ada_student_id", studentData.id);
-    identifyStudent(studentData);
-    // Sync i18n language from student profile
-    if (studentData.preferred_language) {
-      i18n.changeLanguage(studentData.preferred_language);
-    }
-    // Hydrate game store from DB values
-    if (studentData.xp !== undefined || studentData.streak !== undefined) {
-      initAdaptive({ xp: studentData.xp ?? 0, streak: studentData.streak ?? 0 });
-    }
-    try {
-      const res = await getStudentMastery(studentData.id);
-      setMasteredConcepts(res.data.mastered_concepts || []);
-    } catch {
-      setMasteredConcepts([]);
-    }
-  }, [initAdaptive]);
+  // selectStudent kept for legacy compatibility (e.g. after profile update)
+  const selectStudent = useCallback(
+    async (studentData) => {
+      setStudentState(studentData);
+      identifyStudent(studentData);
+      if (studentData.preferred_language) {
+        i18n.changeLanguage(studentData.preferred_language);
+      }
+      if (studentData.xp !== undefined || studentData.streak !== undefined) {
+        initAdaptive({ xp: studentData.xp ?? 0, streak: studentData.streak ?? 0 });
+      }
+      try {
+        const res = await getStudentMastery(studentData.id);
+        setMasteredConcepts(res.data.mastered_concepts || []);
+      } catch {
+        setMasteredConcepts([]);
+      }
+    },
+    [initAdaptive]
+  );
 
-  const logout = () => {
+  const logout = useCallback(() => {
     trackEvent("student_logout", { student_id: student?.id });
     setStudentState(null);
     setMasteredConcepts([]);
-    localStorage.removeItem("ada_student_id");
     resetUser();
-  };
+    // Delegate token/session cleanup to AuthContext
+    authLogout();
+  }, [student?.id, authLogout]);
 
   return (
     <StudentContext.Provider
-      value={{ student, setStudent, selectStudent, masteredConcepts, refreshMastery, logout, loading }}
+      value={{
+        student,
+        setStudent,
+        selectStudent,
+        masteredConcepts,
+        refreshMastery,
+        logout,
+        loading,
+      }}
     >
       {children}
     </StudentContext.Provider>

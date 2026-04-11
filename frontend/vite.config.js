@@ -8,10 +8,10 @@ export default defineConfig({
     port: 5173,
     strictPort: false,
     proxy: {
-      "/api": { target: "http://127.0.0.1:8889", changeOrigin: true },
-      "/images": { target: "http://127.0.0.1:8889", changeOrigin: true },
-      "/static": { target: "http://127.0.0.1:8889", changeOrigin: true },
-      "/health": { target: "http://127.0.0.1:8889", changeOrigin: true },
+      "/api": { target: "http://127.0.0.1:8892", changeOrigin: true },
+      "/images": { target: "http://127.0.0.1:8892", changeOrigin: true },
+      "/static": { target: "http://127.0.0.1:8892", changeOrigin: true },
+      "/health": { target: "http://127.0.0.1:8892", changeOrigin: true },
     },
   },
 })

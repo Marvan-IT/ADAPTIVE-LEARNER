@@ -116,6 +116,7 @@ This mirrors production logic exactly without requiring services.
 ### Missing Packages (install before running tests)
 `slowapi` and `Pillow` are in `requirements.txt` but may not be installed in the dev venv. Run:
 `pip install slowapi Pillow`
+`python-multipart` is NOT in `requirements.txt` but is required by FastAPI's `UploadFile`/`Form` handling — any test that exercises file upload endpoints needs it: `pip install python-multipart`
 The existing `test_teaching_router.py` is BROKEN due to the circular import — it was not fixed. Only `test_platform_hardening.py` uses the stub pattern.
 
 ### Test File Registry
@@ -193,3 +194,14 @@ Key patterns:
 - `find_remediation_prereq()` new signature: `(concept_id, chunk_ksvc, book_slug, mastery_store)` — calls `chunk_ksvc.get_predecessors()`, NOT `graph.predecessors()`
 - `start_session` book validation: calls `chunk_ksvc.get_active_books(db)` async; returns HTTP 400 with book_slug name in detail if not in active set
 - `_build_main_test_app()` returns `(app, mock_ksvc)` tuple — remember to destructure it in fixtures
+
+### Admin Console Tests (test_admin_console.py)
+- 21 tests, all passing; file at `backend/tests/test_admin_console.py`
+- Stub `fitz` and `api.chunk_knowledge_service` in sys.modules BEFORE importing `api.admin_router` (both are heavy/problematic transitive deps)
+- `admin_router_module._API_KEY = "test-secret"` after import — more reliable than env var patching
+- `patch.object(admin_router_module, "DATA_DIR", tmp_path/...)` and same for `OUTPUT_DIR` — always use per-test tmp_path
+- `patch.object(admin_router_module, "subprocess")` then `mock_subproc.Popen = MagicMock()` for upload tests
+- `patch.object(admin_router_module, "_normalize_image_url", return_value=...)` for chunks endpoint test
+- Sections/chunks endpoint: returns multiple execute() call sequences — use `call_count` closure with side_effect list
+- Publish endpoint calls `svc.preload_graph(slug)` via `loop.run_in_executor` — set `app.state.chunk_knowledge_svc = MagicMock()` and assert `mock_svc.preload_graph.assert_called_once_with(slug)`
+- `python-multipart` must be installed for UploadFile/Form endpoints to work at collection time

@@ -202,7 +202,7 @@ async def save_chunk(
     for i, cdn_url in enumerate(chunk.image_urls):
         local_filename = download_image(cdn_url, images_dir)
         # Serve via the backend's /images static route; CDN URL retained for reference
-        image_url = f"{image_base_url}/{book_slug}/images_downloaded/{local_filename}"
+        image_url = f"/images/{book_slug}/images_downloaded/{local_filename}"
         db_image = ChunkImage(
             chunk_id=db_chunk.id,
             image_url=image_url,
@@ -280,6 +280,57 @@ async def build_chunks(book_slug: str, mmd_path: Path, db: AsyncSession, rebuild
     )
 
 
+async def _download_image_with_retry(url: str, dest: Path, max_retries: int = 3) -> bool:
+    """Download an image with exponential backoff retry. Returns True on success."""
+    import asyncio as _asyncio
+    for attempt in range(max_retries):
+        try:
+            resp = requests.get(url, timeout=30)
+            if resp.status_code == 200:
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(resp.content)
+                return True
+            logger.warning("Image HTTP %d for %s (attempt %d/%d)", resp.status_code, url, attempt + 1, max_retries)
+        except Exception as exc:
+            logger.warning("Image download error %s (attempt %d/%d): %s", url, attempt + 1, max_retries, exc)
+        if attempt < max_retries - 1:
+            await _asyncio.sleep(2 ** (attempt + 1))
+    return False
+
+
+async def validate_and_clean_images(book_slug: str, db: AsyncSession) -> int:
+    """Remove chunk_images rows where the local image file does not exist.
+
+    Returns the count of deleted rows.
+    """
+    from sqlalchemy import select, delete as _delete
+    from db.models import ChunkImage, ConceptChunk
+
+    result = await db.execute(
+        select(ChunkImage.id, ChunkImage.image_url)
+        .join(ConceptChunk, ChunkImage.chunk_id == ConceptChunk.id)
+        .where(ConceptChunk.book_slug == book_slug)
+    )
+    rows = result.all()
+
+    missing_ids = []
+    for row_id, image_url in rows:
+        filename = image_url.rstrip("/").split("/")[-1]
+        local_path = OUTPUT_DIR / book_slug / "images_downloaded" / filename
+        if not local_path.exists():
+            missing_ids.append(row_id)
+
+    if missing_ids:
+        await db.execute(_delete(ChunkImage).where(ChunkImage.id.in_(missing_ids)))
+        await db.commit()
+        logger.info(
+            "validate_and_clean_images: removed %d orphan rows for book '%s'",
+            len(missing_ids), book_slug,
+        )
+
+    return len(missing_ids)
+
+
 # ── CLI entry point ───────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
@@ -291,7 +342,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
     ap = argparse.ArgumentParser(description="Build ConceptChunk rows from book.mmd")
-    ap.add_argument("--book", default="prealgebra", help="Book slug (e.g. prealgebra)")
+    ap.add_argument("--book", required=True, help="Book slug (e.g. prealgebra)")
     ap.add_argument("--parse-only", action="store_true", help="Parse only — no DB writes or embeddings")
     args = ap.parse_args()
 

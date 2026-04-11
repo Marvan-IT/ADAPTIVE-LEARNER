@@ -19,10 +19,11 @@ import logging
 import asyncio
 import json
 
+from auth.dependencies import get_current_user, require_admin
+from auth.models import User
 from config import (
     CARD_HISTORY_DEFAULT_LIMIT,
     CARD_HISTORY_MAX_LIMIT,
-    DEFAULT_BOOK_SLUG,
     CHUNK_EXAM_PASS_RATE,
     OPENAI_MODEL_MINI,
 )
@@ -165,6 +166,22 @@ teaching_svc = None
 chunk_ksvc = None  # ChunkKnowledgeService — injected by main.py lifespan
 
 
+async def _validate_student_ownership(user: User, student_id: UUID, db: AsyncSession) -> None:
+    """Ensure the authenticated user owns the student profile.
+
+    Admins bypass the check and can access any student's data.
+    For student-role users, the JWT's user_id must be linked to the requested
+    student_id via Student.user_id.  Raises HTTP 403 if ownership cannot be
+    confirmed.
+    """
+    if user.role == "admin":
+        return  # Admins can access any student
+    result = await db.execute(select(Student.id).where(Student.user_id == user.id))
+    owned_id = result.scalar_one_or_none()
+    if not owned_id or owned_id != student_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+
 def _require_services():
     """Raise 503 if the backend services were not yet injected by lifespan.
 
@@ -185,7 +202,12 @@ def _require_services():
 
 @router.post("/students", response_model=StudentResponse)
 @limiter.limit("30/minute")
-async def create_student(request: Request, req: CreateStudentRequest, db: AsyncSession = Depends(get_db)):
+async def create_student(
+    request: Request,
+    req: CreateStudentRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """Create a new student profile."""
     student = Student(
         display_name=req.display_name,
@@ -205,8 +227,9 @@ async def list_students(
     db: AsyncSession = Depends(get_db),
     limit: int = 50,
     offset: int = 0,
+    _user: User = Depends(require_admin),
 ):
-    """List student profiles with their mastery counts (paginated)."""
+    """List student profiles with their mastery counts (paginated). Admin only."""
     limit = min(max(1, limit), 200)
     result = await db.execute(
         select(
@@ -235,8 +258,14 @@ async def list_students(
 
 @router.get("/students/{student_id}")
 @limiter.limit("120/minute")
-async def get_student(request: Request, student_id: UUID, db: AsyncSession = Depends(get_db)):
+async def get_student(
+    request: Request,
+    student_id: UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """Get student profile including xp and streak."""
+    await _validate_student_ownership(user, student_id, db)
     student = await db.get(Student, student_id)
     if not student:
         raise HTTPException(404, "Student not found")
@@ -254,8 +283,14 @@ async def get_student(request: Request, student_id: UUID, db: AsyncSession = Dep
 
 @router.get("/students/{student_id}/mastery")
 @limiter.limit("30/minute")
-async def get_student_mastery(request: Request, student_id: UUID, db: AsyncSession = Depends(get_db)):
+async def get_student_mastery(
+    request: Request,
+    student_id: UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """Get all concepts mastered by a student."""
+    await _validate_student_ownership(user, student_id, db)
     result = await db.execute(
         select(StudentMastery)
         .where(StudentMastery.student_id == student_id)
@@ -274,9 +309,11 @@ async def get_student_mastery(request: Request, student_id: UUID, db: AsyncSessi
 async def get_student_analytics(
     request: Request,
     student_id: UUID,
+    user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Aggregate learning analytics for a student across all four interaction tables."""
+    await _validate_student_ownership(user, student_id, db)
     student = await db.get(Student, student_id)
     if not student:
         raise HTTPException(404, "Student not found")
@@ -397,9 +434,12 @@ async def get_concept_readiness(
     request: Request,
     concept_id: str,
     student_id: UUID,
+    book_slug: str = "prealgebra",
+    user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Check whether all prerequisites for a concept are mastered by the student."""
+    await _validate_student_ownership(user, student_id, db)
     # Fetch all mastered concept IDs for this student
     mastery_result = await db.execute(
         select(StudentMastery.concept_id).where(StudentMastery.student_id == student_id)
@@ -413,7 +453,6 @@ async def get_concept_readiness(
             unmet_prerequisites=[],
         )
 
-    book_slug = DEFAULT_BOOK_SLUG
     direct_prereqs = chunk_ksvc.get_predecessors(book_slug, concept_id)
 
     unmet = []
@@ -485,11 +524,16 @@ async def _translate_summaries_headings(
 @router.patch("/students/{student_id}/language", response_model=StudentLanguageResponse)
 @limiter.limit("30/minute")
 async def update_student_language(
-    request: Request, student_id: UUID, req: UpdateLanguageRequest, db: AsyncSession = Depends(get_db)
+    request: Request,
+    student_id: UUID,
+    req: UpdateLanguageRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     """Update a student's preferred language.
     Also translates chunk headings for any active session and busts the card cache.
     """
+    await _validate_student_ownership(user, student_id, db)
     student = await db.get(Student, student_id)
     if not student:
         raise HTTPException(404, "Student not found")
@@ -513,7 +557,7 @@ async def update_student_language(
     if active_session and chunk_ksvc:
         try:
             raw_chunks = await chunk_ksvc.get_chunks_for_concept(
-                db, active_session.book_slug or DEFAULT_BOOK_SLUG, active_session.concept_id
+                db, active_session.book_slug or "prealgebra", active_session.concept_id
             )
             headings = [c.get("heading", "") for c in sorted(raw_chunks, key=lambda c: c.get("order_index", 0))]
             if headings:
@@ -561,9 +605,11 @@ async def update_student_progress(
     request: Request,
     student_id: UUID,
     body: ProgressUpdate,
+    user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Atomically increment a student's XP and set their streak."""
+    await _validate_student_ownership(user, student_id, db)
     result = await db.execute(
         select(Student).where(Student.id == student_id)
     )
@@ -586,8 +632,14 @@ async def update_student_progress(
 
 @router.post("/sessions", response_model=SessionResponse)
 @limiter.limit("30/minute")
-async def start_session(request: Request, req: StartSessionRequest, db: AsyncSession = Depends(get_db)):
+async def start_session(
+    request: Request,
+    req: StartSessionRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """Start a new teaching session for a student + concept."""
+    await _validate_student_ownership(user, req.student_id, db)
     try:
         _require_services()
         student = await db.get(Student, req.student_id)
@@ -615,11 +667,17 @@ async def start_session(request: Request, req: StartSessionRequest, db: AsyncSes
 
 @router.post("/sessions/{session_id}/present", response_model=PresentationResponse)
 @limiter.limit("10/minute")
-async def get_presentation(request: Request, session_id: UUID, db: AsyncSession = Depends(get_db)):
+async def get_presentation(
+    request: Request,
+    session_id: UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """Generate the metaphor-based explanation for the session's concept."""
     session = await db.get(TeachingSession, session_id)
     if not session:
         raise HTTPException(404, "Session not found")
+    await _validate_student_ownership(user, session.student_id, db)
     if session.phase != "PRESENTING":
         raise HTTPException(
             400, f"Session is in {session.phase} phase, not PRESENTING"
@@ -628,7 +686,7 @@ async def get_presentation(request: Request, session_id: UUID, db: AsyncSession 
     student = await db.get(Student, session.student_id)
     presentation = await teaching_svc.generate_presentation(db, session, student)
 
-    concept = await chunk_ksvc.get_concept_detail(db, session.concept_id, session.book_slug or DEFAULT_BOOK_SLUG)
+    concept = await chunk_ksvc.get_concept_detail(db, session.concept_id, session.book_slug or "prealgebra")
 
     # Filter images: only DIAGRAM-type with reasonable dimensions
     raw_images = concept.get("images", []) if concept else []
@@ -669,12 +727,14 @@ async def switch_style(
     request: Request,
     session_id: UUID,
     req: SwitchStyleRequest,
+    user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Switch teaching style mid-session."""
     session = await db.get(TeachingSession, session_id)
     if not session:
         raise HTTPException(404, "Session not found")
+    await _validate_student_ownership(user, session.student_id, db)
     if session.phase == "COMPLETED":
         raise HTTPException(400, "Cannot switch style on a completed session")
 
@@ -690,12 +750,14 @@ async def update_session_interests(
     request: Request,
     session_id: UUID,
     req: UpdateSessionInterestsRequest,
+    user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Update per-session interest override. Used by in-section customize panel."""
     session = await db.get(TeachingSession, session_id)
     if not session:
         raise HTTPException(404, "Session not found")
+    await _validate_student_ownership(user, session.student_id, db)
     session.lesson_interests = [i[:50] for i in req.interests[:10]]
     await db.commit()
     logger.info("session=%s interests updated count=%d", session_id, len(session.lesson_interests))
@@ -709,9 +771,11 @@ async def resume_session(
     student_id: UUID,
     concept_id: str,
     book_slug: str,
+    user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Find the most recent non-DONE session for student+concept. Returns 404 if none."""
+    await _validate_student_ownership(user, student_id, db)
     result = await db.execute(
         select(TeachingSession)
         .where(
@@ -731,17 +795,28 @@ async def resume_session(
 
 @router.get("/sessions/{session_id}", response_model=SessionResponse)
 @limiter.limit("30/minute")
-async def get_session(request: Request, session_id: UUID, db: AsyncSession = Depends(get_db)):
+async def get_session(
+    request: Request,
+    session_id: UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """Get session status."""
     session = await db.get(TeachingSession, session_id)
     if not session:
         raise HTTPException(404, "Session not found")
+    await _validate_student_ownership(user, session.student_id, db)
     return session
 
 
 @router.get("/sessions/{session_id}/history", response_model=SessionHistoryResponse)
 @limiter.limit("30/minute")
-async def get_session_history(request: Request, session_id: UUID, db: AsyncSession = Depends(get_db)):
+async def get_session_history(
+    request: Request,
+    session_id: UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """Get full session history with all messages."""
     session = await db.get(
         TeachingSession, session_id,
@@ -749,6 +824,7 @@ async def get_session_history(request: Request, session_id: UUID, db: AsyncSessi
     )
     if not session:
         raise HTTPException(404, "Session not found")
+    await _validate_student_ownership(user, session.student_id, db)
 
     return SessionHistoryResponse(
         session=SessionResponse.model_validate(session),
@@ -762,11 +838,17 @@ async def get_session_history(request: Request, session_id: UUID, db: AsyncSessi
 
 @router.post("/sessions/{session_id}/cards", response_model=CardsResponse)
 @limiter.limit("10/minute")
-async def get_cards(request: Request, session_id: UUID, db: AsyncSession = Depends(get_db)):
+async def get_cards(
+    request: Request,
+    session_id: UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """Generate card-based lesson with sub-content cards and quiz questions."""
     session = await db.get(TeachingSession, session_id)
     if not session:
         raise HTTPException(404, "Session not found")
+    await _validate_student_ownership(user, session.student_id, db)
     if session.phase != "PRESENTING":
         raise HTTPException(
             400, f"Session is in {session.phase} phase, not PRESENTING"
@@ -801,12 +883,14 @@ async def assist_student(
     request: Request,
     session_id: UUID,
     req: AssistRequest,
+    user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """AI assistant responds to student during card-based learning."""
     session = await db.get(TeachingSession, session_id)
     if not session:
         raise HTTPException(404, "Session not found")
+    await _validate_student_ownership(user, session.student_id, db)
     if session.phase == "COMPLETED":
         raise HTTPException(400, "Session is already completed")
 
@@ -826,12 +910,14 @@ async def assist_student(
 async def complete_cards(
     request: Request,
     session_id: UUID,
+    user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Transition from CARDS to CARDS_DONE phase (gateway only, no mastery)."""
     session = await db.get(TeachingSession, session_id)
     if not session:
         raise HTTPException(404, "Session not found")
+    await _validate_student_ownership(user, session.student_id, db)
     if session.phase == "COMPLETED":
         raise HTTPException(400, "Session is already completed")
 
@@ -853,6 +939,7 @@ async def generate_chunk_cards(
     request: Request,
     session_id: UUID,
     req: ChunkCardsRequest,
+    user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Generate all cards for a single chunk. Called when student enters a new chunk.
@@ -864,6 +951,7 @@ async def generate_chunk_cards(
     session = await db.get(TeachingSession, session_id)
     if not session:
         raise HTTPException(404, "Session not found")
+    await _validate_student_ownership(user, session.student_id, db)
 
     try:
         cards_dicts = await teaching_svc.generate_per_chunk(session, db, req.chunk_id)
@@ -873,7 +961,7 @@ async def generate_chunk_cards(
                 cards.append(LessonCard(**_c))
             except Exception as _val_err:
                 logger.warning("[chunk-cards] skipping invalid card dict: %s", _val_err)
-        _chunks = await chunk_ksvc.get_chunks_for_concept(db, session.book_slug or DEFAULT_BOOK_SLUG, session.concept_id)
+        _chunks = await chunk_ksvc.get_chunks_for_concept(db, session.book_slug or "prealgebra", session.concept_id)
         chunk_index = next((i for i, c in enumerate(_chunks) if c["id"] == req.chunk_id), 0)
 
         # Fetch the chunk object to determine type and get text for question generation
@@ -969,6 +1057,7 @@ async def generate_chunk_recovery_card(
     request: Request,
     session_id: UUID,
     req: RecoveryCardRequest,
+    user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Generate a recovery TEACH card re-explaining the chunk in STRUGGLING mode.
@@ -980,6 +1069,7 @@ async def generate_chunk_recovery_card(
     session = await db.get(TeachingSession, session_id)
     if not session:
         raise HTTPException(404, "Session not found")
+    await _validate_student_ownership(user, session.student_id, db)
 
     chunk = await chunk_ksvc.get_chunk(db, req.chunk_id)
     if not chunk:
@@ -1013,6 +1103,7 @@ async def complete_chunk(
     request: Request,
     session_id: UUID,
     req: CompleteChunkRequest,
+    user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Record completion of a study chunk and determine mode for the next chunk."""
@@ -1021,6 +1112,7 @@ async def complete_chunk(
     session = await db.get(TeachingSession, session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+    await _validate_student_ownership(user, session.student_id, db)
 
     score = round((req.correct / req.total) * 100) if req.total > 0 else 0
 
@@ -1120,6 +1212,7 @@ async def complete_chunk_item(
     request: Request,
     session_id: UUID,
     chunk_id: str,
+    user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Bookmark a chunk as completed without recording a score.
@@ -1130,10 +1223,11 @@ async def complete_chunk_item(
     session = await db.get(TeachingSession, session_id)
     if not session:
         raise HTTPException(404, "Session not found")
+    await _validate_student_ownership(user, session.student_id, db)
 
     # Verify chunk belongs to this session's concept
     all_chunks = await chunk_ksvc.get_chunks_for_concept(
-        db, session.book_slug or DEFAULT_BOOK_SLUG, session.concept_id
+        db, session.book_slug or "prealgebra", session.concept_id
     )
     all_sorted = sorted(all_chunks, key=lambda c: c.get("order_index", 0))
     chunk_ids_in_concept = {str(c["id"]) for c in all_sorted}
@@ -1193,6 +1287,7 @@ async def evaluate_chunk_answers(
     session_id: UUID,
     chunk_id: str,
     req: ChunkEvaluateRequest,
+    user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Grade student open-ended answers for a chunk's exam gate using LLM.
@@ -1203,6 +1298,7 @@ async def evaluate_chunk_answers(
     session = await db.get(TeachingSession, session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+    await _validate_student_ownership(user, session.student_id, db)
 
     if not req.questions or not req.answers:
         raise HTTPException(status_code=400, detail="questions and answers are required")
@@ -1300,7 +1396,7 @@ async def evaluate_chunk_answers(
         # Compute all_study_complete (teaching chunks only)
         try:
             all_chunks = await chunk_ksvc.get_chunks_for_concept(
-                db, session.book_slug or DEFAULT_BOOK_SLUG, session.concept_id
+                db, session.book_slug or "prealgebra", session.concept_id
             )
             all_sorted = sorted(all_chunks, key=lambda c: c["order_index"])
             required_ids = {
@@ -1409,6 +1505,7 @@ def _chunk_has_meaningful_content(text: str, chunk_type: str) -> bool:
 async def list_chunks(
     request: Request,
     session_id: UUID,
+    user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Return ordered ConceptChunk summaries for the concept in this session.
@@ -1421,8 +1518,9 @@ async def list_chunks(
         session = await db.get(TeachingSession, session_id)
         if not session:
             raise HTTPException(404, "Session not found")
+        await _validate_student_ownership(user, session.student_id, db)
 
-        book_slug = session.book_slug or DEFAULT_BOOK_SLUG
+        book_slug = session.book_slug or "prealgebra"
         concept_id = session.concept_id
 
         # Fetch all chunks in textbook order
@@ -1550,12 +1648,14 @@ async def record_card_interaction(
     request: Request,
     session_id: UUID,
     req: RecordInteractionRequest,
+    user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Save the final card interaction when the student clicks Finish Cards."""
     session = await db.get(TeachingSession, session_id)
     if not session:
         raise HTTPException(404, "Session not found")
+    await _validate_student_ownership(user, session.student_id, db)
     # Determine strategy effectiveness before saving the interaction row
     strategy_effective: bool | None = None
     if req.strategy_applied:
@@ -1596,12 +1696,14 @@ async def complete_card(
     request: Request,
     session_id: UUID,
     req: CompleteCardRequest,
+    user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Record card interaction; optionally generate recovery card; return updated learning profile."""
     session = await db.get(TeachingSession, session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+    await _validate_student_ownership(user, session.student_id, db)
     student = await db.get(Student, session.student_id)
     if not student:
         raise HTTPException(status_code=404, detail="Student not found")
@@ -1615,8 +1717,14 @@ async def complete_card(
 
 @router.get("/students/{student_id}/review-due")
 @limiter.limit("30/minute")
-async def get_review_due(request: Request, student_id: UUID, db: AsyncSession = Depends(get_db)):
+async def get_review_due(
+    request: Request,
+    student_id: UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
     """Return concepts due for spaced review for this student."""
+    await _validate_student_ownership(user, student_id, db)
     now = datetime.now(timezone.utc)
 
     result = await db.execute(
@@ -1646,12 +1754,16 @@ async def get_review_due(request: Request, student_id: UUID, db: AsyncSession = 
 @router.post("/spaced-reviews/{review_id}/complete")
 @limiter.limit("30/minute")
 async def complete_spaced_review(
-    request: Request, review_id: UUID, db: AsyncSession = Depends(get_db)
+    request: Request,
+    review_id: UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     """Mark a spaced review as completed."""
     review = await db.get(SpacedReview, review_id)
     if not review:
         raise HTTPException(404, "Review not found")
+    await _validate_student_ownership(user, review.student_id, db)
     if review.completed_at is not None:
         return {
             "ok": True,
@@ -1673,9 +1785,11 @@ async def get_student_card_history(
     request: Request,
     student_id: UUID,
     limit: int = CARD_HISTORY_DEFAULT_LIMIT,
+    user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Return the most recent card interactions for a student. Used for adaptive engine verification."""
+    await _validate_student_ownership(user, student_id, db)
     capped_limit = min(limit, CARD_HISTORY_MAX_LIMIT)
 
     result = await db.execute(
@@ -1712,9 +1826,11 @@ async def get_student_card_history(
 async def get_student_sessions(
     request: Request,
     student_id: UUID,
+    user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """List all meaningful teaching sessions for a student (any phase past PRESENTING)."""
+    await _validate_student_ownership(user, student_id, db)
     result = await db.execute(
         select(TeachingSession)
         .where(TeachingSession.student_id == student_id)
@@ -1746,12 +1862,14 @@ async def regenerate_mcq_endpoint(
     request: Request,
     session_id: UUID,
     body: RegenerateMCQRequest,
+    user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Generate a replacement MCQ after a wrong answer — same concept, different scenario."""
     session = await db.get(TeachingSession, session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+    await _validate_student_ownership(user, session.student_id, db)
     new_mcq = await teaching_svc.regenerate_mcq(body)
     return RegenerateMCQResponse(question=new_mcq)
 
@@ -1761,9 +1879,14 @@ async def regenerate_mcq_endpoint(
 async def get_session_card_interactions(
     request: Request,
     session_id: UUID,
+    user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Return all card interactions for a specific session, ordered by card index."""
+    session = await db.get(TeachingSession, session_id)
+    if not session:
+        raise HTTPException(404, "Session not found")
+    await _validate_student_ownership(user, session.student_id, db)
     result = await db.execute(
         select(CardInteraction)
         .where(CardInteraction.session_id == session_id)

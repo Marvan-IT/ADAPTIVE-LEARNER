@@ -616,6 +616,7 @@ QUESTION hint: MUST use a visual method — dot arrays, number line, or labeled 
 APPLICATION cards: 6-step scaffold (given / find / draw / set-up / solve / check).
 
 TONE: Warm, patient, encouraging. Age 8–10 reading level for explanations.
+Use simpler vocabulary and shorter sentences. For complex concepts, break them down and use everyday analogies. Repeat key definitions when they're needed for understanding. Be patient and thorough — explain naturally, not as robotic numbered steps.
 FUN: Add 1 brief surprising or fun fact (1 sentence) per section — keep it warm and directly related.
 
 CARD DENSITY: Each major topic section MUST produce AT LEAST 2–3 cards:
@@ -649,6 +650,7 @@ QUESTION hint: Concrete approach description (not the answer, but how to start).
 Numbered steps: for all worked examples.
 
 TONE: Clear, supportive. Natural high-school reading level.
+When explaining concepts, don't just repeat the textbook. Add clarity with simple language and relatable examples. Make complex ideas accessible while staying faithful to the source material. Use a natural, conversational teaching tone.
 FUN: 1 interesting connection per section where it fits naturally and is genuinely relevant.
 
 MANDATORY: ALL definitions, formulas, and worked-example steps MUST appear on every card.
@@ -680,6 +682,7 @@ MCQ: HARD — edge cases, traps, reversed questions. Test deep understanding.
 TRY_IT_BATCH: Consecutive Try It exercises merged into one multi-part card (a)(b)(c).
 
 TONE: Direct, technical, efficient. No hand-holding.
+Cover all key concepts concisely but completely. Don't skip important details — just present them efficiently without extra elaboration. Direct and clear.
 FUN: 1 intellectually stimulating challenge or depth extension per section — no basic fun hooks.
 
 MANDATORY: ALL content from the source section MUST appear on the cards.

@@ -361,7 +361,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="ADA Hybrid Engine Pipeline")
     parser.add_argument(
         "--book",
-        default="PREALG",
+        required=True,
         help="Book code to process (e.g., PREALG, ELEMALG, ALL)",
     )
     parser.add_argument(

@@ -20,7 +20,7 @@ from openai import AsyncOpenAI
 
 from config import (
     OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL, OPENAI_MODEL_MINI,
-    DEFAULT_BOOK_SLUG, NEXT_CARD_MAX_TOKENS,
+    NEXT_CARD_MAX_TOKENS,
     CHUNK_MAX_TOKENS_STRUGGLING, CHUNK_MAX_TOKENS_NORMAL, CHUNK_MAX_TOKENS_FAST, CHUNK_MAX_TOKENS_RECOVERY,
 )
 from api.chunk_knowledge_service import ChunkKnowledgeService
@@ -481,7 +481,7 @@ class TeachingService:
         db: AsyncSession,
         student_id: uuid.UUID,
         concept_id: str,
-        book_slug: str = DEFAULT_BOOK_SLUG,
+        book_slug: str = "prealgebra",
         style: str = "default",
         lesson_interests: list[str] | None = None,
     ) -> TeachingSession:
@@ -517,7 +517,7 @@ class TeachingService:
         # 1. Retrieve concept chunks from PostgreSQL
         # Build a synthetic concept dict from the first chunks of the concept for presentation
         chunks = await self._chunk_ksvc.get_chunks_for_concept(
-            db, session.book_slug or DEFAULT_BOOK_SLUG, session.concept_id
+            db, session.book_slug or "prealgebra", session.concept_id
         )
         if not chunks:
             raise ValueError(f"Concept not found: {session.concept_id}")
@@ -623,7 +623,7 @@ class TeachingService:
         After this method returns, session.presentation_text contains a valid JSON cache dict
         and session.phase is "CARDS".
         """
-        book_slug = getattr(session, "book_slug", None) or DEFAULT_BOOK_SLUG
+        book_slug = getattr(session, "book_slug", None) or "prealgebra"
         stmt = (
             select(ConceptChunk)
             .where(
@@ -633,6 +633,9 @@ class TeachingService:
             .order_by(ConceptChunk.order_index)
         )
         rows = (await db.execute(stmt)).scalars().all()
+        # Exclude exercise chunks — practice problems overpopulate with redundant cards.
+        # Teaching + lab chunks already cover all concepts.
+        rows = [c for c in rows if c.chunk_type != "exercise"]
         queue = [
             {
                 "id": str(c.id),
@@ -921,7 +924,7 @@ class TeachingService:
 
         # ── Step 11: Call LLM ──────────────────────────────────────────────────
         # Vision parts for per-card — same pattern as generate_per_chunk
-        _pc_book_slug = getattr(session, "book_slug", None) or DEFAULT_BOOK_SLUG
+        _pc_book_slug = getattr(session, "book_slug", None) or "prealgebra"
         _pc_vision_parts = []
         for _img in (content_piece_images or [])[:2]:   # cap at 2 per card for speed
             _img_url = _img.get("image_url") or _img.get("url", "")
@@ -1649,7 +1652,7 @@ class TeachingService:
                     topic_title=req.re_explain_card_title,
                     concept_id=session.concept_id,
                     chunk_ksvc=self._chunk_ksvc,
-                    book_slug=session.book_slug or DEFAULT_BOOK_SLUG,
+                    book_slug=session.book_slug or "prealgebra",
                     db=db,
                     llm_client=self.openai,
                     language=getattr(student, "preferred_language", "en") or "en",
@@ -1946,7 +1949,7 @@ class TeachingService:
         failed_topics = json.loads(session.remediation_context or '["key concepts"]')
         # Retrieve concept context from PostgreSQL chunks
         _rem_chunks = await self._chunk_ksvc.get_chunks_for_concept(
-            db, session.book_slug or DEFAULT_BOOK_SLUG, session.concept_id
+            db, session.book_slug or "prealgebra", session.concept_id
         )
         concept = {
             "concept_title": _rem_chunks[0].get("heading", session.concept_id) if _rem_chunks else session.concept_id,

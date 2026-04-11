@@ -45,6 +45,8 @@ SUBHEADING_PATTERN = re.compile(r"^##\s+(.+)$", re.MULTILINE)
 # CDN image URLs produced by Mathpix
 IMAGE_URL_PATTERN = re.compile(r"!\[\]\((https://cdn\.mathpix\.com/[^)]+)\)")
 LOCAL_IMAGE_PATTERN = re.compile(r"!\[\]\((\.\/images\/[^)]+)\)")
+# LaTeX \includegraphics images from Mathpix figure environments
+LATEX_IMAGE_PATTERN = re.compile(r"\\includegraphics(?:\[[^\]]*\])?\{([^}]+)\}")
 
 # Inline ($…$) and block ($$…$$) LaTeX — block must be checked first
 LATEX_PATTERN = re.compile(r"\$\$(.+?)\$\$|\$(.+?)\$", re.DOTALL)
@@ -76,6 +78,10 @@ _NOISE_HEADING_PATTERNS: list[re.Pattern] = [
     re.compile(r"^\d+\.\s"),
     # Config-driven exclusions — stays in sync with config.py automatically
     *[re.compile(rf"^{re.escape(m)}\b", re.IGNORECASE) for m in CONTENT_EXCLUDE_MARKERS],
+    re.compile(r"^LINK TO LEARNING\b", re.IGNORECASE),
+    re.compile(r"^CHAPTER OUTLINE\b", re.IGNORECASE),
+    re.compile(r"^INTRODUCTION\b$", re.IGNORECASE),
+    re.compile(r"^LEARNING OBJECTIVES?\b", re.IGNORECASE),
 ]
 
 def _is_noise_heading(heading_text: str) -> bool:
@@ -173,19 +179,28 @@ _SECTION_IS_EXERCISE_PATTERN = re.compile(
 )
 
 
-def _classify_chunk(raw_heading: str, in_exercises_zone: bool) -> tuple[str, bool]:
-    """Return (chunk_type, is_optional) for a chunk heading.
-
-    chunk_type values: 'learning_objective' | 'teaching' | 'exercise'
-    is_optional: True only for 'Writing Exercises' chunks
-    """
+def _classify_chunk(raw_heading: str, in_exercises_zone: bool, section_label: str = "") -> tuple[str, bool]:
+    """Return (chunk_type, is_optional) for a chunk heading."""
     h = _normalize_heading(raw_heading)
-    if _INFO_HEADING_PATTERN.match(h):
-        return "learning_objective", False
+    sl = section_label.lower()
+    is_opt = bool(re.search(r'\(optional\)', sl, re.IGNORECASE))
+    is_lab = bool(re.search(r'\blab\b|\bexperiment\b', sl, re.IGNORECASE))
+
+    # Mark universally obvious metadata as optional
+    _OPTIONAL_PATTERNS = [
+        r'\bpreface\b', r'\babout the author', r'\bcontributing author',
+        r'\breviewers?\b', r'\backnowledgment', r'\bdedication\b',
+        r'\bindex\b', r'\banswer key\b', r'\bglossary\b',
+    ]
+    if any(re.search(p, sl, re.IGNORECASE) or re.search(p, h, re.IGNORECASE) for p in _OPTIONAL_PATTERNS):
+        is_opt = True
+
     if in_exercises_zone or _EXERCISE_HEADING_PATTERN.match(h):
-        is_opt = bool(re.match(r"^writing exercises?", h, re.IGNORECASE))
-        return "exercise", is_opt
-    return "teaching", False
+        is_writing = bool(re.match(r"^writing exercises?", h, re.IGNORECASE))
+        return "exercise", is_opt or is_writing
+    if is_lab:
+        return "lab", is_opt
+    return "teaching", is_opt
 
 
 @dataclass
@@ -217,8 +232,41 @@ def _extract_latex(text: str) -> list[str]:
 
 
 def _extract_image_urls(text: str) -> list[str]:
-    """Return all image refs found in text — Mathpix CDN URLs or local ./images/ paths."""
-    return IMAGE_URL_PATTERN.findall(text) + LOCAL_IMAGE_PATTERN.findall(text)
+    """Return all image refs found in text — CDN URLs, local ./images/ paths, or LaTeX \\includegraphics."""
+    return IMAGE_URL_PATTERN.findall(text) + LOCAL_IMAGE_PATTERN.findall(text) + LATEX_IMAGE_PATTERN.findall(text)
+
+
+def _clean_chunk_text(text: str) -> str:
+    """Strip LaTeX figure/table markup from chunk text.
+
+    Images are already extracted to chunk_images via _extract_image_urls().
+    The raw LaTeX (\\begin{figure}, \\includegraphics, etc.) is noise — strip it
+    so chunks contain clean, readable content for LLM card generation and display.
+    """
+    # Remove \begin{figure}...\end{figure} blocks (images already extracted)
+    text = re.sub(r"\\begin\{figure\}.*?\\end\{figure\}", "", text, flags=re.DOTALL)
+    # Remove standalone \includegraphics (outside figure env)
+    text = re.sub(r"\\includegraphics(?:\[[^\]]*\])?\{[^}]+\}", "", text)
+    # Remove \captionsetup{...}
+    text = re.sub(r"\\captionsetup\{[^}]*\}", "", text)
+    # \caption{text} → keep the caption text, strip the command
+    text = re.sub(r"\\caption\{([^}]*)\}", r"\1", text)
+    # Remove table/tabular wrappers but keep content
+    text = re.sub(r"\\begin\{table\}", "", text)
+    text = re.sub(r"\\end\{table\}", "", text)
+    text = re.sub(r"\\begin\{tabular\}\{[^}]*\}", "", text)
+    text = re.sub(r"\\end\{tabular\}", "", text)
+    # Remove \hline
+    text = re.sub(r"\\hline\b", "", text)
+    # Remove external URLs (no learning value for card generation)
+    text = re.sub(r"https?://\S+", "", text)
+    # Remove credit/attribution lines
+    text = re.sub(r"\(credit:.*?\)", "", text, flags=re.IGNORECASE)
+    # Remove standalone "Figure X.Y" reference lines
+    text = re.sub(r"^Figure\s+\d+\.\d+\s*$", "", text, flags=re.MULTILINE)
+    # Collapse excessive blank lines
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 
 def _word_count(text: str) -> int:
@@ -236,8 +284,8 @@ def parse_book_mmd(mmd_path: Path, book_slug: str) -> list[ParsedChunk]:
          to determine section content boundaries.
       2. For each section's body, split on `##` headings that represent MEANINGFUL
          pedagogical subsections (filtering out noise: EXAMPLE, TRY IT, Solution, etc.).
-      3. Orphan text before the first meaningful ## heading becomes an extra chunk
-         with the section title as heading.
+      3. Orphan text before the first meaningful ## heading is prepended to the
+         first subsection chunk (not emitted as a separate chunk).
       4. Sections with zero meaningful ## headings → entire body = one chunk.
       5. Deduplicate: group by (concept_id, heading), keep highest word-count.
          This removes the 3 Mathpix copies of each section (TOC stub, body, review stub).
@@ -281,6 +329,29 @@ def parse_book_mmd(mmd_path: Path, book_slug: str) -> list[ParsedChunk]:
 
     logger.info("Found %d section heading occurrences (before section-level dedup)", len(section_matches))
 
+    # ── Remove backward section numbers (lab/experiment internal numbering) ──
+    # Mathpix sometimes emits \subsection*{1.1 Lab Title} inside a lab section
+    # like 1.5, reusing the 1.1 numbering for internal steps. After normalization
+    # this looks like a real section 1.1 heading, stealing the lab content.
+    # Fix: once we've seen section X.Y in chapter X, reject any later occurrence
+    # of X.Z where Z < Y (it's internal numbering, not a real section).
+    _forward_matches: list[dict] = []
+    _chapter_max_sec: dict[int, int] = {}
+    for sec in section_matches:
+        ch = sec["chapter"]
+        s = sec["section_in_chapter"]
+        prev_max = _chapter_max_sec.get(ch, 0)
+        if s < prev_max:
+            logger.debug(
+                "Removing backward section %d.%d (max seen was %d.%d) — likely lab internal numbering",
+                ch, s, ch, prev_max,
+            )
+            continue
+        _chapter_max_sec[ch] = max(prev_max, s)
+        _forward_matches.append(sec)
+    section_matches = _forward_matches
+    logger.info("Section candidates after backward-number filter: %d", len(section_matches))
+
     # ── Filter fake sections (exercise numbers with tiny bodies) ─────────────
     filtered_matches: list[dict] = []
     for i, sec in enumerate(section_matches):
@@ -297,6 +368,21 @@ def parse_book_mmd(mmd_path: Path, book_slug: str) -> list[ParsedChunk]:
     section_matches = filtered_matches
     logger.info("Section candidates after exercise-number filter: %d", len(section_matches))
 
+    # ── Step 1c: Detect chapter intro boundaries ─────────────────────────────
+    # Chapters have intro content (title, images, objectives) BEFORE section X.1.
+    # Detect chapter headings (## N | Title — no decimal) to adjust body boundaries.
+    _CHAPTER_HEADING = re.compile(r"^#{1,4}\s+(\d+)\s*[|:]\s+", re.MULTILINE)
+    _chapter_intro_pos: dict[int, int] = {}  # chapter_num → start position of chapter heading
+    for _cm in _CHAPTER_HEADING.finditer(mmd_text):
+        _ch = int(_cm.group(1))
+        if _ch not in _chapter_intro_pos:
+            _chapter_intro_pos[_ch] = _cm.start()
+
+    _first_section_idx: dict[int, int] = {}  # chapter_num → index in section_matches
+    for _si, _sec in enumerate(section_matches):
+        if _sec["chapter"] not in _first_section_idx:
+            _first_section_idx[_sec["chapter"]] = _si
+
     # ── Step 2: Split each section's body into subsection chunks ─────────────
     raw_chunks: list[ParsedChunk] = []
     global_order = 0  # monotone counter; reset after dedup
@@ -305,6 +391,19 @@ def parse_book_mmd(mmd_path: Path, book_slug: str) -> list[ParsedChunk]:
         # Body spans from end of section heading to start of next section heading
         body_start = sec["end"]
         body_end = section_matches[i + 1]["start"] if i + 1 < len(section_matches) else len(mmd_text)
+
+        # First section of chapter → extend backward to include chapter intro
+        if _first_section_idx.get(sec["chapter"]) == i:
+            ch_intro = _chapter_intro_pos.get(sec["chapter"])
+            if ch_intro is not None and ch_intro < sec["start"]:
+                body_start = ch_intro
+
+        # Last section before chapter change → trim at next chapter heading
+        if i + 1 < len(section_matches):
+            next_ch = section_matches[i + 1]["chapter"]
+            if next_ch != sec["chapter"] and next_ch in _chapter_intro_pos:
+                body_end = min(body_end, _chapter_intro_pos[next_ch])
+
         body = mmd_text[body_start:body_end]
 
         # Find MEANINGFUL ## subsection headings within the body
@@ -344,40 +443,28 @@ def parse_book_mmd(mmd_path: Path, book_slug: str) -> list[ParsedChunk]:
             # Case 3: no meaningful sub-headings → whole body is one chunk
             text = body.strip()
             if text:
-                _ctype, _opt = _classify_chunk(sec["section_label"], in_exercises_zone)
+                _ctype, _opt = _classify_chunk(sec["section_label"], in_exercises_zone, sec["section_label"])
+                # Extract images and latex BEFORE cleaning so no refs are lost
+                _images = _extract_image_urls(text)
+                _latex = _extract_latex(text)
                 raw_chunks.append(ParsedChunk(
                     book_slug=book_slug,
                     concept_id=sec["concept_id"],
                     section=sec["section_label"],
                     order_index=global_order,
                     heading=sec["section_label"],
-                    text=text,
-                    latex=_extract_latex(text),
-                    image_urls=_extract_image_urls(text),
+                    text=_clean_chunk_text(text),
+                    latex=_latex,
+                    image_urls=_images,
                     chunk_type=_ctype,
                     is_optional=_opt,
                 ))
                 global_order += 1
             continue
 
-        # Case 2: orphan text before the first meaningful sub-heading
+        # Capture orphan text (section intro before first subheading) — will be prepended to first chunk
         first_sub_start = meaningful_subs[0][0]
         orphan_text = body[:first_sub_start].strip()
-        if orphan_text:
-            _ctype, _opt = _classify_chunk(sec["section_label"], in_exercises_zone)
-            raw_chunks.append(ParsedChunk(
-                book_slug=book_slug,
-                concept_id=sec["concept_id"],
-                section=sec["section_label"],
-                order_index=global_order,
-                heading=sec["section_label"],
-                text=orphan_text,
-                latex=_extract_latex(orphan_text),
-                image_urls=_extract_image_urls(orphan_text),
-                chunk_type=_ctype,
-                is_optional=_opt,
-            ))
-            global_order += 1
 
         # Case 1: each meaningful sub-heading → one chunk
         # The chunk text spans from the ## heading line through all body content until
@@ -386,21 +473,27 @@ def parse_book_mmd(mmd_path: Path, book_slug: str) -> list[ParsedChunk]:
         for j, (sh_start, sh_end, heading_text) in enumerate(meaningful_subs):
             content_end = meaningful_subs[j + 1][0] if j + 1 < len(meaningful_subs) else len(body)
             chunk_text = body[sh_start:content_end].strip()
+            # Prepend section intro to the first subsection chunk
+            if j == 0 and orphan_text:
+                chunk_text = orphan_text + "\n\n" + chunk_text
             if not chunk_text:
                 continue
             # Determine if this heading is in the exercise zone
             # (exercise headings were tagged with " (Exercises)" in the loop above)
             _in_zone = heading_text.endswith(" (Exercises)")
-            _ctype, _opt = _classify_chunk(heading_text, _in_zone)
+            _ctype, _opt = _classify_chunk(heading_text, _in_zone, sec["section_label"])
+            # Extract images and latex BEFORE cleaning so no refs are lost
+            _images = _extract_image_urls(chunk_text)
+            _latex = _extract_latex(chunk_text)
             raw_chunks.append(ParsedChunk(
                 book_slug=book_slug,
                 concept_id=sec["concept_id"],
                 section=sec["section_label"],
                 order_index=global_order,
                 heading=heading_text,
-                text=chunk_text,
-                latex=_extract_latex(chunk_text),
-                image_urls=_extract_image_urls(chunk_text),
+                text=_clean_chunk_text(chunk_text),
+                latex=_latex,
+                image_urls=_images,
                 chunk_type=_ctype,
                 is_optional=_opt,
             ))
@@ -420,28 +513,19 @@ def parse_book_mmd(mmd_path: Path, book_slug: str) -> list[ParsedChunk]:
 
     deduped = list(seen.values())
 
-    # ── Step 3b: Drop section-title stub duplicates ───────────────────────────
-    # Some books (e.g. college_algebra) emit a chapter-review copy of each section
-    # with heading == section label (e.g. "1.1 Real Numbers: Algebra Essentials").
-    # These survive dedup because their heading differs from the real subsection chunks
-    # ("Learning Objectives", "Classifying a Real Number", etc.). When real subsection
-    # chunks exist for a concept, the section-title stub is redundant — drop it.
-    from collections import defaultdict as _defaultdict
-    _concept_headings: dict[str, set] = _defaultdict(set)
-    for chunk in deduped:
-        _concept_headings[chunk.concept_id].add(chunk.heading)
-
-    _pre_stub_count = len(deduped)
-    deduped = [
-        c for c in deduped
-        if not (
-            c.heading == c.section                          # heading is the section title
-            and len(_concept_headings[c.concept_id]) > 1   # other distinct headings exist
-        )
-    ]
-    _stub_removed = _pre_stub_count - len(deduped)
-    if _stub_removed:
-        logger.info("Removed %d section-title stub duplicates", _stub_removed)
+    # ── Step 3b: Merge tiny chunks into adjacent chunks ──────────────────────
+    # Chunks with < 20 words (e.g. "Introduction", "Chapter Objectives") have
+    # no teaching value on their own. Merge them into the next chunk in the same section.
+    _merged: list[ParsedChunk] = []
+    for _mi, _chunk in enumerate(deduped):
+        if (len(_chunk.text.split()) < 50
+                and _mi + 1 < len(deduped)
+                and deduped[_mi + 1].concept_id == _chunk.concept_id):
+            deduped[_mi + 1].text = _chunk.text + "\n\n" + deduped[_mi + 1].text
+            logger.debug("Merged tiny chunk '%s' into next chunk", _chunk.heading[:40])
+        else:
+            _merged.append(_chunk)
+    deduped = _merged
 
     # ── Step 4: Re-sort by original reading order and re-number ──────────────
     # The winner of each dedup group retains its order_index from the body-copy

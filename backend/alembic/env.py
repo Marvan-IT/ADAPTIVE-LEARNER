@@ -32,6 +32,7 @@ load_dotenv(_backend_dir / ".env")
 #     alembic.ini prepends backend/src to sys.path, matching uvicorn's path.
 # ---------------------------------------------------------------------------
 from db.models import Base  # noqa: E402
+import auth.models  # noqa: E402, F401  — register auth tables with Base.metadata
 
 # ---------------------------------------------------------------------------
 # 3.  Standard Alembic config wiring.

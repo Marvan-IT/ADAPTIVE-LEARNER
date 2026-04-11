@@ -150,12 +150,12 @@ class TestGetChunkImagesUnit:
         mock_db = AsyncMock()
 
         img1 = MagicMock()
-        img1.image_url = "http://localhost:8889/images/prealgebra/images_downloaded/abc.jpg"
+        img1.image_url = "/images/prealgebra/images_downloaded/abc.jpg"
         img1.caption = "Figure 1.1"
         img1.order_index = 0
 
         img2 = MagicMock()
-        img2.image_url = "http://localhost:8889/images/prealgebra/images_downloaded/def.jpg"
+        img2.image_url = "/images/prealgebra/images_downloaded/def.jpg"
         img2.caption = None
         img2.order_index = 1
 

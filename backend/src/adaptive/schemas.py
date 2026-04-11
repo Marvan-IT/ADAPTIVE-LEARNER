@@ -136,7 +136,7 @@ class AdaptiveLesson(BaseModel):
 class CardBehaviorSignals(BaseModel):
     """Behavioral signals captured for a single card interaction by the frontend."""
 
-    card_index: int
+    card_index: int = 0
     time_on_card_sec: float = 0.0
     wrong_attempts: int = 0
     selected_wrong_option: int | None = None
