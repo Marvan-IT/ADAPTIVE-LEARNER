@@ -22,11 +22,19 @@ import json
 from auth.dependencies import get_current_user, require_admin
 from auth.models import User
 from config import (
+    BOOK_REGISTRY,
     CARD_HISTORY_DEFAULT_LIMIT,
     CARD_HISTORY_MAX_LIMIT,
     CHUNK_EXAM_PASS_RATE,
     OPENAI_MODEL_MINI,
 )
+
+def _get_book_title(book_slug: str) -> str:
+    """Look up human-readable book title from BOOK_REGISTRY by slug."""
+    for entry in BOOK_REGISTRY.values():
+        if isinstance(entry, dict) and entry.get("book_slug") == book_slug:
+            return entry.get("title", book_slug)
+    return book_slug
 from adaptive.adaptive_engine import build_blended_analytics, load_student_history
 from adaptive.schemas import CardBehaviorSignals
 from db.connection import get_db
@@ -58,6 +66,7 @@ from api.teaching_schemas import (
     StudentLanguageResponse,
 )
 from api.rate_limiter import limiter
+from api.prompts import _language_instruction
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +123,10 @@ def _get_chunk_type(heading: str, text: str = "") -> str:
     return chunk_type
 
 
+def _effective_chunk_type(c: dict) -> str:
+    return c.get("chunk_type") or _get_chunk_type(c.get("heading", ""), c.get("text", ""))
+
+
 router = APIRouter(prefix="/api/v2", tags=["teaching"])
 
 
@@ -133,6 +146,8 @@ class RecordInteractionRequest(BaseModel):
     adaptation_applied: str | None = None
     engagement_signal: str | None = None
     strategy_applied: str | None = None
+    difficulty: int | None = Field(default=None, ge=1, le=5, description="Card difficulty 1-5 from LLM")
+    is_correct: bool = Field(default=False, description="Whether the student answered correctly")
 
 async def _award_xp(
     student_id: UUID,
@@ -217,6 +232,7 @@ async def create_student(
     )
     db.add(student)
     await db.flush()
+    await db.commit()
     return student
 
 
@@ -278,6 +294,9 @@ async def get_student(
         "created_at": student.created_at.isoformat(),
         "xp": student.xp,
         "streak": student.streak,
+        "daily_streak": student.daily_streak or 0,
+        "daily_streak_best": student.daily_streak_best or 0,
+        "last_active_date": student.last_active_date.isoformat() if student.last_active_date else None,
     }
 
 
@@ -362,6 +381,7 @@ async def get_student_analytics(
             func.coalesce(func.avg(CardInteraction.wrong_attempts), 0).label("avg_wrong"),
             func.coalesce(func.avg(CardInteraction.hints_used), 0).label("avg_hints"),
             func.coalesce(func.avg(CardInteraction.time_on_card_sec), 0).label("avg_time"),
+            func.coalesce(func.sum(CardInteraction.time_on_card_sec), 0).label("total_time"),
         ).where(CardInteraction.student_id == student_id)
     )
     agg_row = card_agg.one()
@@ -369,6 +389,7 @@ async def get_student_analytics(
     avg_wrong_attempts_per_card = round(float(agg_row.avg_wrong), 3)
     avg_hints_per_card = round(float(agg_row.avg_hints), 3)
     avg_time_on_card_sec = round(float(agg_row.avg_time), 3)
+    total_study_time_sec = round(float(agg_row.total_time), 1)
 
     # Hardest concept: concept_id with highest total wrong_attempts
     hardest_result = await db.execute(
@@ -421,6 +442,7 @@ async def get_student_analytics(
         avg_wrong_attempts_per_card=avg_wrong_attempts_per_card,
         avg_hints_per_card=avg_hints_per_card,
         avg_time_on_card_sec=avg_time_on_card_sec,
+        total_study_time_sec=total_study_time_sec,
         reviews_due_now=reviews_due_now,
         reviews_upcoming_7d=reviews_upcoming_7d,
         hardest_concept_id=hardest_concept_id,
@@ -662,7 +684,7 @@ async def start_session(
         raise
     except Exception as exc:
         logger.exception("[sessions] session creation failed: student_id=%s concept_id=%s", req.student_id, req.concept_id)
-        raise HTTPException(status_code=500, detail=f"Session creation failed: {exc}")
+        raise HTTPException(status_code=500, detail="Session creation failed. Please try again.")
 
 
 @router.post("/sessions/{session_id}/present", response_model=PresentationResponse)
@@ -713,6 +735,7 @@ async def get_presentation(
         session_id=session.id,
         concept_id=session.concept_id,
         concept_title=concept["concept_title"] if concept else session.concept_id,
+        book_title=_get_book_title(session.book_slug),
         presentation=clean_presentation,
         style=session.style,
         phase=session.phase,
@@ -866,6 +889,7 @@ async def get_cards(
         session_id=session.id,
         concept_id=session.concept_id,
         concept_title=result.get("concept_title", session.concept_id),
+        book_title=_get_book_title(session.book_slug),
         style=session.style,
         phase=session.phase,
         cards=cards,
@@ -971,11 +995,26 @@ async def generate_chunk_cards(
         chunk_heading = chunk.get("heading", "") if chunk else ""
         chunk_text = chunk.get("text", "") if chunk else ""
         chunk_type = chunk.get("chunk_type") or _get_chunk_type(chunk_heading, chunk_text)
+        # exam_disabled may be a bool on an ORM object or a dict value
+        _exam_disabled = (
+            chunk.get("exam_disabled", False)
+            if isinstance(chunk, dict)
+            else getattr(chunk, "exam_disabled", False)
+        ) if chunk else False
         questions: list[ChunkExamQuestion] = []
-        if chunk_type == "teaching" and chunk and chunk_text.strip():
+        if _exam_disabled:
+            # Admin has disabled exam questions for this chunk — auto-advance in frontend
+            logger.info(
+                "[chunk-cards] exam_disabled=True for chunk_id=%s — skipping question generation",
+                req.chunk_id,
+            )
+        elif chunk_type == "teaching" and chunk and chunk_text.strip():
             # Dynamic question count based on chunk text length
             _text_len = len(chunk_text.strip()) if chunk_text else 0
             _target_q = 1 if _text_len < 400 else (2 if _text_len < 1200 else 3)
+            # Read student language for exam questions
+            _exam_student = await db.get(Student, session.student_id)
+            _exam_lang = getattr(_exam_student, "preferred_language", "en") or "en"
             _q_system = (
                 "You are a friendly quiz writer for math students. "
                 "Based ONLY on the content provided, generate exactly "
@@ -990,7 +1029,7 @@ async def generate_chunk_cards(
                 "- Simple vocabulary (age 10–14). One sentence per question.\n"
                 "Return ONLY valid JSON with no markdown: "
                 '{"questions": [{"index": 0, "text": "..."}, ...]}'
-            )
+            ) + _language_instruction(_exam_lang)
             _q_user = f"Section: {chunk_heading}\n\n{chunk_text[:900]}"
             try:
                 _q_result = await _call_llm_json(
@@ -1123,7 +1162,7 @@ async def complete_chunk(
         "score": score,
         "correct": req.correct,
         "total": req.total,
-        "completed_at": datetime.utcnow().isoformat(),
+        "completed_at": datetime.now(timezone.utc).isoformat(),
     }
     session.chunk_progress = existing_progress
 
@@ -1180,15 +1219,18 @@ async def complete_chunk(
     next_teaching = next(
         (c for c in all_sorted
          if c["order_index"] > current_order
-         and _get_chunk_type(c.get("heading", "")) == "teaching"),
+         and _effective_chunk_type(c) == "teaching"),
         None,
     )
 
-    # all_study_complete: all teaching chunks completed
+    # all_study_complete: all visible, required teaching chunks completed
+    # Hidden and optional chunks are excluded — they must not block mastery
     completed_ids = set(existing_progress.keys())
     required_ids = {
         str(c["id"]) for c in all_sorted
-        if _get_chunk_type(c.get("heading", "")) == "teaching"
+        if _effective_chunk_type(c) == "teaching"
+        and not c.get("is_optional", False)
+        and not c.get("is_hidden", False)
     }
     all_study_complete = bool(required_ids) and required_ids.issubset(completed_ids)
 
@@ -1239,7 +1281,7 @@ async def complete_chunk_item(
     existing_progress = dict(session.chunk_progress or {})
     if chunk_id not in existing_progress:
         existing_progress[chunk_id] = {
-            "completed_at": datetime.utcnow().isoformat(),
+            "completed_at": datetime.now(timezone.utc).isoformat(),
         }
         session.chunk_progress = existing_progress
 
@@ -1249,15 +1291,18 @@ async def complete_chunk_item(
     next_chunk = next(
         (c for c in all_sorted
          if c.get("order_index", 0) > current_order
-         and _get_chunk_type(c.get("heading", "")) in ("teaching", "exercise", "section_review")),
+         and _effective_chunk_type(c) in ("teaching", "exercise", "section_review")),
         None,
     )
 
-    # Check all_study_complete (teaching chunks only)
+    # Check all_study_complete — visible, required teaching chunks only
+    # Hidden and optional chunks are excluded — they must not block mastery
     completed_ids = set(existing_progress.keys())
     required_ids = {
         str(c["id"]) for c in all_sorted
-        if _get_chunk_type(c.get("heading", "")) == "teaching"
+        if _effective_chunk_type(c) == "teaching"
+        and not c.get("is_optional", False)
+        and not c.get("is_hidden", False)
     }
     all_study_complete = bool(required_ids) and required_ids.issubset(completed_ids)
 
@@ -1303,6 +1348,10 @@ async def evaluate_chunk_answers(
     if not req.questions or not req.answers:
         raise HTTPException(status_code=400, detail="questions and answers are required")
 
+    # Read student language for grading feedback
+    _grade_student = await db.get(Student, session.student_id)
+    _grade_lang = getattr(_grade_student, "preferred_language", "en") or "en"
+
     # Build grading prompt
     qa_pairs = []
     ans_by_index = {a.index: a.answer_text for a in req.answers}
@@ -1320,7 +1369,7 @@ async def evaluate_chunk_answers(
         "Give short, encouraging feedback (1 sentence). "
         "Return ONLY valid JSON: "
         '{"results": [{"index": 0, "correct": true/false, "feedback": "..."}]}'
-    )
+    ) + _language_instruction(_grade_lang)
     grading_user = "\n\n".join(qa_pairs)
 
     try:
@@ -1393,7 +1442,8 @@ async def evaluate_chunk_answers(
         session.chunk_progress = existing_progress
         chunk_progress_update = {chunk_id: {"score": score_pct, "mode_used": req.mode_used}}
 
-        # Compute all_study_complete (teaching chunks only)
+        # Compute all_study_complete — visible, required teaching chunks only
+        # Hidden and optional chunks are excluded — they must not block mastery
         try:
             all_chunks = await chunk_ksvc.get_chunks_for_concept(
                 db, session.book_slug or "prealgebra", session.concept_id
@@ -1401,7 +1451,9 @@ async def evaluate_chunk_answers(
             all_sorted = sorted(all_chunks, key=lambda c: c["order_index"])
             required_ids = {
                 str(c["id"]) for c in all_sorted
-                if _get_chunk_type(c.get("heading", "")) == "teaching"
+                if _effective_chunk_type(c) == "teaching"
+                and not c.get("is_optional", False)
+                and not c.get("is_hidden", False)
             }
             completed_ids = set(existing_progress.keys())
             all_study_complete = bool(required_ids) and required_ids.issubset(completed_ids)
@@ -1433,6 +1485,16 @@ async def evaluate_chunk_answers(
             logger.info(
                 "[evaluate-chunk] concept MASTERED via KC: session_id=%s concept_id=%s",
                 session_id, session.concept_id,
+            )
+
+            # Award mastery XP (flush so the mastery row is visible to badge queries)
+            await db.flush()
+            from gamification.xp_engine import award_mastery_xp
+            await award_mastery_xp(
+                db=db,
+                student_id=session.student_id,
+                session_id=session.id,
+                score=int(round(score_frac * 100)) if score_frac is not None else None,
             )
 
         await db.commit()
@@ -1531,7 +1593,7 @@ async def list_chunks(
         )
         # Exclude heading-only stubs (< 100 chars) — same rule as get_chunks_for_concept()
         # in chunk_knowledge_service.py. Applies to all books and all sections.
-        chunks = [c for c in result.scalars().all() if len((c.text or "").strip()) >= 100]
+        chunks = [c for c in result.scalars().all() if len((c.text or "").strip()) >= 100 and not c.is_hidden]
 
         if not chunks:
             # ChromaDB-path signal: return empty list
@@ -1568,6 +1630,7 @@ async def list_chunks(
                 has_mcq=_heading_has_mcq(c.heading or ""),
                 chunk_type=c.chunk_type or _get_chunk_type(c.heading or ""),
                 is_optional=c.is_optional,
+                exam_disabled=bool(c.exam_disabled),
                 completed=str(c.id) in progress,
                 score=progress.get(str(c.id), {}).get("score"),
                 mode_used=progress.get(str(c.id), {}).get("mode"),
@@ -1575,14 +1638,30 @@ async def list_chunks(
             for c in chunks
         ]
 
-        section_title = chunks[0].section if chunks else ""
+        # Prefer admin-supplied section name over the raw DB section field
+        section_title = chunks[0].admin_section_name or chunks[0].section if chunks else ""
 
-        # Chunks with < 100 chars are already excluded above at the DB fetch level,
-        # so all summaries here have real content.
+        # Translate headings + section_title if student language is not English
+        student = await db.get(Student, session.student_id)
+        lang = getattr(student, "preferred_language", "en") or "en"
+        if lang != "en" and teaching_svc and summaries:
+            try:
+                raw_headings = [s.heading for s in summaries]
+                to_translate = raw_headings + ([section_title] if section_title else [])
+                translated = await _translate_summaries_headings(
+                    to_translate, lang, teaching_svc.openai
+                )
+                if translated and len(translated) == len(to_translate):
+                    for i, s in enumerate(summaries):
+                        s.heading = translated[i]
+                    if section_title:
+                        section_title = translated[-1]
+            except Exception as exc:
+                logger.warning("[chunks] heading translation failed for lang=%s: %s", lang, exc)
 
         logger.info(
-            "[chunks] session_id=%s concept_id=%s total=%d current_index=%d",
-            session_id, concept_id, len(summaries), session.chunk_index or 0,
+            "[chunks] session_id=%s concept_id=%s total=%d current_index=%d lang=%s",
+            session_id, concept_id, len(summaries), session.chunk_index or 0, lang,
         )
 
         return ChunkListResponse(
@@ -1676,9 +1755,11 @@ async def record_card_interaction(
         engagement_signal=req.engagement_signal,
         strategy_applied=req.strategy_applied,
         strategy_effective=strategy_effective,
+        difficulty=req.difficulty,
     )
     db.add(interaction)
-    await db.commit()
+    # Flush first so the interaction gets its PK — the XP event FK needs it
+    await db.flush()
 
     # Update student's engagement effectiveness history if a strategy was applied
     if req.strategy_applied and strategy_effective is not None:
@@ -1687,7 +1768,35 @@ async def record_card_interaction(
             db, session.student_id, req.strategy_applied, strategy_effective
         )
 
-    return {"saved": True}
+    # Award XP for correct answers (default difficulty=3 when LLM omits it)
+    xp_result: dict = {"base_xp": 0, "multiplier": 1.0, "final_xp": 0, "new_badges": []}
+    effective_difficulty = req.difficulty if req.difficulty is not None else 3
+    if req.is_correct:
+        from gamification.xp_engine import compute_and_award_xp
+        xp_result = await compute_and_award_xp(
+            db=db,
+            student_id=session.student_id,
+            session_id=session.id,
+            interaction_id=interaction.id,
+            difficulty=effective_difficulty,
+            wrong_attempts=req.wrong_attempts,
+            hints_used=req.hints_used,
+            is_correct=True,
+            time_on_card_sec=req.time_on_card_sec,
+            answer_streak=0,  # Frontend will pass this in a future update
+        )
+
+    await db.commit()
+
+    return {
+        "saved": True,
+        "xp_awarded": {
+            "base_xp": xp_result["base_xp"],
+            "multiplier": xp_result["multiplier"],
+            "final_xp": xp_result["final_xp"],
+        },
+        "new_badges": xp_result.get("new_badges", []),
+    }
 
 
 @router.post("/sessions/{session_id}/complete-card")
@@ -1834,7 +1943,7 @@ async def get_student_sessions(
     result = await db.execute(
         select(TeachingSession)
         .where(TeachingSession.student_id == student_id)
-        .where(TeachingSession.phase.in_(["CARDS", "CARDS_DONE", "CHECKING", "COMPLETED"]))
+        .where(TeachingSession.phase.in_(["PRESENTING", "CARDS", "CARDS_DONE", "SELECTING_CHUNK", "CHECKING", "COMPLETED"]))
         .order_by(TeachingSession.started_at.desc())
         .limit(50)
     )
@@ -1845,6 +1954,7 @@ async def get_student_sessions(
             {
                 "id": str(s.id),
                 "concept_id": s.concept_id,
+                "book_slug": s.book_slug,
                 "phase": s.phase,
                 "check_score": s.check_score,
                 "mastered": s.concept_mastered,
@@ -1911,12 +2021,145 @@ async def get_session_card_interactions(
     }
 
 
+# ═══════════════════════════════════════════════════════════════════
+# GAMIFICATION — BADGES, LEADERBOARD, FEATURE FLAGS
+# ═══════════════════════════════════════════════════════════════════
+
+@router.get("/students/{student_id}/badges")
+@limiter.limit("30/minute")
+async def get_student_badges(
+    request: Request,
+    student_id: UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get all badges earned by a student, ordered newest first."""
+    await _validate_student_ownership(user, student_id, db)
+    from db.models import StudentBadge
+    result = await db.execute(
+        select(StudentBadge)
+        .where(StudentBadge.student_id == student_id)
+        .order_by(StudentBadge.awarded_at.desc())
+    )
+    badges = result.scalars().all()
+    return [
+        {
+            "badge_key": b.badge_key,
+            "awarded_at": b.awarded_at.isoformat(),
+            "metadata": b.metadata_,
+        }
+        for b in badges
+    ]
+
+
+@router.get("/leaderboard")
+@limiter.limit("10/minute")
+async def get_leaderboard(
+    request: Request,
+    limit: int = 20,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get XP leaderboard.  Returns 403 if disabled by admin."""
+    from db.models import StudentBadge, AdminConfig
+    from sqlalchemy import func as sa_func
+
+    # Check feature flag
+    config_result = await db.execute(
+        select(AdminConfig.value).where(AdminConfig.key == "LEADERBOARD_ENABLED")
+    )
+    enabled = config_result.scalar_one_or_none()
+    if enabled != "true":
+        raise HTTPException(403, "Leaderboard is disabled")
+
+    limit = max(5, min(100, limit))
+
+    # Ranked students by XP
+    result = await db.execute(
+        select(Student.id, Student.display_name, Student.xp)
+        .where(Student.xp > 0)
+        .order_by(Student.xp.desc())
+        .limit(limit)
+    )
+    rows = result.all()
+
+    # Badge counts in a single query
+    badge_counts_result = await db.execute(
+        select(StudentBadge.student_id, sa_func.count(StudentBadge.id))
+        .group_by(StudentBadge.student_id)
+    )
+    badge_counts: dict = dict(badge_counts_result.all())
+
+    leaderboard = []
+    for rank, (sid, name, xp) in enumerate(rows, 1):
+        level = (xp // 100) + 1
+        leaderboard.append({
+            "rank": rank,
+            "display_name": name,
+            "xp": xp,
+            "level": level,
+            "badge_count": badge_counts.get(sid, 0),
+        })
+
+    # Find the authenticated user's own rank
+    student_result = await db.execute(
+        select(Student).where(Student.user_id == user.id)
+    )
+    my_student = student_result.scalar_one_or_none()
+    your_rank = None
+    if my_student and my_student.xp > 0:
+        count_result = await db.execute(
+            select(func.count(Student.id)).where(Student.xp > my_student.xp)
+        )
+        your_rank = (count_result.scalar() or 0) + 1
+
+    return {
+        "leaderboard": leaderboard,
+        "your_rank": your_rank,
+        "your_xp": my_student.xp if my_student else 0,
+    }
+
+
+@router.get("/features")
+@limiter.limit("60/minute")
+async def get_feature_flags(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Return gamification feature flags as booleans for the frontend."""
+    from db.models import AdminConfig
+    flag_keys = [
+        "GAMIFICATION_ENABLED",
+        "LEADERBOARD_ENABLED",
+        "BADGES_ENABLED",
+        "STREAK_MULTIPLIER_ENABLED",
+        "DIFFICULTY_WEIGHTED_XP_ENABLED",
+    ]
+    defaults = {
+        "GAMIFICATION_ENABLED": "true",
+        "LEADERBOARD_ENABLED": "false",
+        "BADGES_ENABLED": "true",
+        "STREAK_MULTIPLIER_ENABLED": "true",
+        "DIFFICULTY_WEIGHTED_XP_ENABLED": "true",
+    }
+    result = await db.execute(
+        select(AdminConfig.key, AdminConfig.value)
+        .where(AdminConfig.key.in_(flag_keys))
+    )
+    config: dict = dict(result.all())
+    return {
+        k.lower(): (config.get(k, defaults[k]) == "true")
+        for k in flag_keys
+    }
+
+
 @router.get("/books", response_model=list[dict])
 async def list_available_books(db: AsyncSession = Depends(get_db)):
-    """Return all processed books available for study."""
+    """Return all processed books available for study (excluding hidden books/subjects)."""
+    from db.models import Book, Subject
+
     try:
         from config import BOOK_REGISTRY
-        # Build slug → title lookup from the registry (each entry has "book_slug" and "title")
         slug_to_title = {
             entry["book_slug"]: entry["title"]
             for entry in BOOK_REGISTRY.values()
@@ -1925,16 +2168,41 @@ async def list_available_books(db: AsyncSession = Depends(get_db)):
     except (ImportError, AttributeError):
         slug_to_title = {}
 
+    # Only show books that are PUBLISHED in the books table, not hidden,
+    # and whose subject is not hidden. Old books without a books table entry are excluded.
+    try:
+        query = select(Book.book_slug, Book.title, Book.subject).where(
+            Book.status == "PUBLISHED",
+            Book.is_hidden == False,
+        )
+        rows = (await db.execute(query)).all()
+    except Exception as exc:
+        logger.warning("[list_available_books] DB query failed: %s", exc)
+        rows = []
+
+    # Filter out books whose subject is hidden
+    hidden_subjects: set[str] = set()
+    try:
+        hs_rows = (await db.execute(
+            select(Subject.slug).where(Subject.is_hidden == True)
+        )).scalars().all()
+        hidden_subjects = set(hs_rows)
+    except Exception:
+        pass
+
+    # Also check that books have concept_chunks (actually processed)
     active_books: set[str] = set()
     try:
         active_books = await chunk_ksvc.get_active_books(db)
-    except Exception as exc:
-        logger.warning("[list_available_books] get_active_books failed: %s", exc)
+    except Exception:
+        pass
 
     return [
         {
-            "slug": slug,
-            "title": slug_to_title.get(slug, slug.replace("_", " ").title()),
+            "slug": r[0],
+            "title": r[1] or slug_to_title.get(r[0], r[0].replace("_", " ").title()),
+            "subject": r[2],
         }
-        for slug in sorted(active_books)
+        for r in rows
+        if r[2] not in hidden_subjects and r[0] in active_books
     ]

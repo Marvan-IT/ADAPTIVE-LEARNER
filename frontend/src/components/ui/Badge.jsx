@@ -1,27 +1,54 @@
-const BADGE_VARIANTS = {
-  success: { bg: "rgba(34,197,94,0.12)",  color: "#16a34a", border: "#86efac" },
-  warning: { bg: "rgba(245,158,11,0.12)", color: "#d97706", border: "#fcd34d" },
-  danger:  { bg: "rgba(239,68,68,0.12)",  color: "#dc2626", border: "#fca5a5" },
-  info:    { bg: "var(--color-primary-light)", color: "var(--color-primary)", border: "var(--color-primary)" },
-  neutral: { bg: "var(--color-border)",    color: "var(--color-text-muted)", border: "var(--color-border)" },
+import { cn } from "./lib/utils";
+
+/**
+ * Variant classes using CSS color-mix for transparent tinted backgrounds.
+ * Each variant defines: bg (12% tint), text color, border (30% opacity).
+ */
+const variantClasses = {
+  success:
+    "bg-[color-mix(in_srgb,var(--color-success)_12%,transparent)] text-[var(--color-success)] border border-[color-mix(in_srgb,var(--color-success)_30%,transparent)]",
+  warning:
+    "bg-[color-mix(in_srgb,var(--color-warning)_12%,transparent)] text-[var(--color-warning)] border border-[color-mix(in_srgb,var(--color-warning)_30%,transparent)]",
+  danger:
+    "bg-[color-mix(in_srgb,var(--color-danger)_12%,transparent)] text-[var(--color-danger)] border border-[color-mix(in_srgb,var(--color-danger)_30%,transparent)]",
+  info:
+    "bg-[color-mix(in_srgb,var(--color-info)_12%,transparent)] text-[var(--color-info)] border border-[color-mix(in_srgb,var(--color-info)_30%,transparent)]",
+  neutral:
+    "bg-[color-mix(in_srgb,var(--color-text-muted)_12%,transparent)] text-[var(--color-text-muted)] border border-[color-mix(in_srgb,var(--color-text-muted)_30%,transparent)]",
+  mastered:
+    "bg-[color-mix(in_srgb,var(--color-success)_15%,transparent)] text-[var(--xp-gold)] border border-[color-mix(in_srgb,var(--xp-gold)_30%,transparent)]",
+  available:
+    "bg-[color-mix(in_srgb,var(--color-primary)_12%,transparent)] text-[var(--color-primary)] border border-[color-mix(in_srgb,var(--color-primary)_30%,transparent)]",
+  locked:
+    "bg-[color-mix(in_srgb,var(--node-locked)_20%,transparent)] text-[var(--node-locked)] border border-[color-mix(in_srgb,var(--node-locked)_30%,transparent)]",
+  weak:
+    "bg-[color-mix(in_srgb,var(--color-warning)_12%,transparent)] text-[var(--color-warning)] border border-[color-mix(in_srgb,var(--color-warning)_30%,transparent)]",
+  new:
+    "bg-[color-mix(in_srgb,#f97316_12%,transparent)] text-[#f97316] border border-[color-mix(in_srgb,#f97316_30%,transparent)]",
 };
 
-export default function Badge({ children, variant = "neutral", style: extra = {} }) {
-  const v = BADGE_VARIANTS[variant] || BADGE_VARIANTS.neutral;
+const sizeClasses = {
+  sm: "text-[0.72rem] px-2 py-0.5",
+  md: "text-xs px-2.5 py-1",
+};
+
+/**
+ * @param {"success"|"warning"|"danger"|"info"|"neutral"|"mastered"|"available"|"locked"|"weak"|"new"} [props.variant="neutral"] - Color variant
+ * @param {"sm"|"md"} [props.size="sm"] - Badge size
+ * @param {string} [props.className]
+ * @param {React.ReactNode} [props.children]
+ */
+export default function Badge({ variant = "neutral", size = "sm", className, children, ...rest }) {
   return (
-    <span style={{
-      display: "inline-flex",
-      alignItems: "center",
-      gap: "0.25rem",
-      padding: "0.15rem 0.55rem",
-      borderRadius: "var(--radius-full)",
-      backgroundColor: v.bg,
-      color: v.color,
-      border: `1px solid ${v.border}`,
-      fontSize: "0.72rem",
-      fontWeight: 700,
-      ...extra,
-    }}>
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 rounded-[var(--radius-full)] font-bold",
+        variantClasses[variant] ?? variantClasses.neutral,
+        sizeClasses[size] ?? sizeClasses.sm,
+        className
+      )}
+      {...rest}
+    >
       {children}
     </span>
   );

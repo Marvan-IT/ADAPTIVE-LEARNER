@@ -1,13 +1,11 @@
 """
 graph_builder.py — Build the concept dependency graph from the concept_chunks table.
 
-Strategy (Phase 2):
-  Sequential edges within each chapter: section N.k → N.(k+1).
-  Each chapter forms an independent linear chain. No cross-chapter edges at this stage.
-
-Future enhancement:
-  Cross-chapter prerequisite edges detected by LLM analysis of "prerequisite" mentions
-  in chunk text. That is deferred to a later phase.
+Strategy:
+  1. Sequential edges within each chapter: section N.k → N.(k+1).
+  2. LLM-based cross-chapter prerequisites: ask gpt-4o-mini which chapters
+     are TRUE prerequisites for other chapters (works for ANY subject domain).
+  3. Merge expert/keyword-based cross-chapter edges from dependency_graph.json (if exists).
 
 Output: graph.json written to the book's output directory.
   Format:
@@ -17,6 +15,7 @@ Output: graph.json written to the book's output directory.
 
 import json
 import logging
+import re
 from itertools import groupby
 from pathlib import Path
 
@@ -29,26 +28,149 @@ from db.models import ConceptChunk
 logger = logging.getLogger(__name__)
 
 
+# ── LLM-based cross-chapter prerequisite detection ──────────────────────────
+
+async def _get_llm_chapter_prerequisites(
+    chapter_sections: dict[str, list[str]],
+    book_slug: str,
+) -> dict[str, list[str]]:
+    """Ask LLM which chapters are true prerequisites for other chapters.
+
+    Args:
+        chapter_sections: {"1": ["1.1 Introduction", "1.2 Add Numbers"], "2": [...], ...}
+        book_slug: e.g. "prealgebra" or "clinical_nursing_skills"
+
+    Returns:
+        {"3": ["1"], "5": ["1", "3"]} meaning chapter 3 requires chapter 1, etc.
+        Returns empty dict on any failure (graceful fallback).
+    """
+    try:
+        from openai import AsyncOpenAI
+        from config import OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL_MINI
+    except ImportError:
+        logger.warning("[graph] OpenAI not available — skipping LLM cross-chapter analysis")
+        return {}
+
+    if not OPENAI_API_KEY:
+        logger.warning("[graph] OPENAI_API_KEY not set — skipping LLM cross-chapter analysis")
+        return {}
+
+    # Build chapter summary for LLM
+    chapter_list = []
+    for ch_num in sorted(chapter_sections.keys(), key=lambda c: int(c) if c.isdigit() else 999):
+        sections = chapter_sections[ch_num]
+        # Use first section title as chapter title, list all section titles
+        chapter_title = sections[0].split(" | ")[0] if sections else f"Chapter {ch_num}"
+        section_names = ", ".join(s for s in sections[:8])  # limit to 8 sections for token efficiency
+        if len(sections) > 8:
+            section_names += f", ... (+{len(sections) - 8} more)"
+        chapter_list.append(f"Chapter {ch_num}: {chapter_title}\n  Sections: {section_names}")
+
+    chapters_text = "\n".join(chapter_list)
+
+    prompt = f"""You are a curriculum designer analyzing a textbook's chapter structure.
+
+Given the chapters below, determine which chapters are TRUE prerequisites for each chapter.
+A prerequisite means a student CANNOT properly understand this chapter without completing
+the prerequisite chapter first. This is about conceptual dependency, not just reading order.
+
+IMPORTANT RULES:
+- Many chapters may have NO prerequisites (they can be studied independently).
+- Only list DIRECT prerequisites, not transitive ones.
+  (If Ch3 needs Ch2, and Ch2 needs Ch1, list Ch3: ["2"], NOT Ch3: ["1", "2"])
+- Do NOT assume every chapter depends on the previous one.
+- Think about what knowledge is actually REQUIRED, not just recommended.
+
+Book: {book_slug.replace("_", " ")}
+
+{chapters_text}
+
+Return a JSON object where each key is a chapter number (as string) and the value is
+a list of prerequisite chapter numbers (as strings). Include ALL chapters, even those
+with empty prerequisite lists.
+
+Example: {{"1": [], "2": [], "3": ["1"], "4": ["2", "3"], "5": []}}"""
+
+    try:
+        client = AsyncOpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
+        response = await client.chat.completions.create(
+            model=OPENAI_MODEL_MINI,
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"},
+            temperature=0.1,
+            timeout=30.0,
+        )
+        result_text = response.choices[0].message.content.strip()
+        result = json.loads(result_text)
+
+        # Validate: result should be {str: list[str]}
+        validated: dict[str, list[str]] = {}
+        valid_chapters = set(chapter_sections.keys())
+        for ch, prereqs in result.items():
+            ch_str = str(ch)
+            if ch_str not in valid_chapters:
+                continue
+            if not isinstance(prereqs, list):
+                continue
+            valid_prereqs = [str(p) for p in prereqs if str(p) in valid_chapters and str(p) != ch_str]
+            if valid_prereqs:
+                validated[ch_str] = valid_prereqs
+
+        logger.info(
+            "[graph] LLM chapter prerequisites for %s: %d chapters with dependencies",
+            book_slug, len(validated),
+        )
+        return validated
+
+    except Exception as exc:
+        logger.warning("[graph] LLM cross-chapter analysis failed for %s: %s", book_slug, exc)
+        return {}
+
+
 def _chapter_num(concept_id: str) -> str:
     """
     Extract chapter number string from a concept_id.
 
     e.g. "prealgebra_1.2" → "1"
          "prealgebra_10.3" → "10"
+         "prealgebra2e_0qbw93r_(1)_1.2" → "1"
     """
     # concept_id format: "{book_slug}_{chapter}.{section}"
-    after_slug = concept_id.split("_", 1)[-1]   # "1.2"
-    return after_slug.split(".")[0]              # "1"
+    # Use rsplit to handle slugs with underscores
+    after_slug = concept_id.rsplit("_", 1)[-1]   # "1.2"
+    return after_slug.split(".")[0]               # "1"
 
 
 def _section_sort_key(concept_id: str) -> tuple[int, int]:
     """Return (chapter, section) ints for stable sorting."""
-    after_slug = concept_id.split("_", 1)[-1]
+    after_slug = concept_id.rsplit("_", 1)[-1]
     parts = after_slug.split(".")
     try:
         return int(parts[0]), int(parts[1])
     except (IndexError, ValueError):
-        return 0, 0
+        return 999, 999
+
+
+def _parse_dep_graph_chapter_section(dep_node_id: str) -> tuple[int, int] | None:
+    """Parse chapter.section from a dependency_graph.json node ID.
+
+    Formats handled:
+      "PREALG.C1.S1.INTRODUCTION_TO_WHOLE_NUMBERS" → (1, 1)
+      "prealgebra_1.1"                              → (1, 1)
+    """
+    # Try PREALG.C{ch}.S{sec}.TITLE format
+    m = re.match(r".*\.C(\d+)\.S(\d+)\.", dep_node_id)
+    if m:
+        return int(m.group(1)), int(m.group(2))
+    # Try book_slug_{ch}.{sec} format
+    after = dep_node_id.rsplit("_", 1)[-1]
+    parts = after.split(".")
+    if len(parts) == 2:
+        try:
+            return int(parts[0]), int(parts[1])
+        except ValueError:
+            pass
+    return None
 
 
 async def build_graph(db: AsyncSession, book_slug: str, graph_path: Path) -> None:
@@ -101,24 +223,105 @@ async def build_graph(db: AsyncSession, book_slug: str, graph_path: Path) -> Non
         for i in range(len(chapter_concepts) - 1):
             G.add_edge(chapter_concepts[i], chapter_concepts[i + 1])
 
-    # Cross-chapter edges: last section of chapter N → first section of chapter N+1
-    # This creates a proper prerequisite chain: must complete chapter 1 before starting chapter 2
-    _ch_sections: dict[str, list[str]] = {}
-    for concept_id, _ in ordered_sections:
+    # ── LLM-based cross-chapter prerequisites ───────────────────────────
+    # Instead of forcing a linear chain (ch1 → ch2 → ch3), ask LLM which
+    # chapters truly depend on others. Works for any subject domain.
+
+    # Build chapter → [concept_ids] and chapter → [section_titles] maps
+    _ch_concepts: dict[str, list[str]] = {}
+    _ch_titles: dict[str, list[str]] = {}
+    for concept_id, section_title in ordered_sections:
         ch = _chapter_num(concept_id)
-        if ch not in _ch_sections:
-            _ch_sections[ch] = []
-        if concept_id not in _ch_sections[ch]:
-            _ch_sections[ch].append(concept_id)
+        if ch not in _ch_concepts:
+            _ch_concepts[ch] = []
+            _ch_titles[ch] = []
+        if concept_id not in _ch_concepts[ch]:
+            _ch_concepts[ch].append(concept_id)
+            _ch_titles[ch].append(section_title or concept_id)
 
-    for ch in _ch_sections:
-        _ch_sections[ch].sort(key=_section_sort_key)
+    for ch in _ch_concepts:
+        _ch_concepts[ch].sort(key=_section_sort_key)
 
-    _ch_keys = sorted(_ch_sections.keys(), key=lambda c: int(c) if c.isdigit() else 999)
-    for _ci in range(len(_ch_keys) - 1):
-        last_of_current = _ch_sections[_ch_keys[_ci]][-1]
-        first_of_next = _ch_sections[_ch_keys[_ci + 1]][0]
-        G.add_edge(last_of_current, first_of_next)
+    # Ask LLM for cross-chapter dependencies
+    llm_deps = await _get_llm_chapter_prerequisites(_ch_titles, book_slug)
+
+    # Add LLM-determined cross-chapter edges
+    llm_edge_count = 0
+    llm_skipped_cycle = 0
+    for dependent_ch, prereq_chapters in llm_deps.items():
+        if dependent_ch not in _ch_concepts:
+            continue
+        first_of_dependent = _ch_concepts[dependent_ch][0]
+        for prereq_ch in prereq_chapters:
+            if prereq_ch not in _ch_concepts:
+                continue
+            last_of_prereq = _ch_concepts[prereq_ch][-1]
+            if G.has_edge(last_of_prereq, first_of_dependent):
+                continue
+            # Only add if it doesn't create a cycle
+            if nx.has_path(G, first_of_dependent, last_of_prereq):
+                llm_skipped_cycle += 1
+                continue
+            G.add_edge(last_of_prereq, first_of_dependent)
+            llm_edge_count += 1
+
+    logger.info(
+        "LLM cross-chapter edges for %s: %d added, %d skipped (cycle prevention)",
+        book_slug, llm_edge_count, llm_skipped_cycle,
+    )
+
+    # Merge expert/keyword edges from dependency_graph.json (if available)
+    dep_graph_path = graph_path.parent / "dependency_graph.json"
+    if dep_graph_path.exists():
+        try:
+            dep_data = json.loads(dep_graph_path.read_text(encoding="utf-8"))
+            dep_nodes = dep_data.get("nodes", [])
+            dep_edges = dep_data.get("edges", [])
+
+            # Build mapping: (chapter, section) → concept_id in our graph
+            ch_sec_to_id: dict[tuple[int, int], str] = {}
+            for cid in G.nodes:
+                key = _section_sort_key(cid)
+                if key != (999, 999):
+                    ch_sec_to_id[key] = cid
+
+            # Build mapping: dep_graph node_id → (chapter, section)
+            dep_id_to_ch_sec: dict[str, tuple[int, int]] = {}
+            for dn in dep_nodes:
+                parsed = _parse_dep_graph_chapter_section(dn["id"])
+                if parsed:
+                    dep_id_to_ch_sec[dn["id"]] = parsed
+
+            merged_count = 0
+            skipped_cycle = 0
+            for de in dep_edges:
+                src_cs = dep_id_to_ch_sec.get(de["source"])
+                tgt_cs = dep_id_to_ch_sec.get(de["target"])
+                if not src_cs or not tgt_cs:
+                    continue
+                src_id = ch_sec_to_id.get(src_cs)
+                tgt_id = ch_sec_to_id.get(tgt_cs)
+                if not src_id or not tgt_id:
+                    continue
+                if src_id == tgt_id:
+                    continue
+                if G.has_edge(src_id, tgt_id):
+                    continue
+                # Only add if it doesn't create a cycle
+                if G.has_node(tgt_id) and G.has_node(src_id) and nx.has_path(G, tgt_id, src_id):
+                    skipped_cycle += 1
+                    continue
+                G.add_edge(src_id, tgt_id)
+                merged_count += 1
+
+            logger.info(
+                "Merged %d expert edges from dependency_graph.json (%d skipped due to cycles)",
+                merged_count, skipped_cycle,
+            )
+        except Exception as exc:
+            logger.warning("Could not merge dependency_graph.json: %s", exc)
+
+    logger.info("Final graph: %d nodes, %d edges", len(G.nodes), len(G.edges))
 
     # Serialize to graph.json
     data = {
@@ -135,6 +338,93 @@ async def build_graph(db: AsyncSession, book_slug: str, graph_path: Path) -> Non
     logger.info(
         "Graph saved to %s: %d nodes, %d edges",
         graph_path, len(G.nodes), len(G.edges),
+    )
+
+
+def _save_graph(graph_path: Path, G: nx.DiGraph) -> None:
+    """Serialize a NetworkX DiGraph to the graph.json format used by this project."""
+    data = {
+        "nodes": [
+            {"id": node_id, "title": G.nodes[node_id].get("title", "")}
+            for node_id in G.nodes
+        ],
+        "edges": [
+            {"source": u, "target": v}
+            for u, v in G.edges
+        ],
+    }
+    graph_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def insert_section_node(
+    graph_path: Path,
+    new_concept_id: str,
+    label: str,
+    after_concept_id: str,
+) -> None:
+    """Insert a new section node into graph.json after an existing section.
+
+    Graph wiring performed:
+      1. Add the new node with the given label.
+      2. Add edge:  after_concept_id → new_concept_id
+      3. Rewire successors: for every direct successor S of after_concept_id,
+         remove the edge after_concept_id → S and add new_concept_id → S.
+         This inserts the new section into the existing linear chain.
+
+    The modified graph is written back to graph_path atomically (write then rename).
+
+    Args:
+        graph_path:      Path to graph.json on disk.
+        new_concept_id:  The concept_id of the new section node to insert.
+        label:           Human-readable section title stored as the node's "title".
+        after_concept_id: The existing node that will become the immediate predecessor.
+
+    Raises:
+        FileNotFoundError: If graph_path does not exist.
+        ValueError:        If after_concept_id is not in the graph, or if
+                           new_concept_id already exists in the graph.
+    """
+    if not graph_path.exists():
+        raise FileNotFoundError(f"graph.json not found: {graph_path}")
+
+    data = json.loads(graph_path.read_text(encoding="utf-8"))
+
+    G = nx.DiGraph()
+    for node in data["nodes"]:
+        G.add_node(node["id"], title=node.get("title", ""))
+    for edge in data["edges"]:
+        G.add_edge(edge["source"], edge["target"])
+
+    if not G.has_node(after_concept_id):
+        raise ValueError(
+            f"after_concept_id '{after_concept_id}' not found in graph {graph_path}"
+        )
+    if G.has_node(new_concept_id):
+        raise ValueError(
+            f"new_concept_id '{new_concept_id}' already exists in graph {graph_path}"
+        )
+
+    # Collect successors before mutating the graph
+    successors = list(G.successors(after_concept_id))
+
+    # Add new node and edge from predecessor → new node
+    G.add_node(new_concept_id, title=label)
+    G.add_edge(after_concept_id, new_concept_id)
+
+    # Rewire: detach each successor from the old node and attach to the new node
+    for successor in successors:
+        G.remove_edge(after_concept_id, successor)
+        G.add_edge(new_concept_id, successor)
+
+    # Write back atomically: write to a temp file then replace
+    tmp_path = graph_path.with_suffix(".json.tmp")
+    _save_graph(tmp_path, G)
+    tmp_path.replace(graph_path)
+
+    logger.info(
+        "insert_section_node: added '%s' after '%s' in %s "
+        "(rewired %d successor(s))",
+        new_concept_id, after_concept_id, graph_path, len(successors),
     )
 
 

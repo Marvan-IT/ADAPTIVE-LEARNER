@@ -36,7 +36,7 @@ def _rate_limit():
 
 
 # ── System prompt ────────────────────────────────────────────────────
-EXTRACTION_SYSTEM_PROMPT = r"""You are the ADA Curriculum Extraction Engine.
+EXTRACTION_SYSTEM_PROMPT = r"""You are the Adaptive Learner Curriculum Extraction Engine.
 
 Your task is to extract and CLEAN UP ONE complete concept block
 from the provided textbook instructional subsection.

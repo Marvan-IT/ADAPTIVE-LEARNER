@@ -12,14 +12,14 @@ class RegisterRequest(BaseModel):
     email: EmailStr
     password: str = Field(..., min_length=8, max_length=128)
     display_name: str = Field(..., min_length=1, max_length=100)
-    interests: list[str] = Field(default_factory=list)
-    preferred_style: str = Field(default="default")
+    age: int | None = Field(default=None, ge=5, le=120)
     preferred_language: str = Field(default="en")
 
 
 class VerifyOtpRequest(BaseModel):
     email: EmailStr
     otp: str = Field(..., min_length=6, max_length=6)
+    purpose: str = Field(default="email_verify", pattern="^(email_verify|password_reset)$")
 
 
 class LoginRequest(BaseModel):

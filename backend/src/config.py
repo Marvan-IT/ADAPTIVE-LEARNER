@@ -1,5 +1,5 @@
 """
-Configuration for the ADA Hybrid Engine pipeline.
+Configuration for the Adaptive Learner Hybrid Engine pipeline.
 Contains all paths, API keys, book registry, and shared constants.
 """
 
@@ -32,12 +32,32 @@ MATHPIX_APP_KEY = os.getenv("MATHPIX_APP_KEY", "")
 # ── Database ──────────────────────────────────────────────────────────
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
+import logging as _cfg_log
+_cfg_log.getLogger(__name__).info("Starting with ENVIRONMENT=%s", ENVIRONMENT)
 
 # ── JWT ───────────────────────────────────────────────────────────────
 JWT_SECRET_KEY: str = os.getenv("JWT_SECRET_KEY", "")
+if not JWT_SECRET_KEY and ENVIRONMENT != "production":
+    import secrets as _secrets
+    JWT_SECRET_KEY = _secrets.token_hex(32)
+    import logging as _cfg_logging
+    _cfg_logging.getLogger(__name__).warning(
+        "JWT_SECRET_KEY not set — generated random key for dev: %s...", JWT_SECRET_KEY[:8]
+    )
+if not JWT_SECRET_KEY and ENVIRONMENT == "production":
+    raise ValueError("JWT_SECRET_KEY is required in production — set it in .env or environment")
 JWT_ALGORITHM: str = "HS256"
 JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
 JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 30
+
+# ── API Secret Key (generated if missing in dev) ─────────────────────
+API_SECRET_KEY: str = os.getenv("API_SECRET_KEY", "")
+if not API_SECRET_KEY and ENVIRONMENT == "production":
+    raise ValueError("API_SECRET_KEY is required in production — set it in .env or environment")
+if not API_SECRET_KEY and ENVIRONMENT != "production":
+    if "_secrets" not in dir():
+        import secrets as _secrets
+    API_SECRET_KEY = _secrets.token_hex(32)
 
 # ── Email / SMTP ──────────────────────────────────────────────────────
 SMTP_HOST: str = os.getenv("SMTP_HOST", "")
@@ -45,6 +65,11 @@ SMTP_PORT: int = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USER: str = os.getenv("SMTP_USER", "")
 SMTP_PASSWORD: str = os.getenv("SMTP_PASSWORD", "")
 SMTP_FROM: str = os.getenv("SMTP_FROM", "")
+if not SMTP_HOST or not SMTP_USER:
+    import logging as _cfg_logging2
+    _cfg_logging2.getLogger(__name__).warning(
+        "SMTP not configured — email sending (OTP verification) will fail silently"
+    )
 
 # ── OTP settings ──────────────────────────────────────────────────────
 OTP_EXPIRE_MINUTES: int = 10
@@ -62,11 +87,13 @@ ADAPTIVE_ERROR_PENALTY_WEIGHT: float = 0.4   # Weight for error rate in confiden
 ADAPTIVE_HINT_PENALTY_WEIGHT: float = 0.2    # Weight for hint usage in confidence score
 
 # ── Mastery ───────────────────────────────────────────────────────────────────
-MASTERY_THRESHOLD = 70  # Score out of 100 required to mark a concept as mastered
+# DEPRECATED: No longer used in chunk-based teaching flow
+# MASTERY_THRESHOLD = 70
 
 # ── Socratic check settings ───────────────────────────────────────────────────
-MAX_SOCRATIC_EXCHANGES      = 30  # Maximum back-and-forth exchanges in a Socratic session
-SOCRATIC_MAX_ATTEMPTS       = 3   # Maximum remediation + recheck cycles before session ends
+# DEPRECATED: No longer used in chunk-based teaching flow
+# MAX_SOCRATIC_EXCHANGES      = 30
+# SOCRATIC_MAX_ATTEMPTS       = 3
 SOCRATIC_PROGRESS_INTERVAL  = 3   # Show progress summary every N questions
 
 # ── Card session settings ─────────────────────────────────────────────────────
@@ -113,6 +140,12 @@ XP_MASTERY_BONUS: int = 25            # Bonus XP when check_score >= XP_MASTERY_
 XP_MASTERY_BONUS_THRESHOLD: int = 90  # Score (0-100) qualifying for mastery bonus
 XP_CONSOLATION: int = 10              # Consolation XP when session completes without mastery
 
+# ── Difficulty-Weighted XP ────────────────────────────────────────────────────
+XP_PER_DIFFICULTY_POINT: int = 4     # Base XP per difficulty level (difficulty * this)
+XP_HINT_PENALTY: float = 0.25       # XP reduction fraction per hint used (floor 0.25 total)
+XP_WRONG_PENALTY: float = 0.15      # XP reduction fraction per wrong attempt (floor 0.25 total)
+XP_FIRST_ATTEMPT_BONUS: float = 1.5 # Multiplier for first-attempt correct with no hints
+
 # ── Adaptive Transparency ─────────────────────────────────────────────────────
 WRONG_OPTION_PATTERN_THRESHOLD: int = 3  # Times a wrong option must be chosen to trigger pattern injection
 CARD_HISTORY_DEFAULT_LIMIT: int = 50     # Default row limit for GET /card-history
@@ -139,7 +172,7 @@ ADAPTIVE_STATE_BLEND_CURRENT_WEIGHT = 0.60   # section_count >= 3
 ADAPTIVE_STATE_BLEND_HISTORY_WEIGHT = 0.40
 
 # ── Image serving ─────────────────────────────────────────────────────
-IMAGE_BASE_URL = os.getenv("IMAGE_BASE_URL", "http://localhost:8889/images")
+IMAGE_BASE_URL = os.getenv("IMAGE_BASE_URL", "")
 
 # ── Boilerplate patterns to strip (line-level) ─────────────────────────
 BOILERPLATE_PATTERNS = [
@@ -175,6 +208,12 @@ MATHPIX_RATE_LIMIT = 0.5   # Seconds between Mathpix API requests
 
 # ── Vision annotation settings ────────────────────────────────────────
 VISION_RATE_LIMIT: float = 0.5   # Seconds between GPT-4o Vision API requests
+
+# ── Universal extraction pipeline defaults ────────────────────────────
+DEFAULT_MIN_CHUNK_WORDS = 80           # Minimum words per chunk; smaller chunks get merged
+DEFAULT_MAX_CHUNK_WORDS = 2000         # Maximum words per chunk; larger chunks get split at paragraph breaks
+DEFAULT_RECURRING_HEADING_THRESHOLD = 5 # Headings appearing > this many times = recurring (feature box/exercise)
+DEFAULT_COVERAGE_THRESHOLD = 0.95       # Minimum fraction of MMD content that must be assigned to chunks
 
 
 class BookConfig(BaseModel):

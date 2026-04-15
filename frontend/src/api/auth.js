@@ -1,7 +1,7 @@
 import api from "./client";
 
 export const registerUser = (data) => api.post("/api/v1/auth/register", data);
-export const verifyOtp = (email, otp) => api.post("/api/v1/auth/verify-otp", { email, otp });
+export const verifyOtp = (email, otp, purpose = "email_verify") => api.post("/api/v1/auth/verify-otp", { email, otp, purpose });
 export const loginUser = (email, password) => api.post("/api/v1/auth/login", { email, password });
 export const refreshToken = (refresh_token) => api.post("/api/v1/auth/refresh", { refresh_token });
 export const getMe = () => api.get("/api/v1/auth/me");

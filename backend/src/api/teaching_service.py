@@ -11,7 +11,7 @@ import json
 import logging
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from fastapi import HTTPException
 from sqlalchemy import select, func
@@ -29,6 +29,7 @@ from api.prompts import (
     build_presentation_user_prompt,
     build_cards_user_prompt,
     build_assistant_system_prompt,
+    _language_instruction,
 )
 from db.models import TeachingSession, ConversationMessage, Student, CardInteraction, ConceptChunk
 from api.teaching_schemas import CardMCQ, RegenerateMCQRequest
@@ -633,9 +634,6 @@ class TeachingService:
             .order_by(ConceptChunk.order_index)
         )
         rows = (await db.execute(stmt)).scalars().all()
-        # Exclude exercise chunks — practice problems overpopulate with redundant cards.
-        # Teaching + lab chunks already cover all concepts.
-        rows = [c for c in rows if c.chunk_type != "exercise"]
         queue = [
             {
                 "id": str(c.id),
@@ -645,6 +643,7 @@ class TeachingService:
                 "section": c.section or "",
                 "chapter": (c.section or "").split(".")[0],
                 "images": [],
+                "chunk_type": c.chunk_type or "teaching",
             }
             for c in rows
         ]
@@ -652,6 +651,22 @@ class TeachingService:
             "[_initialize_queue] built queue: session_id=%s concept_id=%s book_slug=%s chunks=%d",
             session.id, session.concept_id, book_slug, len(queue),
         )
+
+        # Guard: if no chunks exist for this concept+book, do NOT transition to CARDS.
+        # Transitioning with an empty queue would cause generate_per_card() to call
+        # _initialize_queue() again, creating an infinite loop.
+        if not queue:
+            logger.error(
+                "[_initialize_queue] empty_queue_abort: session_id=%s concept_id=%s book_slug=%s "
+                "— no concept_chunks found; session remains in current phase",
+                session.id, session.concept_id, book_slug,
+            )
+            raise HTTPException(
+                status_code=422,
+                detail=f"No content chunks found for concept '{session.concept_id}' in book '{book_slug}'. "
+                       "Cannot start card-based learning for this concept.",
+            )
+
         session.presentation_text = json.dumps({
             "concepts_queue": queue,
             "concepts_covered": [],
@@ -763,17 +778,54 @@ class TeachingService:
         concepts_covered = list(cached.get("concepts_covered", []))
         all_sections_count = cached.get("concepts_total", 1)
 
+        # ── Step 1a: Language-change cache bust ──────────────────────────────────
+        # When the student changes language, the PATCH /language endpoint sets
+        # cache_version = -1.  Clear the cache so cards are regenerated in the
+        # new language instead of serving stale English content.
+        if cached.get("cache_version") == -1:
+            logger.info(
+                "[per-card] language_cache_bust: session_id=%s — clearing cache for language change",
+                session.id,
+            )
+            session.presentation_text = None
+            db.add(session)
+            await db.flush()
+            cached = {}
+            concepts_queue = []
+            concepts_covered = []
+            all_sections_count = 1
+
+        # ── Step 1b: Stale session reset ─────────────────────────────────────────
+        # If the session was last updated more than 24 hours ago, the cached content
+        # may be based on outdated concept chunk text. Clear the cache so the student
+        # gets fresh, re-initialized content rather than stale presentation data.
+        _updated = getattr(session, "updated_at", None)
+        if _updated and (datetime.now(timezone.utc) - _updated) > timedelta(hours=24):
+            logger.warning(
+                "[per-card] stale_session_reset: session_id=%s last_updated=%s — clearing cache",
+                session.id, _updated.isoformat(),
+            )
+            session.presentation_text = None
+            db.add(session)
+            await db.flush()
+            cached = {}
+            concepts_queue = []
+            concepts_covered = []
+            all_sections_count = 1
+
         # ── Step 2: Empty queue guard ────────────────────────────────────────────
         if not concepts_queue:
             # If the queue is empty and nothing has been covered yet, the session was
             # likely just created (PRESENTING phase) and never had its queue built.
             # Auto-initialize from concept_chunks so the student isn't stuck.
+            # _initialize_queue() raises HTTPException(422) if no chunks exist, so this
+            # path is NOT recursive — it either succeeds (queue populated) or raises.
             if not concepts_covered:
                 logger.warning(
                     "[per-card] queue_empty_auto_init: session_id=%s — initialising queue from DB",
                     session.id,
                 )
-                await self._initialize_queue(db, session)
+                await self._initialize_queue(db, session)  # raises 422 if DB has no chunks
                 try:
                     _raw_cache = json.loads(session.presentation_text or "{}")
                     cached = _raw_cache if isinstance(_raw_cache, dict) else {}
@@ -908,6 +960,12 @@ class TeachingService:
 
         # ── Step 10: Build prompts (Bug 6 fix — pass content_piece_images) ───────
         language = getattr(student, "preferred_language", "en") or "en"
+        _card_style = getattr(session, "style", "default") or "default"
+        _card_interests = (
+            getattr(session, "lesson_interests", None)
+            or getattr(student, "interests", None)
+            or []
+        )
         system_prompt, user_prompt = build_next_card_prompt(
             concept_detail=piece_concept_detail,
             learning_profile=card_profile,
@@ -920,7 +978,18 @@ class TeachingService:
             generate_as=_generate_as,
             blended_state_score=_blended_score,
             content_piece_images=content_piece_images if content_piece_images else None,
+            style=_card_style,
+            interests=_card_interests,
         )
+
+        # ── Step 10b: Inject already-used image note ──────────────────────────
+        # Tell the LLM which image indices were already used on previous cards so
+        # it does not reference the same image again in this card.
+        if already_assigned:
+            user_prompt += (
+                f"\n\nNOTE: Images at indices {sorted(already_assigned)} were already used on "
+                "previous cards. Use ONLY the images listed in RELEVANT IMAGES above."
+            )
 
         # ── Step 11: Call LLM ──────────────────────────────────────────────────
         # Vision parts for per-card — same pattern as generate_per_chunk
@@ -1252,7 +1321,7 @@ class TeachingService:
 
             system_prompt = (
                 _persona_prefix +
-                "You are ADA, an adaptive math tutor.\n\n"
+                "You are Adaptive Learner, an adaptive math tutor.\n\n"
                 "EXERCISE CHUNK MODE: Generate exactly 2 MCQ cards per teaching subsection listed below.\n\n"
                 f"Teaching subsections covered in this section:\n{subsection_list}\n\n"
                 f"Total required cards: {n_subsections * 2}\n\n"
@@ -1269,11 +1338,12 @@ class TeachingService:
                 '{"index":0,"title":"...","content":"...","image_url":null,"caption":null,'
                 '"question":{"text":"...","options":["A","B","C","D"],'
                 '"correct_index":0,"explanation":"...","difficulty":"HARD"},"is_recovery":false}\n'
+                + _language_instruction(language)
             )
         else:
             system_prompt = (
                 _persona_prefix +
-                "You are ADA, an adaptive math tutor. Generate lesson cards for the CHUNK CONTENT provided.\n\n"
+                "You are Adaptive Learner, an adaptive math tutor. Generate lesson cards for the CHUNK CONTENT provided.\n\n"
                 "RULE #1 — COVERAGE (non-negotiable):\n"
                 "Every concept, definition, formula, and worked example in CHUNK CONTENT must appear on exactly one card. Never skip any item.\n"
                 "For 'TRY IT' exercises: use them as inspiration for the MCQ question on the preceding example's card.\n"
@@ -1317,7 +1387,8 @@ class TeachingService:
                 "RULE #9 — LANGUAGE:\n"
                 "Write ALL card content, MCQ text, options, and explanations in the language specified by LANGUAGE in the user message.\n"
                 "Keep formulas and $LaTeX$ expressions unchanged — mathematics notation is universal.\n"
-                "Use the target language's standard mathematical terminology for all math terms.\n\n"
+                "Use the target language's standard mathematical terminology for all math terms.\n"
+                + _language_instruction(language) + "\n"
                 "OUTPUT: A JSON array only. No markdown fences. No commentary before or after.\n\n"
                 "EXAMPLE card (topic: even/odd numbers — NOT your actual content):\n"
                 "{\"index\":0,\"title\":\"Even and Odd Numbers\","
@@ -1381,7 +1452,7 @@ class TeachingService:
             )
             _difficulty_label = {"STRUGGLING": "EASY", "NORMAL": "MEDIUM", "FAST": "HARD"}.get(_generate_as, "MEDIUM")
             retry_system = (
-                "You are ADA, a math tutor. Output ONLY a JSON array of lesson cards — no markdown fences, no commentary.\n"
+                "You are Adaptive Learner, a math tutor. Output ONLY a JSON array of lesson cards — no markdown fences, no commentary.\n"
                 "RULE 1 — COVERAGE: Every concept in CHUNK CONTENT must appear on a card. Never skip any.\n"
                 "RULE 2 — COMBINED CARDS: Every card MUST have content AND question (NEVER null).\n"
                 "RULE 3 — IMAGES: If IMAGES are listed in the user message, assign relevant URLs. "
@@ -1513,7 +1584,7 @@ class TeachingService:
 
         if is_exercise:
             system_prompt = (
-                "You are ADA, an adaptive math tutor. Generate ONE recovery TEACH card.\n"
+                "You are Adaptive Learner, an adaptive math tutor. Generate ONE recovery TEACH card.\n"
                 "The student struggled with this exercise. Show HOW TO SOLVE this type of problem.\n"
                 "RULES:\n"
                 "- Title MUST start exactly with: Let's Try Again — \n"
@@ -1530,7 +1601,7 @@ class TeachingService:
             )
         else:
             system_prompt = (
-                "You are ADA, an adaptive math tutor. Generate ONE recovery TEACH card.\n"
+                "You are Adaptive Learner, an adaptive math tutor. Generate ONE recovery TEACH card.\n"
                 "The student struggled with this chunk twice. Re-explain in the SIMPLEST way.\n"
                 "RULES:\n"
                 "- Title MUST start exactly with: Let's Try Again — \n"
@@ -1957,7 +2028,7 @@ class TeachingService:
         }
         student = await db.get(Student, session.student_id)
 
-        system_prompt = self._build_remediation_cards_prompt(failed_topics, concept, student)
+        system_prompt = self._build_remediation_cards_prompt(failed_topics, concept, student, session=session)
         concept_title = concept.get("concept_title", session.concept_id)
         user_prompt = (
             f"Generate remediation cards for concept: {concept_title}\n"
@@ -2044,17 +2115,29 @@ class TeachingService:
         failed_topics: list[str],
         concept: dict,
         student,
+        session=None,
     ) -> str:
         """Build the system prompt for remediation card generation."""
+        from api.prompts import STYLE_MODIFIERS as _STYLE_MODIFIERS
+        from api.prompts import _build_interests_block
+
         interests = []
         if student:
             interests = getattr(student, "interests", []) or []
-        getattr(student, "preferred_language", "en") or "en" if student else "en"
+        language = getattr(student, "preferred_language", "en") or "en" if student else "en"
+
+        style = getattr(session, "style", "default") or "default" if session else "default"
+        style_modifier = _STYLE_MODIFIERS.get(style, "")
+        style_prefix = f"{style_modifier}\n\n" if style_modifier else ""
+
+        # Prefer session-level interests (set at lesson start) over student profile
+        session_interests = getattr(session, "lesson_interests", None) if session else None
+        effective_interests = session_interests or interests
+        interests_block = _build_interests_block(effective_interests)
 
         failed_text = ", ".join(failed_topics[:5])
-        interests_text = f"\nStudent interests: {', '.join(interests)}." if interests else ""
 
-        return (
+        base_prompt = (
             f"You are a patient, encouraging tutor re-teaching specific topics a student found difficult.\n"
             f"The student struggled with: {failed_text}\n\n"
             f"Generate ONLY re-teaching cards and one final summary card.\n"
@@ -2065,8 +2148,10 @@ class TeachingService:
             f'{{"cards": [{{"title": "...", "content": "...", "image_indices": [], '
             f'"question": {{"text": "...", "options": ["A","B","C","D"], '
             f'"correct_index": 0, "explanation": "..."}}}}]}}\n'
-            f"{interests_text}"
+            f"{interests_block}"
         )
+
+        return style_prefix + base_prompt
 
     @staticmethod
     def _parse_sub_sections(text: str) -> list[dict]:

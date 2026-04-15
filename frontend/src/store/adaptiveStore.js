@@ -20,6 +20,12 @@ export const useAdaptiveStore = create((set, get) => ({
   streakBest: 0,
   lastXpGain: 0,
   burnoutScore: 0,
+  dailyStreak: 0,
+  dailyStreakBest: 0,
+  streakMultiplier: 1.0,
+  badges: [],
+  newBadge: null,
+  featureFlags: {},
 
   awardXP: (amount) => {
     set((state) => {
@@ -51,10 +57,29 @@ export const useAdaptiveStore = create((set, get) => ({
 
   resetLastXpGain: () => set({ lastXpGain: 0 }),
 
+  setDailyStreak: ({ daily_streak, daily_streak_best, multiplier }) =>
+    set({
+      dailyStreak: daily_streak ?? 0,
+      dailyStreakBest: daily_streak_best ?? 0,
+      streakMultiplier: multiplier ?? 1.0,
+    }),
+
+  addBadge: (badge) => {
+    set((state) => ({
+      badges: [...state.badges, badge],
+      newBadge: badge,
+    }));
+    setTimeout(() => set({ newBadge: null }), 3500);
+  },
+
+  setFeatureFlags: (flags) => set({ featureFlags: flags }),
+
   init: (saved) => set((s) => ({
     xp: saved.xp ?? s.xp,
     streak: saved.streak ?? s.streak,
     level: saved.xp != null ? Math.floor(saved.xp / LEVEL_XP) + 1 : s.level,
+    dailyStreak: saved.daily_streak ?? s.dailyStreak,
+    dailyStreakBest: saved.daily_streak_best ?? s.dailyStreakBest,
   })),
 }));
 

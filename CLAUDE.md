@@ -15,9 +15,9 @@ See `~/.claude/CLAUDE.md` for the full command reference.
 
 ---
 
-# ADA — Adaptive Learning Platform
+# Adaptive Learner — AI-Powered Education Platform
 
-An AI-powered adaptive education platform that teaches mathematics through personalized, Socratic pedagogical loops. It combines Retrieval-Augmented Generation (RAG) with dependency graph traversal to deliver concept-by-concept lessons from 16 OpenStax textbooks across 13 languages.
+An AI-powered adaptive education platform (formerly "ADA") that teaches mathematics through personalized, chunk-based pedagogical loops. It combines Retrieval-Augmented Generation (RAG) with dependency graph traversal to deliver concept-by-concept lessons from 16 OpenStax textbooks across 13 languages.
 
 ---
 
@@ -26,49 +26,53 @@ An AI-powered adaptive education platform that teaches mathematics through perso
 ```
 ADA/
 ├── docs/                     # Design artifacts — one folder per feature
-│   └── {feature-name}/
-│       ├── HLD.md            # High-Level Design (produced by solution-architect)
-│       ├── DLD.md            # Detailed Low-Level Design
-│       └── execution-plan.md # Phased WBS, DoD, rollout strategy
 ├── backend/                  # Python FastAPI server
 │   ├── src/
 │   │   ├── api/              # FastAPI routers, services, schemas, prompts
+│   │   ├── auth/             # JWT auth, OTP, email, password reset
 │   │   ├── db/               # SQLAlchemy ORM models and PostgreSQL connection
 │   │   ├── extraction/       # PDF → chunk pipeline
 │   │   ├── graph/            # NetworkX dependency graph (JSON-backed)
-│   │   ├── storage/          # JSON export utilities (minimal)
-│   │   ├── images/           # PDF image extraction + Mathpix OCR
 │   │   ├── adaptive/         # Adaptive learning engine: profiling, XP, card generation
-│   │   │   ├── adaptive_engine.py
-│   │   │   ├── adaptive_router.py
-│   │   │   ├── prompt_builder.py
-│   │   │   ├── generation_profile.py
-│   │   │   ├── profile_builder.py
-│   │   │   ├── remediation.py
-│   │   │   ├── boredom_detector.py
-│   │   │   └── schemas.py
-│   │   ├── config.py         # All constants, paths, API keys
+│   │   ├── config.py         # All constants, paths, API keys (auto-generates secrets in dev)
 │   │   └── pipeline.py       # End-to-end extraction orchestration
-│   ├── tests/                # pytest test suite (30+ files)
-│   ├── scripts/              # Developer utilities (preview_sections.py)
-│   ├── data/                 # Input PDF textbooks (do not commit — 1GB+)
-│   ├── output/               # Pipeline output: JSON graphs, images (do not commit)
+│   ├── alembic/              # Database migrations (16 revisions)
+│   ├── tests/                # pytest test suite
 │   └── requirements.txt
 ├── frontend/                 # React 19 + Vite 7 SPA
 │   ├── src/
-│   │   ├── api/              # Axios client wrappers per resource
-│   │   ├── pages/            # Route-level components
-│   │   ├── components/       # Reusable UI components
-│   │   ├── context/          # React Context for student, session, theme
-│   │   ├── store/            # Zustand global stores (adaptiveStore.js)
-│   │   ├── hooks/            # Custom React hooks
-│   │   ├── locales/          # i18next translation files (13 languages)
-│   │   ├── theme/            # Tailwind theme config
-│   │   └── utils/            # PostHog analytics, constants, formatters
+│   │   ├── api/              # Axios client wrappers (auth, sessions, students, admin)
+│   │   ├── layouts/          # Shared route layouts
+│   │   │   ├── AuthLayout.jsx              # Split-panel auth shell + constellation bg
+│   │   │   ├── ConstellationBackground.jsx # Animated SVG background
+│   │   │   ├── StudentLayout.jsx           # Student shell (sidebar + topbar + content)
+│   │   │   └── AdminLayout.jsx             # Admin shell (sidebar + topbar + content)
+│   │   ├── pages/            # Route-level components (24 pages)
+│   │   │   ├── DashboardPage.jsx           # Student home (NEW)
+│   │   │   ├── ConceptMapPage.jsx          # Concept map + RPG skill tree
+│   │   │   ├── LearningPage.jsx            # Main lesson UI
+│   │   │   ├── StudentHistoryPage.jsx      # Past sessions
+│   │   │   ├── LeaderboardPage.jsx         # Podium + rank list
+│   │   │   ├── AchievementsPage.jsx        # Badge grid (NEW)
+│   │   │   ├── SettingsPage.jsx            # Student settings (NEW)
+│   │   │   ├── Admin*.jsx                  # 11 admin pages
+│   │   │   └── (auth pages)               # Login, Register, OTP, Forgot, Reset
+│   │   ├── components/
+│   │   │   ├── ui/           # 20 reusable UI components (Button, Card, Badge, Input, etc.)
+│   │   │   ├── layout/       # StudentSidebar, StudentTopBar, AdminSidebar, AdminTopBar, GamificationHUD
+│   │   │   ├── learning/     # CardLearningView, AssistantPanel, CompletionView, etc.
+│   │   │   ├── game/         # LevelBadge, StreakMeter, XPBurst, BadgeCelebration, etc.
+│   │   │   └── conceptmap/   # ConceptGraph (SVG), MapLegend, SkillTreeView (NEW)
+│   │   ├── context/          # AuthContext, StudentContext, SessionContext, ThemeContext
+│   │   ├── store/            # Zustand: adaptiveStore.js
+│   │   ├── locales/          # i18next (13 languages: en, ar, de, es, fr, hi, ja, ko, ml, pt, si, ta, zh)
+│   │   ├── theme/            # themes.js (spring presets, stagger presets)
+│   │   └── utils/            # PostHog analytics, constants
+│   ├── e2e/                  # Playwright E2E tests (11 files, 90+ tests)
 │   └── package.json
 └── .claude/
-    ├── agents/               # Subagent definitions (5 agents)
-    └── agent-memory/         # Persistent per-agent institutional memory
+    ├── agents/               # Subagent definitions
+    └── agent-memory/         # Persistent per-agent memory
 ```
 
 ---
@@ -146,7 +150,7 @@ VITE_API_SECRET_KEY=       # must match backend API_SECRET_KEY
 
 All foreign keys enforce cascading deletes. Schema changes must go through Alembic migrations — never use `Base.metadata.create_all()` in production.
 
-- **`students`** — UUID id, display_name, interests (ARRAY), preferred_style, preferred_language; XP, streak, section_count; adaptive state: overall_accuracy_rate, boredom_pattern, frustration_tolerance, recovery_speed, avg_state_score; JSONB profile fields: effective_analogies, effective_engagement, ineffective_engagement, state_distribution
+- **`students`** — UUID id, display_name, age (Integer, nullable), interests (ARRAY), preferred_style, preferred_language; XP, streak, section_count; adaptive state: overall_accuracy_rate, boredom_pattern, frustration_tolerance, recovery_speed, avg_state_score; JSONB profile fields: effective_analogies, effective_engagement, ineffective_engagement, state_distribution
 
 - **`teaching_sessions`** — UUID id, student_id (FK), concept_id, book_slug, phase (PRESENTING / CARDS / CHECKING / SOCRATIC / COMPLETED); socratic_attempt_count, questions_asked, questions_correct, best_check_score; chunk_index, exam_phase, exam_attempt, exam_scores (JSONB), chunk_progress (JSONB); remediation_context, failed_chunk_ids
 
@@ -158,9 +162,13 @@ All foreign keys enforce cascading deletes. Schema changes must go through Alemb
 
 - **`spaced_reviews`** — UUID id, student_id (FK), concept_id, review_number, due_at, completed_at; unique on (student_id, concept_id, review_number)
 
-- **`concept_chunks`** — UUID id, book_slug, concept_id, section, order_index, heading, text, **embedding Vector(1536)** (pgvector), latex (ARRAY), chunk_type, is_optional, created_at (TIMESTAMPTZ)
+- **`concept_chunks`** — UUID id, book_slug, concept_id, section, order_index, heading, text, **embedding Vector(1536)** (pgvector), latex (ARRAY), chunk_type, is_optional, created_at (TIMESTAMPTZ); admin fields: is_hidden (Boolean, default false), exam_disabled (Boolean, default false), admin_section_name (Text, nullable)
 
 - **`chunk_images`** — UUID id, chunk_id (FK → concept_chunks), image_url, caption, order_index
+
+- **`admin_graph_overrides`** — UUID id, book_slug, action ('add_edge'/'remove_edge'), source_concept, target_concept, created_by (FK users), created_at
+
+- **`admin_config`** — key (Text PK), value, updated_by (FK users), updated_at
 
 ---
 
@@ -177,9 +185,8 @@ Results are enriched with student mastery context before being passed to the LLM
 Teaching sessions operate on chunks (ordered sub-sections of a concept), not the whole concept at once:
 1. **Presentation** — metaphor-based explanation of the concept using LLM + knowledge base context
 2. **Cards phase** — cards generated per chunk; 3 cards upfront then each subsequent card generated on demand (per-card adaptive generation)
-3. **Socratic Check** — guided questioning per chunk; the assistant never gives direct answers
-4. **Exam Gate** — mastery assessment after all chunks complete
-5. **Mastery threshold** — 70 points (out of 100) required to mark a concept as mastered (`MASTERY_THRESHOLD = 70` in `config.py`)
+3. **Chunk Exam Gate** — open-ended questions per chunk; pass threshold is `CHUNK_EXAM_PASS_RATE = 0.50` (50%) in `config.py`
+4. **Concept Mastery** — concept marked mastered when all required (non-optional) teaching chunks pass their exam gates
 
 ### Adaptive Engine
 Each card is shaped by a blended student profile:
@@ -187,6 +194,17 @@ Each card is shaped by a blended student profile:
 - Warm (3–10 sections): weight shifts toward observed data
 - Acute deviation detection: overrides blending when student state spikes
 - Modes: STRUGGLING / NORMAL / FAST — control token budget (6000 / 5000 / 3000)
+
+### Admin Console
+Full-featured admin console for platform management:
+- **Dashboard** — platform stats, active students, mastery rates, struggling student alerts
+- **Student Management** — CRUD, access control, manual mastery grant/revoke, password reset
+- **Session Monitoring** — filter by phase/book, view all sessions across students
+- **Analytics** — concept difficulty ranking, mastery rates, student performance distribution
+- **Content Controls** — edit/hide/merge/split chunks, rename sections, toggle optional/exam-gate per section or subsection
+- **Prerequisite Editing** — add/remove dependency graph edges with cycle detection, overrides stored in DB
+- **System Config** — runtime-configurable settings (exam pass rate, XP values, AI model selection)
+- **Admin User Management** — create admins, promote/demote roles
 
 ### Data Extraction Pipeline
 ```
@@ -279,7 +297,7 @@ docs/
 - All config values (paths, model names, thresholds) go in `config.py` — no magic strings in business logic
 - Use Python `logging` module with structured format — never `print()` in production paths
 - Alembic migration required for every schema change — alert the devops-engineer when models change
-- Mastery threshold is `70` (score out of 100) — defined in `config.py` as `MASTERY_THRESHOLD = 70`, not hardcoded
+- Chunk exam pass rate is `CHUNK_EXAM_PASS_RATE = 0.50` in `config.py` — use this constant, not a hardcoded value. (`MASTERY_THRESHOLD = 70` is deprecated; chunk exam gate is now the mastery mechanism)
 
 ### Frontend (JavaScript/JSX)
 - React 19 functional components only — no class components
@@ -409,6 +427,21 @@ docs/
 | Design docs | `docs/per-card-adaptive-generation/` — HLD, DLD, execution-plan | `docs/per-card-adaptive-generation/` |
 | Tests | 20 tests covering all business rules (content order, mode shaping, blending, images, race condition) | `backend/tests/test_per_card_adaptive.py` |
 
+### ✅ Admin Console (2026-04-13)
+
+| Feature | Status | Files |
+|---|---|---|
+| Admin dashboard with platform stats | Done | `admin_router.py`, `AdminPage.jsx` |
+| Student CRUD + access control + manual mastery | Done | `admin_router.py`, `AdminStudentsPage.jsx`, `AdminStudentDetailPage.jsx` |
+| Session monitoring with filters | Done | `admin_router.py`, `AdminSessionsPage.jsx` |
+| Platform analytics (difficulty, mastery rates) | Done | `admin_router.py`, `AdminAnalyticsPage.jsx` |
+| System config (runtime settings) | Done | `admin_router.py`, `AdminSettingsPage.jsx` |
+| Content controls (edit/hide/merge/split chunks) | Done | `admin_router.py`, `AdminReviewPage.jsx`, `AdminBookContentPage.jsx` |
+| Section controls (rename, optional, exam gate) | Done | `admin_router.py` |
+| Prerequisite editing (add/remove edges, cycle detection) | Done | `admin_router.py`, `chunk_knowledge_service.py` |
+| Simplified registration (removed interests + style, added age) | Done | `auth/schemas.py`, `RegisterPage.jsx` |
+| Thread-safe graph cache | Done | `chunk_knowledge_service.py` |
+
 ### ⚠️ Known Technical Debt (Requires devops-engineer)
 
 | Issue | File | Priority |
@@ -452,7 +485,7 @@ npm run dev
 ### Database (initial setup)
 ```bash
 # Tables are created on first backend start via init_db()
-# For schema changes, use Alembic:
+# Apply all migrations (including admin console tables):
 cd backend
 alembic upgrade head
 ```
@@ -470,26 +503,75 @@ python -m src.pipeline --book prealgebra
 
 | File | Purpose |
 |---|---|
+| **Backend** | |
 | `backend/src/api/main.py` | FastAPI app entrypoint, CORS, lifespan, routers |
-| `backend/src/api/chunk_knowledge_service.py` | pgvector semantic search + graph traversal (primary knowledge retrieval) |
-| `backend/src/api/teaching_service.py` | Pedagogical loop (presentation + Socratic check) + card generation |
-| `backend/src/api/prompts.py` | All LLM system prompts — card generation, Socratic, adaptive |
-| `backend/src/api/teaching_schemas.py` | Pydantic request/response schemas |
-| `backend/src/api/teaching_router.py` | All `/api/v2/sessions/` endpoints |
-| `backend/src/db/models.py` | SQLAlchemy ORM tables (8 tables including pgvector column) |
-| `backend/src/config.py` | All constants: paths, model names, thresholds, book slugs |
-| `backend/src/adaptive/adaptive_engine.py` | Adaptive learning engine: student profiling, XP, card difficulty |
-| `backend/src/adaptive/prompt_builder.py` | Single-card adaptive prompt builder |
-| `backend/src/adaptive/adaptive_router.py` | Adaptive learning endpoints |
-| `frontend/src/App.jsx` | Root component with React Router routes |
-| `frontend/src/pages/LearningPage.jsx` | Teaching session interface |
-| `frontend/src/pages/ConceptMapPage.jsx` | Dependency graph visualization (Sigma + graphology) |
-| `frontend/src/context/SessionContext.jsx` | Session state machine (phases, cards, Socratic, chunks) |
-| `frontend/src/context/StudentContext.jsx` | Student profile, mastery, XP state |
-| `frontend/src/components/learning/CardLearningView.jsx` | Card-based lesson UI: MCQ, mastery bar, diagram rendering |
-| `frontend/src/components/learning/SocraticChat.jsx` | Chat-based Socratic assessment |
-| `frontend/src/api/sessions.js` | Axios wrappers for all session endpoints |
-| `frontend/src/store/adaptiveStore.js` | Zustand store for adaptive mode state |
-| `docs/` | All HLD/DLD/execution-plan artifacts (source of truth for design) |
-| `.claude/agents/` | Subagent definitions for the 5-agent workflow |
-| `.claude/agent-memory/` | Persistent per-agent memory (do not delete) |
+| `backend/src/api/teaching_router.py` | All `/api/v2/` student endpoints (~36 endpoints) |
+| `backend/src/api/teaching_service.py` | Card generation, session management, LLM orchestration |
+| `backend/src/api/prompts.py` | All LLM system prompts (style, interests, language, mode) |
+| `backend/src/api/admin_router.py` | Admin console endpoints (~48 endpoints, rate-limited) |
+| `backend/src/api/chunk_knowledge_service.py` | pgvector search + graph traversal + override management |
+| `backend/src/auth/router.py` | Auth endpoints (rate-limited: 3-60/min per endpoint) |
+| `backend/src/auth/service.py` | JWT creation, refresh token rotation with reuse detection |
+| `backend/src/adaptive/prompt_builder.py` | Per-card adaptive prompt builder (mode delivery blocks) |
+| `backend/src/adaptive/generation_profile.py` | 9-cell speed×comprehension matrix for card parameters |
+| `backend/src/db/models.py` | SQLAlchemy ORM (13 tables, indexed, pgvector column) |
+| `backend/src/config.py` | Constants, paths, API keys (auto-generates secrets in dev) |
+| **Frontend — Layouts** | |
+| `frontend/src/layouts/AuthLayout.jsx` | Split-panel auth shell (constellation + form) |
+| `frontend/src/layouts/StudentLayout.jsx` | Student shell (sidebar + topbar + content) |
+| `frontend/src/layouts/AdminLayout.jsx` | Admin shell (sidebar + topbar + content) |
+| **Frontend — Pages** | |
+| `frontend/src/pages/DashboardPage.jsx` | Student home (welcome hero, stats, subjects) |
+| `frontend/src/pages/ConceptMapPage.jsx` | Concept map + RPG skill tree (Tree/Graph toggle) |
+| `frontend/src/pages/LearningPage.jsx` | Teaching session (chunk selection → cards → completion) |
+| `frontend/src/pages/AchievementsPage.jsx` | Badge grid by category |
+| `frontend/src/pages/LeaderboardPage.jsx` | Podium top 3 + rank list |
+| `frontend/src/pages/SettingsPage.jsx` | Student settings (profile, appearance, account) |
+| **Frontend — Components** | |
+| `frontend/src/components/ui/` | 20 reusable UI components (Button, Card, Badge, Input, etc.) |
+| `frontend/src/components/layout/StudentSidebar.jsx` | Collapsible sidebar (260/72px, colored nav icons) |
+| `frontend/src/components/layout/AdminSidebar.jsx` | Admin sidebar (280px, grouped nav) |
+| `frontend/src/components/conceptmap/SkillTreeView.jsx` | RPG skill tree (chapter tiers, gradient circle nodes) |
+| `frontend/src/components/learning/CardLearningView.jsx` | Card UI: MCQ, teaching, check-in (44KB) |
+| **Frontend — State** | |
+| `frontend/src/context/AuthContext.jsx` | JWT auth, refresh token rotation, visibility-based refresh |
+| `frontend/src/context/SessionContext.jsx` | Session state machine (phases, cards, chunks) |
+| `frontend/src/store/adaptiveStore.js` | Zustand: XP, level, streak, mode, badges |
+| **Testing** | |
+| `frontend/e2e/` | 11 Playwright test files, 90+ E2E tests |
+| `frontend/playwright.config.js` | Playwright config (Chromium, 1 worker, 60s timeout) |
+
+---
+
+## Design System (Orange Primary)
+
+| Token | Light | Dark |
+|-------|-------|------|
+| `--color-primary` | `#F97316` | `#FB923C` |
+| `--color-primary-dark` | `#EA580C` | `#F97316` |
+| `--color-bg` | `#FAFAFA` | `#0F172A` |
+| `--color-surface` | `#FFFFFF` | `#1E293B` |
+| `--color-success` | `#22C55E` | `#4ADE80` |
+| `--color-danger` | `#EF4444` | `#F87171` |
+| `--color-info` | `#3B82F6` | `#60A5FA` |
+
+Shape: pill buttons (rounded-full), rounded-2xl cards, rounded-xl inputs. Framer Motion on all interactions.
+
+---
+
+## Security Hardening (Applied)
+
+| Fix | Description |
+|-----|-------------|
+| Auth rate limiting | All 9 auth endpoints: 3-60 req/min per endpoint |
+| Secret auto-generation | JWT_SECRET_KEY + API_SECRET_KEY auto-generated in dev mode |
+| SMTP warning | Startup log if SMTP not configured (OTPs will fail) |
+| Ownership validation | `/api/v3/adaptive/lesson` checks user owns student_id |
+| Route deduplication | Removed duplicate `/api/v2/sessions/{id}/complete-card` from adaptive_router |
+| Student creation commit | `await db.commit()` after student flush |
+| Refresh token race fix | `refreshPromiseRef` deduplicates concurrent refresh calls |
+| Auth persistence fix | Only 401/403 clears session; transient errors retry without logout |
+| Exception leak fix | Generic error messages to client, detailed logs server-side |
+| datetime fix | `datetime.utcnow()` → `datetime.now(timezone.utc)` |
+| DB indexes | 5 new indexes (conversation_messages, chunk_images, card_interactions, xp_events, student_badges) |
+| Admin pagination | `GET /api/admin/users` now paginated (limit/offset) |

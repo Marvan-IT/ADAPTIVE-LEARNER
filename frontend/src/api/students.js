@@ -36,3 +36,15 @@ export const getSessions = (studentId) =>
 
 export const getSessionCardInteractions = (sessionId) =>
   api.get(`/api/v2/sessions/${sessionId}/card-interactions`);
+
+export const getStudentBadges = (studentId) =>
+  api.get(`/api/v2/students/${studentId}/badges`);
+
+export const getLeaderboard = (limit = 20) =>
+  api.get("/api/v2/leaderboard", { params: { limit } });
+
+export const getFeatureFlags = () =>
+  api.get("/api/v2/features");
+
+export const getStudentAnalytics = (studentId) =>
+  api.get(`/api/v2/students/${studentId}/analytics`);

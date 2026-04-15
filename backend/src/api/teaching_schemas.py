@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field, model_validator
 
 class CreateStudentRequest(BaseModel):
     display_name: str = Field(..., min_length=1, max_length=100)
+    age: int | None = Field(default=None, ge=5, le=120)
     interests: list[str] = Field(
         default_factory=list,
         description="Student's interests for metaphor personalization",
@@ -67,6 +68,7 @@ class UpdateLanguageRequest(BaseModel):
 class StudentResponse(BaseModel):
     id: UUID
     display_name: str
+    age: int | None = None
     interests: list[str]
     preferred_style: str
     preferred_language: str
@@ -100,6 +102,7 @@ class PresentationResponse(BaseModel):
     session_id: UUID
     concept_id: str
     concept_title: str
+    book_title: str = ""
     presentation: str
     style: str
     phase: str
@@ -153,6 +156,7 @@ class CardsResponse(BaseModel):
     session_id: UUID
     concept_id: str
     concept_title: str
+    book_title: str = ""
     style: str
     phase: str
     cards: list[LessonCard]
@@ -285,6 +289,7 @@ class StudentAnalyticsResponse(BaseModel):
     avg_wrong_attempts_per_card: float
     avg_hints_per_card: float
     avg_time_on_card_sec: float
+    total_study_time_sec: float
     reviews_due_now: int
     reviews_upcoming_7d: int
     hardest_concept_id: str | None
@@ -385,8 +390,9 @@ class ChunkSummary(BaseModel):
     has_images:  bool        # True if at least one chunk_images row exists
     has_mcq:     bool        # determined by heading rule (no MCQ for Learning Objectives etc.)
     chunk_type:  str = "teaching"  # "teaching"|"exercise"|"chapter_review"|"learning_objective"
-    is_optional: bool = False       # True only for "Writing Exercises"
-    completed:   bool = False
+    is_optional:   bool = False       # True only for "Writing Exercises"
+    exam_disabled: bool = False       # True when admin has disabled exam questions for this chunk
+    completed:     bool = False
     score:       int | None = None
     mode_used:   str | None = None
 

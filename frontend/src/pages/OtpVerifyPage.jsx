@@ -2,25 +2,10 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { useNavigate, useLocation, Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { motion } from "framer-motion";
-import { Brain, Mail, AlertCircle, CheckCircle2 } from "lucide-react";
+import { AlertCircle, CheckCircle2, Mail } from "lucide-react";
 import { verifyOtp, resendOtp } from "../api/auth";
 import { useAuth } from "../context/AuthContext";
-
-const PALETTE = {
-  bg: "#0f0a1a",
-  card: "#1a1025",
-  accent: "#7c3aed",
-  accentHover: "#6d28d9",
-  text: "#e2e8f0",
-  muted: "#94a3b8",
-  inputBg: "#2d1f3d",
-  inputBorder: "#4c3a6e",
-  inputBorderFocus: "#7c3aed",
-  error: "#ef4444",
-  errorBg: "rgba(239,68,68,0.08)",
-  success: "#22c55e",
-  successBg: "rgba(34,197,94,0.08)",
-};
+import { Button } from "../components/ui";
 
 const RESEND_COOLDOWN = 60;
 
@@ -62,26 +47,28 @@ export default function OtpVerifyPage() {
       setError("");
       setLoading(true);
       try {
-        const { data } = await verifyOtp(email, code);
-        if (purpose === "email_verify") {
-          // Auto-login: backend returns tokens after email verification
-          if (data.access_token) {
-            if (data.refresh_token) {
-              localStorage.setItem("ada_refresh_token", data.refresh_token);
-            }
-            // Trigger doRefresh to properly initialize the auth state
-            const newToken = await doRefresh();
-            if (!newToken) {
-              // Fallback: set tokens manually
-              setTokens(data.access_token, data.refresh_token);
-              setUser(data.user);
-            }
-          }
-          navigate("/map", { replace: true });
-        } else {
-          // password_reset: navigate to reset page with email
+        if (purpose === "password_reset") {
+          // Skip verify-otp API — the OTP will be verified by /reset-password
+          // to avoid double consumption (verify-otp marks it used, then
+          // reset-password can't find an unused OTP).
           navigate("/reset-password", { state: { email, otp: code } });
+          return;
         }
+        const { data } = await verifyOtp(email, code, purpose);
+        // Auto-login: backend returns tokens after email verification
+        if (data.access_token) {
+          if (data.refresh_token) {
+            localStorage.setItem("ada_refresh_token", data.refresh_token);
+          }
+          // Trigger doRefresh to properly initialize the auth state
+          const newToken = await doRefresh();
+          if (!newToken) {
+            // Fallback: set tokens manually
+            setTokens(data.access_token, data.refresh_token);
+            setUser(data.user);
+          }
+        }
+        navigate("/map", { replace: true });
       } catch (err) {
         const detail = err.response?.data?.detail;
         setError(
@@ -175,142 +162,38 @@ export default function OtpVerifyPage() {
 
   const allFilled = digits.every((d) => d !== "");
 
-  const titleKey =
-    purpose === "password_reset" ? "auth.verifyResetCode" : "auth.verifyEmail";
-  const titleDefault =
-    purpose === "password_reset" ? "Enter reset code" : "Verify your email";
-
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        background: PALETTE.bg,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: "1rem",
-        fontFamily: "Inter, system-ui, sans-serif",
-      }}
-    >
-      {/* Background glow */}
-      <div
-        aria-hidden="true"
-        style={{
-          position: "fixed",
-          top: "30%",
-          left: "50%",
-          transform: "translate(-50%, -50%)",
-          width: "500px",
-          height: "500px",
-          background:
-            "radial-gradient(circle at 50% 50%, rgba(124,58,237,0.12), transparent 65%)",
-          pointerEvents: "none",
-          zIndex: 0,
-        }}
-      />
-
-      <motion.div
-        initial={{ opacity: 0, y: 24 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.35, ease: "easeOut" }}
-        style={{
-          position: "relative",
-          zIndex: 1,
-          width: "100%",
-          maxWidth: "420px",
-        }}
-      >
-        {/* Branding */}
-        <div style={{ textAlign: "center", marginBottom: "2rem" }}>
-          <div
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              width: "56px",
-              height: "56px",
-              borderRadius: "16px",
-              background: "rgba(124,58,237,0.15)",
-              border: "1px solid rgba(124,58,237,0.3)",
-              marginBottom: "1rem",
-            }}
-          >
-            <Brain size={28} color="#a78bfa" aria-hidden="true" />
-          </div>
-          <h1
-            style={{
-              fontSize: "1.65rem",
-              fontWeight: 800,
-              color: PALETTE.text,
-              letterSpacing: "-0.02em",
-              margin: 0,
-              marginBottom: "0.5rem",
-            }}
-          >
-            {t(titleKey, titleDefault)}
-          </h1>
-          <p
-            style={{
-              color: PALETTE.muted,
-              fontSize: "0.875rem",
-              margin: 0,
-              lineHeight: 1.6,
-            }}
-          >
-            {t("auth.otpSentTo", "We've sent a 6-digit code to")}
-          </p>
-          <div
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: "6px",
-              marginTop: "6px",
-              background: "rgba(124,58,237,0.1)",
-              border: "1px solid rgba(124,58,237,0.2)",
-              borderRadius: "8px",
-              padding: "4px 12px",
-            }}
-          >
-            <Mail size={13} color="#a78bfa" aria-hidden="true" />
-            <span
-              style={{
-                color: "#c4b5fd",
-                fontSize: "0.875rem",
-                fontWeight: 500,
-              }}
-            >
-              {email}
-            </span>
-          </div>
-        </div>
-
+    <>
         {/* Card */}
-        <div
-          style={{
-            background: PALETTE.card,
-            borderRadius: "20px",
-            border: "1px solid rgba(124,58,237,0.18)",
-            padding: "2rem",
-            boxShadow:
-              "0 4px 6px rgba(0,0,0,0.3), 0 0 0 1px rgba(255,255,255,0.03)",
-          }}
-        >
+        <div className="bg-[var(--color-surface)] rounded-2xl p-8 shadow-sm">
+          {/* Animated mail icon */}
+          <div className="flex justify-center mb-4">
+            <motion.div
+              animate={{ y: [0, -6, 0] }}
+              transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
+              className="w-16 h-16 rounded-full bg-[var(--color-primary)]/10 flex items-center justify-center"
+            >
+              <Mail size={32} className="text-[var(--color-primary)]" aria-hidden="true" />
+            </motion.div>
+          </div>
+
+          {/* Heading */}
+          <h1 className="text-3xl font-bold text-[var(--color-text)] mb-2 text-center">
+            {t("auth.checkEmail", "Check your email!")}
+          </h1>
+          <p className="text-[var(--color-text-muted)] mb-8 text-center text-sm">
+            {t("auth.otpSentTo", "We sent a 6-digit code to")} <span className="font-semibold text-[var(--color-text)]">{email}</span>
+          </p>
+
           {/* Error */}
           {error && (
             <motion.div
               initial={{ opacity: 0, height: 0 }}
               animate={{ opacity: 1, height: "auto" }}
+              className="flex items-center gap-2 rounded-[10px] px-4 py-3 mb-5 text-sm text-[var(--color-danger)]"
               style={{
-                background: PALETTE.errorBg,
-                border: `1px solid ${PALETTE.error}40`,
-                borderRadius: "10px",
-                padding: "0.75rem 1rem",
-                marginBottom: "1.25rem",
-                display: "flex",
-                alignItems: "center",
-                gap: "0.5rem",
-                color: PALETTE.error,
-                fontSize: "0.875rem",
+                background: "color-mix(in srgb, var(--color-danger) 8%, transparent)",
+                border: "1px solid color-mix(in srgb, var(--color-danger) 40%, transparent)",
               }}
               role="alert"
             >
@@ -324,17 +207,10 @@ export default function OtpVerifyPage() {
             <motion.div
               initial={{ opacity: 0, height: 0 }}
               animate={{ opacity: 1, height: "auto" }}
+              className="flex items-center gap-2 rounded-[10px] px-4 py-3 mb-5 text-sm text-[var(--color-success)]"
               style={{
-                background: PALETTE.successBg,
-                border: `1px solid ${PALETTE.success}40`,
-                borderRadius: "10px",
-                padding: "0.75rem 1rem",
-                marginBottom: "1.25rem",
-                display: "flex",
-                alignItems: "center",
-                gap: "0.5rem",
-                color: PALETTE.success,
-                fontSize: "0.875rem",
+                background: "color-mix(in srgb, var(--color-success) 8%, transparent)",
+                border: "1px solid color-mix(in srgb, var(--color-success) 40%, transparent)",
               }}
             >
               <CheckCircle2 size={16} aria-hidden="true" />
@@ -344,16 +220,11 @@ export default function OtpVerifyPage() {
 
           {/* OTP digit inputs */}
           <fieldset
-            style={{ border: "none", padding: 0, margin: 0 }}
+            className="border-none p-0 m-0"
             aria-label={t("auth.otpFieldset", "6-digit verification code")}
           >
             <div
-              style={{
-                display: "flex",
-                gap: "10px",
-                justifyContent: "center",
-                marginBottom: "2rem",
-              }}
+              className="flex gap-2.5 justify-center mb-8"
               onPaste={handlePaste}
             >
               {digits.map((digit, index) => (
@@ -369,107 +240,32 @@ export default function OtpVerifyPage() {
                   aria-label={t("auth.otpDigitN", { n: index + 1 }, `Digit ${index + 1}`)}
                   disabled={loading}
                   autoFocus={index === 0}
-                  style={{
-                    width: "48px",
-                    height: "56px",
-                    textAlign: "center",
-                    fontSize: "1.5rem",
-                    fontWeight: 700,
-                    background: PALETTE.inputBg,
-                    border: `2px solid ${
-                      digit
-                        ? PALETTE.inputBorderFocus
-                        : PALETTE.inputBorder
-                    }`,
-                    borderRadius: "12px",
-                    color: PALETTE.text,
-                    outline: "none",
-                    transition: "border-color 0.15s, transform 0.1s",
-                    transform: digit ? "scale(1.04)" : "scale(1)",
-                    cursor: loading ? "not-allowed" : "text",
-                    caretColor: PALETTE.accent,
-                  }}
-                  onFocus={(e) => {
-                    e.target.style.borderColor = PALETTE.inputBorderFocus;
-                    e.target.style.boxShadow = `0 0 0 3px rgba(124,58,237,0.15)`;
-                  }}
-                  onBlur={(e) => {
-                    e.target.style.borderColor = digit
-                      ? PALETTE.inputBorderFocus
-                      : PALETTE.inputBorder;
-                    e.target.style.boxShadow = "none";
-                  }}
+                  className={`w-[56px] h-[56px] text-center text-2xl font-bold bg-[var(--color-surface-2)] border-2 rounded-xl text-[var(--color-text)] outline-none transition-[border-color,transform,box-shadow] duration-150 caret-[var(--color-primary)] ${
+                    digit ? "border-[var(--color-primary)] scale-[1.04]" : "border-[var(--color-border)]"
+                  } ${loading ? "cursor-not-allowed" : "cursor-text"} focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/15`}
                 />
               ))}
             </div>
           </fieldset>
 
           {/* Submit button (manual) */}
-          <button
+          <Button
             type="button"
-            onClick={() => allFilled && submitOtp(digits.join(""))}
+            variant="primary"
+            size="lg"
+            loading={loading}
             disabled={!allFilled || loading}
-            style={{
-              width: "100%",
-              padding: "0.875rem",
-              background: !allFilled || loading
-                ? "rgba(124,58,237,0.4)"
-                : PALETTE.accent,
-              color: "#fff",
-              border: "none",
-              borderRadius: "10px",
-              fontSize: "0.95rem",
-              fontWeight: 700,
-              cursor: !allFilled || loading ? "not-allowed" : "pointer",
-              transition: "background 0.15s",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: "0.5rem",
-              marginBottom: "1.25rem",
-            }}
-            onMouseEnter={(e) => {
-              if (allFilled && !loading) {
-                e.currentTarget.style.background = PALETTE.accentHover;
-              }
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background =
-                !allFilled || loading ? "rgba(124,58,237,0.4)" : PALETTE.accent;
-            }}
+            onClick={() => allFilled && submitOtp(digits.join(""))}
+            className="w-full mb-5"
           >
-            {loading ? (
-              <>
-                <div
-                  style={{
-                    width: "16px",
-                    height: "16px",
-                    border: "2px solid rgba(255,255,255,0.3)",
-                    borderTopColor: "#fff",
-                    borderRadius: "50%",
-                    animation: "spin 0.7s linear infinite",
-                  }}
-                  aria-hidden="true"
-                />
-                {t("auth.verifying", "Verifying...")}
-              </>
-            ) : (
-              t("auth.verifyButton", "Verify Code")
-            )}
-          </button>
+            {t("auth.verifyButton", "Verify Code")}
+          </Button>
 
           {/* Resend */}
-          <p
-            style={{
-              textAlign: "center",
-              color: PALETTE.muted,
-              fontSize: "0.875rem",
-              margin: 0,
-            }}
-          >
+          <p className="text-center text-[var(--color-text-muted)] text-sm m-0">
             {t("auth.didntGetCode", "Didn't get a code?")}{" "}
             {cooldown > 0 ? (
-              <span style={{ color: PALETTE.muted }}>
+              <span className="text-[var(--color-text-muted)]">
                 {t("auth.resendIn", "Resend in {{s}}s", { s: cooldown })}
               </span>
             ) : (
@@ -477,17 +273,9 @@ export default function OtpVerifyPage() {
                 type="button"
                 onClick={handleResend}
                 disabled={resendLoading}
-                style={{
-                  background: "none",
-                  border: "none",
-                  cursor: resendLoading ? "wait" : "pointer",
-                  color: "#a78bfa",
-                  fontWeight: 600,
-                  fontSize: "0.875rem",
-                  padding: 0,
-                  textDecoration: "underline",
-                  textUnderlineOffset: "2px",
-                }}
+                className={`bg-transparent border-none p-0 text-[var(--color-primary)] font-semibold text-sm underline underline-offset-2 ${
+                  resendLoading ? "cursor-wait" : "cursor-pointer"
+                }`}
               >
                 {resendLoading
                   ? t("auth.resending", "Resending...")
@@ -498,22 +286,14 @@ export default function OtpVerifyPage() {
         </div>
 
         {/* Back link */}
-        <p
-          style={{
-            textAlign: "center",
-            color: PALETTE.muted,
-            fontSize: "0.875rem",
-            marginTop: "1.5rem",
-          }}
-        >
+        <p className="text-center text-[var(--color-text-muted)] text-sm mt-6">
           <Link
             to="/login"
-            style={{ color: "#a78bfa", textDecoration: "none", fontWeight: 500 }}
+            className="text-[var(--color-primary)] no-underline font-medium hover:underline"
           >
             {t("auth.backToLogin", "Back to Login")}
           </Link>
         </p>
-      </motion.div>
-    </div>
+    </>
   );
 }

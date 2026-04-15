@@ -1,15 +1,17 @@
 import { useAdaptiveStore } from '../../store/adaptiveStore';
+import { useTranslation } from 'react-i18next';
 import { motion, AnimatePresence } from 'framer-motion';
 
 const MODE_CONFIG = {
-  NORMAL:     { emoji: '\uD83D\uDCD6', label: 'Normal',        color: '#6b7280', bg: 'rgba(107,114,128,0.12)' },
-  FAST:       { emoji: '\u26A1', label: 'Speed Mode',     color: '#f59e0b', bg: 'rgba(245,158,11,0.12)' },
-  SLOW:       { emoji: '\uD83E\uDDD8', label: 'Calm Mode',      color: '#6366f1', bg: 'rgba(99,102,241,0.12)' },
-  STRUGGLING: { emoji: '\uD83C\uDFAF', label: 'Focus Mode',     color: '#f43f5e', bg: 'rgba(244,63,94,0.12)'  },
-  BORED:      { emoji: '\uD83D\uDE80', label: 'Challenge Mode', color: '#22d3ee', bg: 'rgba(34,211,238,0.12)' },
+  NORMAL:     { emoji: '\uD83D\uDCD6', color: '#6b7280', bg: 'rgba(107,114,128,0.12)' },
+  FAST:       { emoji: '\u26A1',       color: '#F97316', bg: 'rgba(249,115,22,0.12)' },
+  SLOW:       { emoji: '\uD83E\uDDD8', color: 'var(--color-primary)', bg: 'color-mix(in srgb, var(--color-primary) 12%, transparent)' },
+  STRUGGLING: { emoji: '\uD83C\uDFAF', color: '#f43f5e', bg: 'rgba(244,63,94,0.12)'  },
+  BORED:      { emoji: '\uD83D\uDE80', color: '#22d3ee', bg: 'rgba(34,211,238,0.12)' },
 };
 
 export default function AdaptiveModeIndicator({ compact = false }) {
+  const { t } = useTranslation();
   const mode = useAdaptiveStore((s) => s.mode);
   const cfg = MODE_CONFIG[mode];
   if (!cfg) return null;
@@ -37,7 +39,7 @@ export default function AdaptiveModeIndicator({ compact = false }) {
           exit={{ opacity: 0 }}
           transition={{ duration: 0.15 }}
         >
-          {cfg.emoji} {!compact && cfg.label}
+          {cfg.emoji} {!compact && t(`learning.mode.${mode}`)}
         </motion.span>
       </AnimatePresence>
     </motion.div>

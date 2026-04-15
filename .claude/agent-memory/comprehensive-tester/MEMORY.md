@@ -195,13 +195,9 @@ Key patterns:
 - `start_session` book validation: calls `chunk_ksvc.get_active_books(db)` async; returns HTTP 400 with book_slug name in detail if not in active set
 - `_build_main_test_app()` returns `(app, mock_ksvc)` tuple — remember to destructure it in fixtures
 
-### Admin Console Tests (test_admin_console.py)
-- 21 tests, all passing; file at `backend/tests/test_admin_console.py`
-- Stub `fitz` and `api.chunk_knowledge_service` in sys.modules BEFORE importing `api.admin_router` (both are heavy/problematic transitive deps)
-- `admin_router_module._API_KEY = "test-secret"` after import — more reliable than env var patching
-- `patch.object(admin_router_module, "DATA_DIR", tmp_path/...)` and same for `OUTPUT_DIR` — always use per-test tmp_path
-- `patch.object(admin_router_module, "subprocess")` then `mock_subproc.Popen = MagicMock()` for upload tests
-- `patch.object(admin_router_module, "_normalize_image_url", return_value=...)` for chunks endpoint test
-- Sections/chunks endpoint: returns multiple execute() call sequences — use `call_count` closure with side_effect list
-- Publish endpoint calls `svc.preload_graph(slug)` via `loop.run_in_executor` — set `app.state.chunk_knowledge_svc = MagicMock()` and assert `mock_svc.preload_graph.assert_called_once_with(slug)`
-- `python-multipart` must be installed for UploadFile/Form endpoints to work at collection time
+### Admin Console Tests (test_admin_console.py + test_admin_console_extended.py)
+- test_admin_console.py: 21 tests; test_admin_console_extended.py: 42 tests. See `admin-console-tests.md` for details.
+- New endpoints use `Depends(require_admin)` JWT dep — override with `app.dependency_overrides[require_admin] = async lambda: stub_user`
+- Stub `fitz` + `api.chunk_knowledge_service` in sys.modules BEFORE importing admin_router
+- Graph tests: patch `admin_router_module._load_graph` + `reload_graph_with_overrides` (AsyncMock)
+- Sections UPDATE SQL: mock `result.rowcount = N`; merge needs `mock_db.delete = AsyncMock()` + `flush = AsyncMock()`

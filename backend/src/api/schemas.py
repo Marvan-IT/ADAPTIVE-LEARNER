@@ -1,5 +1,5 @@
 """
-Pydantic schemas for the ADA REST API.
+Pydantic schemas for the Adaptive Learner REST API.
 Separate from models.py (which uses dataclasses for the pipeline).
 """
 

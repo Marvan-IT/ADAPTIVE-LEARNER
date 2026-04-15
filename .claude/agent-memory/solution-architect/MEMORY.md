@@ -1,6 +1,6 @@
 # Solution Architect Agent Memory — ADA Platform
 
-Last updated: 2026-03-27 (chunk-architecture design added)
+Last updated: 2026-04-13 (pipeline-wiring-fix design added)
 
 ---
 
@@ -142,6 +142,8 @@ Feature directories are kebab-case. Never combine two features in one directory.
 - `docs/master-card-generation/` — HLD, DLD, execution-plan (2026-03-11) → see `master-card-generation.md`
 - `docs/hybrid-adaptive-cards/` — HLD, DLD, execution-plan (2026-03-14) → see `hybrid-adaptive-cards.md`
 - `docs/pre-deployment-audit-fixes/` — HLD, DLD, execution-plan (2026-03-17) → see below
+- `docs/universal-extraction/` — HLD, DLD, execution-plan (2026-04-13) → see below
+- `docs/pipeline-wiring-fix/` — HLD, DLD, execution-plan (2026-04-13) → see below
 
 ### Pre-Deployment Audit Fixes — Key Design Decisions (2026-03-17)
 - **No schema changes, no migration, no new env vars** — pure logic fixes in service layer and frontend reducer
@@ -192,6 +194,32 @@ Feature directories are kebab-case. Never combine two features in one directory.
 - **XP per answer:** MCQ correct=10 XP, short-answer correct=5 XP, wrong=0 XP + burnoutScore+20 + streak reset.
 - **Sigma node CSS limitation:** If Sigma uses WebGL (canvas-only), DOM node class application is not feasible — use Sigma color attribute or legend fallback. Verify before starting P7-2.
 - **WBS total:** 31 tasks, ~19.75 engineer-days. With 2 engineers: ~10 calendar days.
+
+### Gamification System — Key Design Decisions (2026-04-13)
+- **Migration already created:** `015_gamification_system.py` — adds `daily_streak`, `daily_streak_best`, `last_active_date` to `students`; adds `difficulty` (SmallInteger nullable) to `card_interactions`; creates `xp_events` and `student_badges` tables.
+- **New backend package:** `backend/src/gamification/` — `xp_engine.py`, `streak_engine.py`, `badge_engine.py`, `badge_definitions.py`, `feature_flags.py`, `schemas.py`.
+- **XP formula:** `base_xp = difficulty * XP_PER_DIFFICULTY_POINT (4)`. hint_factor `max(0.25, 1 - 0.25*hints)`. wrong_factor `max(0.25, 1 - 0.15*wrong)`. first_attempt_bonus 1.5× (hints==0 and wrong==0). floor: 1 XP minimum.
+- **Streak tiers:** 1–2d=1.0×, 3–4d=1.25×, 5–6d=1.5×, 7–13d=2.0×, 14+d=2.5×. Calendar-day UTC comparison via `students.last_active_date` (Date type). Same-day call is idempotent.
+- **13 badges:** first_correct, first_mastery, mastery_5/10/25, streak_3/7/14/30, correct_10/25, perfect_chunk, speed_demon. Registry in `badge_definitions.py`. DB-level idempotency: `INSERT … ON CONFLICT DO NOTHING` on UNIQUE(student_id, badge_key).
+- **Feature flags:** 5 flags in `AdminConfig` (GAMIFICATION_ENABLED, LEADERBOARD_ENABLED, BADGES_ENABLED, STREAK_MULTIPLIER_ENABLED, DIFFICULTY_WEIGHTED_XP_ENABLED). In-memory cache 60s TTL. `LEADERBOARD_ENABLED` defaults to `false` (opt-in).
+- **Breaking change:** `POST /sessions/{id}/record-interaction` response extended to `{saved, xp_awarded, new_badges}`. Backend and frontend MUST deploy together.
+- **Existing `_award_xp()` in `teaching_router.py`:** Was never called. Superseded by new `xp_engine.award_xp()`.
+- **Frontend:** Replace hardcoded `awardXP(10)` in `CardLearningView.jsx` with `awardXP(response.xp_awarded)`. Add `pendingBadges` to `adaptiveStore.js`. 7 new components in `components/game/` + `pages/`.
+- **New endpoints (v2):** `GET /leaderboard`, `GET /students/{id}/badges`, `GET /features`. Admin: `GET /admin/students/{id}/progress-report`.
+- **Effort:** 32 dev-days; ~14 calendar days with 3 engineers; ~10 days with 4.
+
+### Extraction Quality Fix — Key Design Decisions (2026-04-13)
+- **No new modules, no schema changes.** 6 targeted fixes across `ocr_validator.py` and `chunk_parser.py` only.
+- **Fix 1 (adaptive TOC window):** Replace fixed ±500-char expansion with bidirectional density-driven expansion in `parse_toc()`. Threshold: ≥2 `_SECTION_NUMBER_RE` matches per 500-char step. Handles 62-section books without a new hard constant.
+- **Fix 2 (TOC whitelist):** Inserted after `min_body_words` filter in `_parse_book_mmd_with_profile()`. When `profile.toc_sections` is set, drop any regex-matched section not in the TOC set. Applied BEFORE recovery step.
+- **Fix 3 (body-only recovery):** Compute `body_start_offset = min(s["start"] for s in section_matches)` before the recovery loop. Pass to `_fuzzy_recover_section()` as new optional parameter. All 3 strategies skip matches at offset < body_start_offset.
+- **Fix 4 (non-instructional filter):** `_NON_INSTRUCTIONAL_TITLE_WORDS` frozenset in `ocr_validator.py`. Applied after title cleaning, before `TocEntry` append in `parse_toc()`.
+- **Fix 5 (noise + OCR):** Add `re.compile(r"^Before you get started", re.IGNORECASE)` to `_NOISE_HEADING_PATTERNS`. Add optional `corrected_headings: dict | None = None` to `parse_book_mmd()` signature; apply in hardcoded path. Caller in `pipeline.py` must pass `quality_report.corrected_headings`.
+- **Fix 6 (bypass max cap):** Change `if section_in_chapter > max_section_in_chapter` to `if section_in_chapter > max_section_in_chapter and not profile.toc_sections`. TOC whitelist is the authority.
+- **Critical dependency:** Fix 1 must be correct before Fix 2 is meaningful. TOC must be complete for whitelist to work.
+- **Effort:** 4 dev-days, 1 backend developer, ~2 calendar days.
+- `docs/extraction-quality-fix/` — HLD, DLD, execution-plan (2026-04-13)
+- **Docs:** `docs/gamification-system/` — HLD, DLD, execution-plan (2026-04-13).
 
 ### Card Generation Rebuild — Key Design Decisions (2026-03-09)
 - **No DB/frontend changes:** Pure fix to `teaching_service.py`, `prompts.py`, `config.py`.

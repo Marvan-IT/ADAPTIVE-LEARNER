@@ -7,15 +7,20 @@ const api = axios.create({
   headers: { "Content-Type": "application/json" },
 });
 
-// Bearer token request interceptor
+// Bearer token + language request interceptor
 // Skip auth header for public auth endpoints (except /me which requires auth)
 api.interceptors.request.use((config) => {
+  config.headers = config.headers || {};
+
+  // Always send current language
+  const lang = localStorage.getItem("ada_language") || "en";
+  config.headers["Accept-Language"] = lang;
+
   const isAuthEndpoint =
     config.url?.startsWith("/api/v1/auth/") && !config.url?.endsWith("/me");
   if (!isAuthEndpoint) {
     const token = window.__ada_get_access_token?.();
     if (token) {
-      config.headers = config.headers || {};
       config.headers.Authorization = `Bearer ${token}`;
     }
   }
@@ -51,10 +56,8 @@ api.interceptors.response.use(
 
 export default api;
 
-const _API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8889";
-
 export const resolveImageUrl = (url) => {
   if (!url) return url;
   if (url.startsWith("http://") || url.startsWith("https://")) return url;
-  return `${_API_BASE}${url}`;
+  return `${API_BASE_URL}${url}`;
 };

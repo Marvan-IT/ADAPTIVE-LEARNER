@@ -1,9 +1,11 @@
 import { Navigate, useLocation } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { useAuth } from "../context/AuthContext";
 
 export default function ProtectedRoute({ allowedRoles, children }) {
   const { user, loading, isAuthenticated } = useAuth();
   const location = useLocation();
+  const { t } = useTranslation();
 
   if (loading) {
     return (
@@ -23,13 +25,13 @@ export default function ProtectedRoute({ allowedRoles, children }) {
               height: "44px",
               margin: "0 auto 1rem",
               borderRadius: "50%",
-              border: "3px solid #7c3aed",
+              border: "3px solid var(--color-primary)",
               borderTopColor: "transparent",
               animation: "spin 0.8s linear infinite",
             }}
             aria-hidden="true"
           />
-          <p style={{ color: "#a78bfa", fontSize: "1rem" }}>Loading...</p>
+          <p style={{ color: "var(--color-text-muted)", fontSize: "1rem" }}>{t("common.loading", "Loading...")}</p>
         </div>
       </div>
     );

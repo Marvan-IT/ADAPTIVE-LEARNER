@@ -9,9 +9,10 @@ import VerticalProgressRail from "../components/learning/VerticalProgressRail";
 import CardLearningView from "../components/learning/CardLearningView";
 import CompletionView from "../components/learning/CompletionView";
 import { trackEvent } from "../utils/analytics";
-import { AlertCircle, LogOut, MapPin } from "lucide-react";
+import { AlertCircle, LogOut } from "lucide-react";
 import { checkConceptReadiness } from "../api/concepts";
 import { getSession, getChunkList } from "../api/sessions";
+import { ProgressRing } from "../components/ui";
 
 export default function LearningPage() {
   const { t } = useTranslation();
@@ -21,9 +22,8 @@ export default function LearningPage() {
   const bookSlug = searchParams.get("book_slug") || "prealgebra";
   const {
     phase, startLesson, error, reset,
-    session, conceptTitle, currentCardIndex,
+    session, conceptTitle, bookTitle, currentCardIndex,
     cards, cardAnswers, messages,
-    checkScore, bestScore,
     chunkList, chunkProgress, currentChunkId, currentChunkMode,
     allStudyComplete, submitChunkAnswers, chunkQuestions, chunkEvalResult,
     startChunk, dispatch, loading,
@@ -54,7 +54,7 @@ export default function LearningPage() {
           getSession(savedSessionId)
             .then(res => {
               const existing = res.data;
-              if (existing && existing.phase !== "DONE") {
+              if (existing && existing.phase !== "COMPLETED") {
                 // Restore session state then load chunk list to resume at SELECTING_CHUNK
                 dispatch({ type: "SESSION_CREATED", payload: existing });
                 return getChunkList(existing.id).then(chunkRes => {
@@ -96,6 +96,8 @@ export default function LearningPage() {
   }, [reset]);
 
   const [showExitConfirm, setShowExitConfirm] = useState(false);
+  const [showBackConfirm, setShowBackConfirm] = useState(false);
+  const [sharedCardStates, setSharedCardStates] = useState({});
 
   const handleExitConfirm = () => {
     trackEvent("lesson_exited", {
@@ -114,16 +116,13 @@ export default function LearningPage() {
 
   if (error) {
     return (
-      <div style={{
-        display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-        minHeight: "100vh", gap: "1rem", padding: "2rem",
-      }}>
-        <AlertCircle size={48} color="var(--color-danger)" />
-        <h2 style={{ color: "var(--color-danger)", fontWeight: 700 }}>{t("common.error")}</h2>
-        <p style={{ color: "var(--color-text-muted)", textAlign: "center", maxWidth: "400px" }}>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: "100vh", gap: "16px", padding: "32px" }}>
+        <AlertCircle size={48} color="#EF4444" />
+        <h2 style={{ color: "#EF4444", fontWeight: 700, margin: 0 }}>{t("common.error")}</h2>
+        <p style={{ color: "#94A3B8", textAlign: "center", maxWidth: "400px", margin: 0 }}>
           {error}
         </p>
-        <div style={{ display: "flex", gap: "0.75rem" }}>
+        <div style={{ display: "flex", gap: "12px" }}>
           <button
             onClick={() => {
               if (phase === "SELECTING_CHUNK") {
@@ -133,22 +132,13 @@ export default function LearningPage() {
                 startLesson(decodeURIComponent(conceptId), null, []);
               }
             }}
-            style={{
-              padding: "0.6rem 1.5rem", borderRadius: "10px", border: "none",
-              backgroundColor: "var(--color-primary)", color: "#fff",
-              fontSize: "1rem", fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
-            }}
+            style={{ padding: "10px 24px", borderRadius: "10px", border: "none", background: "#EA580C", color: "#FFFFFF", fontSize: "16px", fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}
           >
             {t("learning.tryAgain")}
           </button>
           <button
             onClick={() => { reset(); navigate("/map"); }}
-            style={{
-              padding: "0.6rem 1.5rem", borderRadius: "10px",
-              border: "1.5px solid var(--color-primary)", backgroundColor: "transparent",
-              color: "var(--color-primary)",
-              fontSize: "1rem", fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
-            }}
+            style={{ padding: "10px 24px", borderRadius: "10px", border: "1.5px solid #F97316", background: "transparent", color: "#F97316", fontSize: "16px", fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}
           >
             {t("learning.backToMap")}
           </button>
@@ -159,37 +149,28 @@ export default function LearningPage() {
 
   if (phase === "LOADING" || phase === "IDLE") {
     return (
-      <div style={{
-        maxWidth: "1100px",
-        margin: "0 auto",
-        padding: "1.5rem 1.5rem 3rem",
-      }}>
+      <div style={{ maxWidth: "1100px", margin: "0 auto", padding: "24px 24px 48px" }}>
         {/* Skeleton: mimics card layout */}
-        <div style={{ display: "flex", gap: "1rem", alignItems: "flex-start" }}>
-          <div style={{ flex: "1 1 0", minWidth: 0 }}>
+        <div style={{ display: "flex", gap: "16px", alignItems: "flex-start" }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
             {/* Progress dots skeleton */}
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "0.4rem", marginBottom: "1rem" }}>
-              {[0,1,2,3].map(i => (
-                <div key={i} className="skeleton-shimmer" style={{ width: i === 0 ? "28px" : "12px", height: "12px", borderRadius: "9999px" }} />
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "6px", marginBottom: "16px" }}>
+              {[0, 1, 2, 3].map(i => (
+                <div key={i} className="skeleton-shimmer" style={{ borderRadius: "9999px", height: "12px", width: i === 0 ? "28px" : "12px" }} />
               ))}
             </div>
             {/* Card skeleton */}
-            <div style={{
-              backgroundColor: "var(--color-surface)",
-              borderRadius: "var(--radius-lg)",
-              border: "2px solid var(--color-border)",
-              overflow: "hidden",
-            }}>
+            <div style={{ background: "var(--color-surface)", borderRadius: "var(--radius-lg)", border: "2px solid var(--color-border)", overflow: "hidden" }}>
               {/* Card header skeleton */}
               <div className="skeleton-shimmer" style={{ height: "64px", borderRadius: 0 }} />
               {/* Card body skeleton */}
-              <div style={{ padding: "1.5rem 1.75rem" }}>
-                <div className="skeleton-shimmer" style={{ height: "1rem", marginBottom: "0.6rem" }} />
-                <div className="skeleton-shimmer" style={{ height: "1rem", width: "90%", marginBottom: "0.6rem" }} />
-                <div className="skeleton-shimmer" style={{ height: "1rem", width: "75%", marginBottom: "1.5rem" }} />
-                <div className="skeleton-shimmer" style={{ height: "2.8rem", marginBottom: "0.5rem", borderRadius: "9999px" }} />
-                <div className="skeleton-shimmer" style={{ height: "2.8rem", marginBottom: "0.5rem", borderRadius: "9999px" }} />
-                <div className="skeleton-shimmer" style={{ height: "2.8rem", borderRadius: "9999px" }} />
+              <div style={{ padding: "24px 28px" }}>
+                <div className="skeleton-shimmer" style={{ height: "16px", marginBottom: "10px" }} />
+                <div className="skeleton-shimmer" style={{ height: "16px", width: "90%", marginBottom: "10px" }} />
+                <div className="skeleton-shimmer" style={{ height: "16px", width: "75%", marginBottom: "24px" }} />
+                <div className="skeleton-shimmer" style={{ height: "44px", marginBottom: "8px", borderRadius: "9999px" }} />
+                <div className="skeleton-shimmer" style={{ height: "44px", marginBottom: "8px", borderRadius: "9999px" }} />
+                <div className="skeleton-shimmer" style={{ height: "44px", borderRadius: "9999px" }} />
               </div>
             </div>
           </div>
@@ -198,86 +179,9 @@ export default function LearningPage() {
             <div className="skeleton-shimmer" style={{ height: "400px", borderRadius: "var(--radius-lg)" }} />
           </div>
         </div>
-        <p style={{ textAlign: "center", color: "var(--color-text-muted)", marginTop: "1.5rem", fontSize: "0.95rem", fontWeight: 600 }}>
+        <p style={{ textAlign: "center", color: "var(--color-text-muted)", marginTop: "24px", fontSize: "0.95rem", fontWeight: 600 }}>
           {t("learning.craftingCards")}
         </p>
-      </div>
-    );
-  }
-
-  // Attempts exhausted — session ended without mastery
-  if (phase === "ATTEMPTS_EXHAUSTED") {
-    return (
-      <div style={{
-        maxWidth: "600px",
-        margin: "0 auto",
-        padding: "3rem 1.5rem",
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        gap: "1.25rem",
-        textAlign: "center",
-      }}>
-        <div style={{
-          width: "72px",
-          height: "72px",
-          borderRadius: "50%",
-          backgroundColor: "color-mix(in srgb, var(--color-primary) 12%, var(--color-surface))",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          fontSize: "2rem",
-        }}>
-          {"📚"}
-        </div>
-        <h2 style={{ fontWeight: 800, fontSize: "1.5rem", color: "var(--color-text)", margin: 0 }}>
-          {t("learning.toughLesson")}
-        </h2>
-        <p style={{ color: "var(--color-text-muted)", fontSize: "1rem", lineHeight: 1.6, maxWidth: "480px", margin: 0 }}>
-          {t("learning.attemptsExhausted.body", { title: conceptTitle, score: bestScore ?? checkScore ?? 0 })}
-        </p>
-        <p style={{ color: "var(--color-text-muted)", fontSize: "0.95rem", lineHeight: 1.5, maxWidth: "460px", margin: 0 }}>
-          {t("learning.attemptsExhausted.encouragement")}
-        </p>
-        <div style={{ display: "flex", gap: "0.75rem", marginTop: "0.5rem", flexWrap: "wrap", justifyContent: "center" }}>
-          <button
-            onClick={() => { reset(); startLesson(decodeURIComponent(conceptId), null, []); }}
-            style={{
-              padding: "0.75rem 1.75rem",
-              borderRadius: "12px",
-              border: "none",
-              backgroundColor: "var(--color-primary)",
-              color: "#fff",
-              fontWeight: 700,
-              fontSize: "1rem",
-              cursor: "pointer",
-              fontFamily: "inherit",
-              boxShadow: "0 4px 12px rgba(var(--color-primary-rgb, 99,102,241), 0.3)",
-            }}
-          >
-            {t("learning.attemptsExhausted.tryAgain")}
-          </button>
-          <button
-            onClick={() => { reset(); navigate("/map"); }}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "0.5rem",
-              padding: "0.75rem 1.75rem",
-              borderRadius: "12px",
-              border: "1px solid var(--color-border)",
-              backgroundColor: "transparent",
-              color: "var(--color-text-muted)",
-              fontWeight: 700,
-              fontSize: "1rem",
-              cursor: "pointer",
-              fontFamily: "inherit",
-            }}
-          >
-            <MapPin size={18} />
-            {t("learning.backToMap")}
-          </button>
-        </div>
       </div>
     );
   }
@@ -319,52 +223,48 @@ export default function LearningPage() {
 
     const modeBadgeLabel = (mode) => t(`learning.mode.${mode}`, mode);
 
+    const completedCount = chunkProgress ? Object.keys(chunkProgress).length : 0;
+    const totalChunks = visibleChunks.length;
+    const progressPct = totalChunks > 0 ? Math.round((completedCount / totalChunks) * 100) : 0;
+    const lockedCount = visibleChunks.filter((c, idx) => {
+      const isGate = c.chunk_type === "exercise_gate";
+      const isInfo = c.chunk_type === "learning_objective";
+      if (isGate) return !(allStudyComplete === true);
+      if (isInfo) return false;
+      const prev = visibleChunks.slice(0, idx).filter(p => p.chunk_type !== "learning_objective" && !p.is_optional);
+      return prev.length > 0 && !(prev[prev.length - 1]?.chunk_id in (chunkProgress || {}));
+    }).length;
+    const availableCount = totalChunks - completedCount - lockedCount;
+
     return (
-      <div style={{
-        maxWidth: "760px",
-        margin: "0 auto",
-        padding: "2rem 1.5rem 4rem",
-      }}>
+      <div style={{ display: "flex", gap: "24px", padding: "24px 24px 64px" }}>
         {/* Prerequisite Warning Modal */}
         {prereqWarning && (
-          <div style={{
-            position: "fixed", inset: 0, zIndex: 1000,
-            backgroundColor: "rgba(0,0,0,0.6)",
-            backdropFilter: "blur(4px)",
-            display: "flex", alignItems: "center", justifyContent: "center", padding: "1rem",
-          }}>
-            <div style={{
-              backgroundColor: "var(--color-surface)",
-              borderRadius: "var(--radius-xl)",
-              padding: "2rem",
-              maxWidth: "480px", width: "100%",
-              boxShadow: "0 24px 64px rgba(0,0,0,0.4)",
-              border: "1px solid var(--color-border-strong, var(--color-border))",
-              display: "flex", flexDirection: "column", gap: "1rem",
-            }}>
-              <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-                <AlertCircle size={28} color="var(--color-danger)" style={{ flexShrink: 0 }} />
+          <div style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.6)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", padding: "16px" }}>
+            <div style={{ background: "var(--color-surface)", borderRadius: "var(--radius-xl)", padding: "32px", maxWidth: "480px", width: "100%", boxShadow: "0 24px 64px rgba(0,0,0,0.4)", border: "1px solid var(--color-border)", display: "flex", flexDirection: "column", gap: "16px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                <AlertCircle size={28} color="#EF4444" style={{ flexShrink: 0 }} />
                 <h2 style={{ margin: 0, fontSize: "1.25rem", fontWeight: 800, color: "var(--color-text)", lineHeight: 1.3 }}>
                   {t("learning.notReadyYet")}
                 </h2>
               </div>
-              <p style={{ margin: 0, fontSize: "0.95rem", color: "var(--color-text-muted)", lineHeight: 1.6 }}>
+              <p style={{ margin: 0, fontSize: "0.95rem", color: "#94A3B8", lineHeight: 1.6 }}>
                 {t("learning.helpsMasterFirst")}
               </p>
-              <ul style={{ margin: 0, paddingLeft: "1.25rem", display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+              <ul style={{ margin: 0, paddingInlineStart: "20px", display: "flex", flexDirection: "column", gap: "4px" }}>
                 {prereqWarning.unmet.map((prereq) => (
-                  <li key={prereq.concept_id} style={{ fontSize: "0.95rem", color: "var(--color-text)", fontWeight: 600, lineHeight: 1.5 }}>
+                  <li key={prereq.concept_id} style={{ fontSize: "0.95rem", color: "var(--color-text)", fontWeight: 600, lineHeight: 1.4 }}>
                     {prereq.concept_title}
                   </li>
                 ))}
               </ul>
-              <div style={{ display: "flex", gap: "0.75rem", marginTop: "0.5rem", flexWrap: "wrap" }}>
+              <div style={{ display: "flex", gap: "12px", marginTop: "8px", flexWrap: "wrap" }}>
                 <button onClick={() => { setPrereqWarning(null); navigate("/map"); }}
-                  style={{ flex: "1 1 auto", padding: "0.65rem 1.25rem", borderRadius: "var(--radius-md)", border: "none", backgroundColor: "var(--color-primary)", color: "#fff", fontSize: "0.95rem", fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
+                  style={{ flex: "1 1 auto", padding: "10px 20px", borderRadius: "var(--radius-md)", border: "none", background: "#EA580C", color: "#FFFFFF", fontSize: "0.95rem", fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
                   {t("learning.learnPrereqFirst")}
                 </button>
                 <button onClick={() => { setPrereqWarning(null); startLesson(decodeURIComponent(conceptId), null, []); }}
-                  style={{ flex: "1 1 auto", padding: "0.65rem 1.25rem", borderRadius: "var(--radius-md)", border: "1px solid var(--color-border-strong, var(--color-border))", backgroundColor: "transparent", color: "var(--color-text-muted)", fontSize: "0.95rem", fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+                  style={{ flex: "1 1 auto", padding: "10px 20px", borderRadius: "var(--radius-md)", border: "1px solid var(--color-border)", background: "transparent", color: "#94A3B8", fontSize: "0.95rem", fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
                   {t("learning.startAnyway")}
                 </button>
               </div>
@@ -372,25 +272,51 @@ export default function LearningPage() {
           </div>
         )}
 
-        {/* Page header */}
-        <div style={{ marginBottom: "2rem" }}>
-          <h1 style={{
-            margin: 0,
-            fontSize: "1.5rem",
-            fontWeight: 800,
-            color: "var(--color-text)",
-            letterSpacing: "-0.02em",
-          }}>
-            {conceptTitle || t("learning.chooseSubsection", "Choose a subsection to start")}
-          </h1>
-          {chunkProgress && Object.keys(chunkProgress).length > 0 && (
-            <p style={{ margin: "0.4rem 0 0", fontSize: "0.85rem", color: "var(--color-text-muted)", fontWeight: 500 }}>
-              {Object.keys(chunkProgress).length} of {visibleChunks.length} sections completed
-            </p>
-          )}
+        {/* Left column */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+
+        {/* Hero header */}
+        {(() => {
+          const decodedId = decodeURIComponent(conceptId);
+          const sm = decodedId.match(/(\d+)\.(\d+)/);
+          const chNum = sm ? sm[1] : "";
+          const secNum = sm ? `${sm[1]}.${sm[2]}` : "";
+          return (
+            <div style={{
+              marginBottom: "24px", padding: "28px 24px",
+              background: "linear-gradient(135deg, #FFF7ED 0%, #FFEDD5 50%, #FFF7ED 100%)",
+              borderRadius: "20px", border: "1px solid rgba(249,115,22,0.12)",
+            }}>
+              <h1 style={{ margin: 0, fontSize: "24px", fontWeight: 800, color: "#0f172a", fontFamily: "'Outfit', sans-serif", lineHeight: 1.3 }}>
+                {conceptTitle || decodedId.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())}
+              </h1>
+              <p style={{ margin: "6px 0 0", fontSize: "13px", color: "#78716c", fontWeight: 500 }}>
+                {chNum && t("learning.chapterLabel", { num: chNum })}{secNum && ` · ${t("learning.sectionLabel", { num: secNum })}`}{(bookTitle || bookSlug) && ` · ${bookTitle || bookSlug.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())}`}
+              </p>
+              <span style={{
+                display: "inline-block", marginTop: "12px", padding: "5px 14px",
+                borderRadius: "9999px", fontSize: "12px", fontWeight: 700,
+                color: "#EA580C", background: "rgba(249,115,22,0.1)",
+                border: "1px solid rgba(249,115,22,0.2)",
+              }}>
+                📚 {t("sidebar.subsectionsSummary", { count: totalChunks, minutes: totalChunks * 5 })}
+              </span>
+            </div>
+          );
+        })()}
+
+        {/* Section label */}
+        <div style={{ marginBottom: "14px", fontSize: "15px", fontWeight: 700, color: "#0f172a" }}>
+          {t("sidebar.subsections")} <span style={{ fontWeight: 400, color: "#94a3b8", fontSize: "13px" }}>· {t("sidebar.chooseToStart")}</span>
         </div>
 
-        <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+        {visibleChunks.length === 0 && (
+          <div style={{ textAlign: "center", padding: "32px 16px", color: "#94A3B8", fontSize: "0.95rem", fontWeight: 500 }}>
+            {t("chunk.noSections", "No sections available for this concept.")}
+          </div>
+        )}
+
+        <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
           {visibleChunks.map((chunk, idx) => {
             const isGate = chunk.chunk_type === "exercise_gate";
             const isOptional = chunk.is_optional === true;
@@ -398,7 +324,7 @@ export default function LearningPage() {
             const isReview = chunk.chunk_type === "chapter_review";
             const isExpanded = selectedChunkId === chunk.chunk_id;
             const prevRequired = visibleChunks.slice(0, idx).filter(
-              (c) => c.chunk_type !== "learning_objective"
+              (c) => c.chunk_type !== "learning_objective" && !c.is_optional
             );
 
             // Gate is locked until ALL non-gate, non-optional, non-info study chunks are complete
@@ -416,10 +342,10 @@ export default function LearningPage() {
             const score = isGate ? null : chunkProgress?.[chunk.chunk_id]?.score;
 
             const statusColor = isDone
-              ? "var(--color-success)"
+              ? "#22C55E"
               : isLocked
-                ? "var(--color-text-muted)"
-                : "var(--color-primary)";
+                ? "#94A3B8"
+                : "#F97316";
 
             const statusIcon = isDone
               ? "✓"
@@ -432,53 +358,45 @@ export default function LearningPage() {
             return (
               <Fragment key={chunk.chunk_id}>
                 {idx === firstExerciseIdx && firstExerciseIdx > 0 && (
-                  <div style={{
-                    padding: "10px 4px 6px",
-                    marginTop: "2px",
-                    fontSize: "11px",
-                    fontWeight: 600,
-                    letterSpacing: "0.08em",
-                    textTransform: "uppercase",
-                    color: "var(--color-text-muted)",
-                    borderTop: "1px solid var(--color-border, rgba(128,128,128,0.2))",
-                  }}>
+                  <div style={{ paddingTop: "10px", paddingBottom: "6px", paddingLeft: "4px", marginTop: "2px", fontSize: "11px", fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: "#94A3B8", borderTop: "1px solid rgba(128,128,128,0.2)" }}>
                     {t("chunks.exerciseSection", "Exercise Practice")}
                   </div>
                 )}
               <div
                 style={{
-                  borderRadius: "14px",
+                  borderRadius: "16px",
                   border: isExpanded
-                    ? "2px solid var(--color-primary)"
+                    ? "2px solid #F97316"
                     : isDone
                       ? "1.5px solid rgba(74,222,128,0.25)"
-                      : "1.5px solid var(--color-border-strong, rgba(255,255,255,0.15))",
+                      : "1.5px solid #e2e8f0",
                   background: isExpanded
-                    ? "var(--color-primary-light)"
+                    ? "#FFF7ED"
                     : isDone
-                      ? "color-mix(in srgb, var(--color-success) 6%, var(--color-surface))"
-                      : "var(--color-surface)",
+                      ? "rgba(240,253,244,0.5)"
+                      : "#ffffff",
                   overflow: "hidden",
-                  transition: "border-color 0.15s, background 0.15s",
+                  transition: "all 0.15s",
+                  boxShadow: isExpanded
+                    ? "0 4px 20px rgba(249,115,22,0.15)"
+                    : "0 1px 4px rgba(0,0,0,0.04)",
+                  padding: isExpanded ? "4px" : "0",
                 }}
+                onMouseEnter={(e) => { if (!isExpanded) e.currentTarget.style.boxShadow = "0 4px 12px rgba(0,0,0,0.08)"; }}
+                onMouseLeave={(e) => { if (!isExpanded) e.currentTarget.style.boxShadow = "0 1px 4px rgba(0,0,0,0.04)"; }}
               >
                 {/* Main row */}
-                <div style={{
-                  padding: "14px 18px",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "14px",
-                }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "14px", padding: "14px 20px" }}>
                   {/* Number/status circle */}
                   <div style={{
-                    width: "34px",
-                    height: "34px",
+                    width: "44px",
+                    height: "44px",
                     borderRadius: "50%",
                     flexShrink: 0,
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "center",
-                    fontSize: isDone ? "16px" : "13px",
+                    fontSize: isDone ? "18px" : "15px",
                     fontWeight: 700,
                     backgroundColor: isDone
                       ? "rgba(74,222,128,0.15)"
@@ -493,88 +411,61 @@ export default function LearningPage() {
 
                   {/* Heading + badges */}
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{
-                      fontSize: "14px",
-                      fontWeight: isDone ? 500 : 600,
-                      color: isLocked ? "var(--color-text-muted)" : "var(--color-text)",
-                      lineHeight: 1.4,
-                      marginBottom: "3px",
-                    }}>
+                    <div style={{ fontSize: "14px", lineHeight: 1.4, marginBottom: "2px", fontWeight: isDone ? 500 : 600, color: isLocked ? "#94A3B8" : "#0F172A" }}>
                       {chunk.heading}
                     </div>
                     <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", alignItems: "center" }}>
                       {isDone && score != null && (
-                        <span style={{
-                          fontSize: "11px",
-                          fontWeight: 700,
-                          color: score >= 80 ? "var(--color-success)" : score >= 50 ? "var(--color-primary)" : "var(--color-danger)",
-                        }}>
+                        <span style={{ fontSize: "11px", fontWeight: 700, color: score >= 80 ? "#22C55E" : score >= 50 ? "#F97316" : "#EF4444" }}>
                           {score}% score
                         </span>
                       )}
                       {isDone && chunkProgress?.[chunk.chunk_id]?.mode_used && (
-                        <span style={{
-                          fontSize: "10px", fontWeight: 600, padding: "1px 7px", borderRadius: "9999px",
-                          backgroundColor: "rgba(255,255,255,0.08)",
-                          color: "var(--color-text-muted)",
-                        }}>
+                        <span style={{ fontSize: "11px", fontWeight: 600, padding: "3px 10px", borderRadius: "6px", background: "#F8FAFC", color: "#64748B", border: "1px solid #E2E8F0" }}>
                           {modeBadgeLabel(chunkProgress[chunk.chunk_id].mode_used)}
                         </span>
                       )}
                       {!isDone && !isInfoPanel && chunk.chunk_type !== "exercise_gate" && idx === firstUncompletedIdx && currentChunkMode && (
                         <span style={{
-                          fontSize: "10px", fontWeight: 600, padding: "1px 7px", borderRadius: "9999px",
-                          backgroundColor: "var(--color-primary-light)",
-                          color: "var(--color-primary)",
-                          border: "1px dashed rgba(99,102,241,0.4)",
+                          fontSize: "11px", fontWeight: 600, padding: "3px 10px",
+                          borderRadius: "6px", background: "#FFF7ED",
+                          color: "#EA580C", border: "1px solid rgba(249,115,22,0.25)",
                         }}>
                           {modeBadgeLabel(currentChunkMode)} mode
                         </span>
                       )}
                       {isOptional && (
-                        <span style={{
-                          fontSize: "10px", fontWeight: 600, padding: "1px 7px", borderRadius: "9999px",
-                          backgroundColor: "rgba(251,191,36,0.12)", color: "var(--color-warning)",
-                        }}>
+                        <span style={{ fontSize: "11px", fontWeight: 600, padding: "3px 10px", borderRadius: "6px", background: "#FFFBEB", color: "#D97706", border: "1px solid rgba(217,119,6,0.2)" }}>
                           {t("subsectionNav.optional", "Optional")}
                         </span>
                       )}
+                      {chunk.exam_disabled && !isGate && !isInfoPanel && (
+                        <span style={{ fontSize: "11px", fontWeight: 500, padding: "3px 8px", borderRadius: "6px", background: "#FAF5FF", color: "#9333EA", border: "1px solid rgba(147,51,234,0.2)" }}>
+                          {t("subsectionNav.noExam", "No exam")}
+                        </span>
+                      )}
                       {isReview && (
-                        <span style={{
-                          fontSize: "10px", fontWeight: 600, padding: "1px 7px", borderRadius: "9999px",
-                          backgroundColor: "rgba(99,102,241,0.12)", color: "var(--color-primary)",
-                        }}>
+                        <span style={{ fontSize: "11px", fontWeight: 600, padding: "3px 10px", borderRadius: "6px", background: "#EFF6FF", color: "#2563EB", border: "1px solid rgba(37,99,235,0.2)" }}>
                           {t("subsectionNav.review", "Review")}
                         </span>
                       )}
                       {isInfoPanel && (
-                        <span style={{
-                          fontSize: "10px", fontWeight: 600, padding: "1px 7px", borderRadius: "9999px",
-                          backgroundColor: "rgba(74,222,128,0.1)", color: "var(--color-success)",
-                        }}>
+                        <span style={{ fontSize: "11px", fontWeight: 600, padding: "3px 10px", borderRadius: "6px", background: "#F0FDF4", color: "#16A34A", border: "1px solid rgba(22,163,74,0.2)" }}>
                           {t("subsectionNav.info", "Info")}
                         </span>
                       )}
                       {isGate && (
-                        <span style={{
-                          fontSize: "10px", fontWeight: 700, padding: "1px 7px", borderRadius: "9999px",
-                          backgroundColor: "rgba(99,102,241,0.12)", color: "var(--color-primary)",
-                          border: "1px solid rgba(99,102,241,0.3)",
-                        }}>
+                        <span style={{ fontSize: "11px", fontWeight: 700, padding: "3px 10px", borderRadius: "6px", background: "#FAF5FF", color: "#7C3AED", border: "1px solid rgba(124,58,237,0.2)" }}>
                           {t("subsectionNav.exam", "Exam")}
                         </span>
                       )}
                       {isLocked && isGate && (
-                        <span style={{
-                          fontSize: "10px", fontWeight: 500, color: "var(--color-text-muted)",
-                        }}>
+                        <span style={{ fontSize: "11px", fontWeight: 500, color: "#94a3b8" }}>
                           {t("exam.locked", "Complete all sections first")}
                         </span>
                       )}
                       {isLocked && !isGate && (
-                        <span style={{
-                          fontSize: "10px", fontWeight: 500, color: "var(--color-text-muted)",
-                        }}>
+                        <span style={{ fontSize: "11px", fontWeight: 500, color: "#94a3b8" }}>
                           {t("subsectionNav.lockedSubsection", "Complete previous section first")}
                         </span>
                       )}
@@ -625,11 +516,7 @@ export default function LearningPage() {
                     </button>
                   )}
                   {isLocked && (
-                    <div style={{
-                      width: "34px", height: "34px", flexShrink: 0,
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                      opacity: 0.35,
-                    }}>
+                    <div style={{ width: "34px", height: "34px", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", opacity: 0.35 }}>
                       🔒
                     </div>
                   )}
@@ -638,20 +525,16 @@ export default function LearningPage() {
                 {/* Expanded customization panel */}
                 {isExpanded && (
                   <div style={{
-                    borderTop: "1px solid var(--color-border)",
-                    padding: "16px 18px 18px",
-                    backgroundColor: "var(--color-bg)",
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: "14px",
+                    margin: "0 16px 16px",
+                    padding: "18px 20px",
+                    borderRadius: "12px",
+                    background: "#ffffff",
+                    border: "1px solid #f1f5f9",
+                    display: "flex", flexDirection: "column", gap: "16px",
                   }}>
                     {/* Style picker */}
                     <div>
-                      <div style={{
-                        fontSize: "11px", fontWeight: 700, textTransform: "uppercase",
-                        letterSpacing: "0.06em", color: "var(--color-text-muted)",
-                        marginBottom: "8px",
-                      }}>
+                      <div style={{ fontSize: "11px", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "#94A3B8", marginBottom: "8px" }}>
                         {t("customize.style", "Tutor style")}
                       </div>
                       <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
@@ -685,12 +568,8 @@ export default function LearningPage() {
 
                     {/* Interests */}
                     <div>
-                      <div style={{
-                        fontSize: "11px", fontWeight: 700, textTransform: "uppercase",
-                        letterSpacing: "0.06em", color: "var(--color-text-muted)",
-                        marginBottom: "8px",
-                      }}>
-                        {t("customize.interests", "Interests")} <span style={{ fontWeight: 400, textTransform: "none", letterSpacing: 0 }}>(optional — makes examples fun)</span>
+                      <div style={{ fontSize: "11px", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "#94A3B8", marginBottom: "8px" }}>
+                        {t("customize.interests", "Interests")} <span style={{ fontWeight: 400, textTransform: "none", letterSpacing: "normal" }}>({t("customize.interestsHint", "optional — makes examples fun")})</span>
                       </div>
                       {/* Preset interest chips */}
                       <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", marginBottom: "8px" }}>
@@ -731,20 +610,12 @@ export default function LearningPage() {
                           );
                         })}
                       </div>
-                      <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginBottom: chunkInterests.length > 0 ? "8px" : 0 }}>
+                      <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginBottom: chunkInterests.length > 0 ? "8px" : "0" }}>
                         {chunkInterests.map((interest) => (
                           <span
                             key={interest}
                             onClick={() => setChunkInterests((prev) => prev.filter((i) => i !== interest))}
-                            style={{
-                              padding: "4px 10px",
-                              borderRadius: "9999px",
-                              background: "var(--color-primary-light)",
-                              color: "var(--color-primary)",
-                              fontSize: "12px", fontWeight: 600,
-                              cursor: "pointer",
-                              border: "1px solid rgba(99,102,241,0.3)",
-                            }}
+                            style={{ padding: "4px 10px", borderRadius: "9999px", background: "var(--color-primary-light)", color: "var(--color-primary)", fontSize: "12px", fontWeight: 600, cursor: "pointer", border: "1px solid rgba(99,102,241,0.3)" }}
                           >
                             {interest} ✕
                           </span>
@@ -760,18 +631,7 @@ export default function LearningPage() {
                           }
                         }}
                         placeholder={t("customize.addInterest", "Type topic and press Enter...")}
-                        style={{
-                          width: "100%",
-                          padding: "8px 12px",
-                          borderRadius: "10px",
-                          border: "1.5px solid var(--color-border-strong, var(--color-border))",
-                          background: "var(--color-surface)",
-                          color: "var(--color-text)",
-                          fontSize: "13px",
-                          fontFamily: "inherit",
-                          outline: "none",
-                          boxSizing: "border-box",
-                        }}
+                        style={{ width: "100%", padding: "8px 12px", borderRadius: "10px", border: "1.5px solid var(--color-border-strong, var(--color-border))", background: "var(--color-surface)", color: "var(--color-text)", fontSize: "13px", fontFamily: "inherit", outline: "none", boxSizing: "border-box" }}
                       />
                     </div>
 
@@ -780,18 +640,19 @@ export default function LearningPage() {
                       onClick={() => handleStartLearning(chunk.chunk_id)}
                       disabled={loading}
                       style={{
-                        padding: "12px",
-                        borderRadius: "12px",
+                        padding: "14px",
+                        borderRadius: "14px",
                         border: "none",
-                        background: "var(--color-primary)",
+                        background: "linear-gradient(135deg, #F97316, #EA580C)",
                         color: "#fff",
                         fontSize: "15px",
                         fontWeight: 700,
                         cursor: loading ? "not-allowed" : "pointer",
                         fontFamily: "inherit",
                         opacity: loading ? 0.7 : 1,
-                        boxShadow: "0 4px 16px rgba(99,102,241,0.3)",
+                        boxShadow: "0 4px 16px rgba(249,115,22,0.3)",
                         transition: "opacity 0.15s",
+                        margin: "0 16px 16px",
                       }}
                     >
                       {loading ? t("learning.gettingReady", "Getting ready...") : `▶  ${t("learning.startLearning", "Start Learning")}`}
@@ -803,6 +664,69 @@ export default function LearningPage() {
             );
           })}
         </div>
+        </div>{/* end left column */}
+
+        {/* Right column — Concept overview */}
+        <div style={{ width: "280px", flexShrink: 0, position: "sticky", top: "24px", alignSelf: "flex-start" }}>
+          <div style={{ background: "#fff", borderRadius: "16px", border: "1px solid #e2e8f0", padding: "24px" }}>
+            <h3 style={{ margin: "0 0 16px", fontSize: "16px", fontWeight: 700, color: "#0f172a", fontFamily: "'Outfit', sans-serif" }}>
+              {t("sidebar.conceptOverview")}
+            </h3>
+
+            {/* Progress ring */}
+            <div style={{ display: "flex", justifyContent: "center", marginBottom: "20px" }}>
+              <ProgressRing score={progressPct} size="sm" />
+            </div>
+
+            {/* Stats grid */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginBottom: "20px" }}>
+              {[
+                { id: "completed", value: completedCount, label: t("sidebar.completed"), color: "#22C55E" },
+                { id: "available", value: availableCount, label: t("sidebar.available"), color: "#3B82F6" },
+                { id: "locked", value: lockedCount, label: t("sidebar.locked"), color: "#94a3b8" },
+                { id: "estTime", value: `~${totalChunks * 5}m`, label: t("sidebar.estTime"), color: "#8B5CF6" },
+              ].map(({ id, value, label, color }) => (
+                <div key={id} style={{ textAlign: "center", padding: "10px 8px", borderRadius: "12px", border: "1px solid #f1f5f9" }}>
+                  <div style={{ fontSize: "20px", fontWeight: 800, color, fontFamily: "'Outfit', sans-serif" }}>{value}</div>
+                  <div style={{ fontSize: "11px", color: "#94a3b8", fontWeight: 500, marginTop: "2px" }}>{label}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Prerequisites */}
+            <div style={{ marginBottom: "16px", padding: "12px", borderRadius: "12px", background: "#f8fafc" }}>
+              <div style={{ fontSize: "11px", fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "6px" }}>
+                {t("sidebar.prerequisites")}
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "13px", color: "#334155" }}>
+                <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#22C55E", display: "inline-block" }} />
+                {t("sidebar.noPrerequisites")}
+              </div>
+            </div>
+
+            {/* Rewards */}
+            <div style={{ marginBottom: "16px", padding: "12px", borderRadius: "12px", background: "#f8fafc" }}>
+              <div style={{ fontSize: "11px", fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "6px" }}>
+                {t("sidebar.rewards")}
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "13px", color: "#334155" }}>
+                <span style={{ fontSize: "16px" }}>⭐</span>
+                {t("sidebar.xpOnMastery")}
+              </div>
+            </div>
+
+            {/* Study tip */}
+            <div style={{ padding: "14px", borderRadius: "12px", background: "linear-gradient(135deg, #fff7ed, #ffedd5)" }}>
+              <div style={{ fontSize: "13px", fontWeight: 700, color: "#92400e", marginBottom: "4px" }}>
+                💡 {t("sidebar.studyTip")}
+              </div>
+              <div style={{ fontSize: "12px", color: "#78350f", lineHeight: 1.5 }}>
+                {t("sidebar.studyTipText")}
+              </div>
+            </div>
+          </div>
+        </div>
+
       </div>
     );
   }
@@ -813,37 +737,27 @@ export default function LearningPage() {
     const allAnswered = chunkQuestions.every((_, i) => (chunkAnswers[i] || "").trim().length > 0);
 
     return (
-      <div style={{ maxWidth: "700px", margin: "0 auto", padding: "2rem 1.5rem 3rem" }}>
+      <div style={{ maxWidth: "700px", margin: "0 auto", padding: "32px 24px 48px" }}>
         {!evalResult && (
-          <div style={{ marginBottom: "1.25rem" }}>
+          <div style={{ marginBottom: "20px" }}>
             <button
               onClick={() => dispatch({ type: "RETURN_TO_PICKER" })}
-              style={{
-                background: "none", border: "none", cursor: "pointer",
-                color: "var(--color-text-muted)", fontSize: "0.875rem",
-                padding: "0.25rem 0", display: "flex", alignItems: "center", gap: "0.35rem",
-              }}
+              style={{ background: "none", border: "none", cursor: "pointer", color: "#94A3B8", fontSize: "14px", padding: "4px 0", display: "flex", alignItems: "center", gap: "4px" }}
             >
               ← {t("nav.backToSubsections", "Back to subsections")}
             </button>
           </div>
         )}
-        <h2 style={{ fontWeight: 800, fontSize: "1.3rem", color: "var(--color-text)", marginBottom: "0.25rem" }}>
+        <h2 style={{ fontWeight: 800, fontSize: "1.3rem", color: "var(--color-text)", marginBottom: "4px", marginTop: 0 }}>
           {t("chunkQuestions.title", "Knowledge Check")}
         </h2>
-        <p style={{ color: "var(--color-text-muted)", fontSize: "0.9rem", marginBottom: "1.5rem" }}>
+        <p style={{ color: "#94A3B8", fontSize: "0.9rem", marginBottom: "24px", marginTop: 0 }}>
           {t("chunkQuestions.instruction", "Answer in your own words — no need to be exact.")}
         </p>
 
         {!evalResult && chunkQuestions.map((q, i) => (
-          <div key={q.index} style={{
-            marginBottom: "1.25rem",
-            padding: "1rem 1.25rem",
-            borderRadius: "10px",
-            border: "1px solid var(--color-border)",
-            backgroundColor: "var(--color-surface)",
-          }}>
-            <p style={{ fontWeight: 700, fontSize: "1rem", color: "var(--color-text)", marginBottom: "0.5rem", lineHeight: 1.5 }}>
+          <div key={q.index} style={{ marginBottom: "20px", padding: "16px 20px", borderRadius: "10px", border: "1px solid #E2E8F0", background: "#FFFFFF" }}>
+            <p style={{ fontWeight: 700, fontSize: "16px", color: "var(--color-text)", marginBottom: "8px", marginTop: 0, lineHeight: 1.5 }}>
               Q{i + 1}. {q.text}
             </p>
             <textarea
@@ -851,53 +765,30 @@ export default function LearningPage() {
               onChange={(e) => setChunkAnswers((prev) => ({ ...prev, [i]: e.target.value }))}
               placeholder={t("chunkQuestions.placeholder", "Type your answer here...")}
               rows={3}
-              style={{
-                width: "100%",
-                borderRadius: "8px",
-                padding: "0.75rem",
-                fontSize: "0.95rem",
-                border: "2px solid var(--color-border)",
-                backgroundColor: "var(--color-background, var(--color-surface))",
-                color: "var(--color-text)",
-                fontFamily: "inherit",
-                boxSizing: "border-box",
-                resize: "vertical",
-              }}
+              style={{ width: "100%", borderRadius: "8px", padding: "12px", fontSize: "0.95rem", border: "2px solid #E2E8F0", background: "var(--color-surface)", color: "var(--color-text)", fontFamily: "inherit", boxSizing: "border-box", resize: "vertical" }}
             />
           </div>
         ))}
 
         {evalResult && (
-          <div style={{
-            padding: "1.25rem",
-            borderRadius: "12px",
-            backgroundColor: evalResult.passed ? "rgba(22,163,74,0.07)" : "rgba(239,68,68,0.07)",
-            border: `1.5px solid ${evalResult.passed ? "rgba(22,163,74,0.3)" : "rgba(239,68,68,0.3)"}`,
-            marginBottom: "1.5rem",
-          }}>
-            <div style={{ fontSize: "1.3rem", fontWeight: 800, color: evalResult.passed ? "#16a34a" : "#dc2626", marginBottom: "0.3rem" }}>
+          <div style={{ padding: "20px", borderRadius: "12px", marginBottom: "24px", border: "1.5px solid", borderColor: evalResult.passed ? "rgba(22,163,74,0.3)" : "rgba(239,68,68,0.3)", background: evalResult.passed ? "rgba(22,163,74,0.07)" : "rgba(239,68,68,0.07)" }}>
+            <div style={{ fontSize: "1.3rem", fontWeight: 800, marginBottom: "4px", color: evalResult.passed ? "#16A34A" : "#DC2626" }}>
               {evalResult.passed
                 ? `✓ ${t("chunkQuestions.passed", "Passed")} ${Math.round(evalResult.score * 100)}%`
                 : `✗ ${Math.round(evalResult.score * 100)}% — ${t("chunkQuestions.failed", "Not quite — let's review")}`}
             </div>
             {evalResult.passed && (
-              <p style={{ color: "var(--color-text-muted)", fontSize: "0.9rem", margin: 0 }}>
+              <p style={{ color: "#94A3B8", fontSize: "0.9rem", margin: 0 }}>
                 {evalResult.all_study_complete
                   ? t("chunkQuestions.completing", "Completing concept...")
                   : t("chunkQuestions.continuing", "Continuing...")}
               </p>
             )}
             {!evalResult.passed && evalResult.feedback?.length > 0 && (
-              <div style={{ marginTop: "1rem" }}>
+              <div style={{ marginTop: "16px" }}>
                 {evalResult.feedback.map((fb, i) => (
-                  <div key={i} style={{
-                    marginBottom: "0.75rem",
-                    padding: "0.6rem 0.9rem",
-                    borderRadius: "8px",
-                    border: `1px solid ${fb.correct ? "rgba(22,163,74,0.2)" : "rgba(239,68,68,0.2)"}`,
-                    backgroundColor: fb.correct ? "rgba(22,163,74,0.04)" : "rgba(239,68,68,0.04)",
-                  }}>
-                    <span style={{ fontWeight: 700, color: fb.correct ? "#16a34a" : "#dc2626", marginRight: "6px" }}>
+                  <div key={i} style={{ marginBottom: "12px", padding: "10px 14px", borderRadius: "8px", border: "1px solid", borderColor: fb.correct ? "rgba(22,163,74,0.2)" : "rgba(239,68,68,0.2)", background: fb.correct ? "rgba(22,163,74,0.04)" : "rgba(239,68,68,0.04)" }}>
+                    <span style={{ fontWeight: 700, marginRight: "6px", color: fb.correct ? "#16A34A" : "#DC2626" }}>
                       {fb.correct
                         ? `✓ ${t("chunkQuestions.correct", "Correct")}`
                         : `✗ ${t("chunkQuestions.incorrect", "Incorrect")}`}
@@ -910,7 +801,7 @@ export default function LearningPage() {
           </div>
         )}
 
-        <div style={{ display: "flex", gap: "0.75rem", justifyContent: "flex-end", flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: "12px", justifyContent: "flex-end", flexWrap: "wrap" }}>
           {!evalResult && (
             <button
               disabled={!allAnswered || loading}
@@ -921,17 +812,7 @@ export default function LearningPage() {
                 }));
                 submitChunkAnswers(currentChunkId, chunkQuestions, answersPayload, currentChunkMode);
               }}
-              style={{
-                padding: "0.75rem 2rem",
-                borderRadius: "10px",
-                border: "none",
-                backgroundColor: allAnswered && !loading ? "var(--color-primary)" : "var(--color-border)",
-                color: allAnswered && !loading ? "#fff" : "var(--color-text-muted)",
-                fontWeight: 700,
-                fontSize: "1rem",
-                cursor: allAnswered && !loading ? "pointer" : "not-allowed",
-                fontFamily: "inherit",
-              }}
+              style={{ padding: "12px 32px", borderRadius: "10px", border: "none", fontWeight: 700, fontSize: "16px", fontFamily: "inherit", background: allAnswered && !loading ? "#EA580C" : "#E2E8F0", color: allAnswered && !loading ? "#FFFFFF" : "#94A3B8", cursor: allAnswered && !loading ? "pointer" : "not-allowed" }}
             >
               {loading ? t("common.loading") : t("chunkQuestions.submit", "Submit Answers")}
             </button>
@@ -943,17 +824,7 @@ export default function LearningPage() {
                   setChunkAnswers({});
                   dispatch({ type: "RETURN_TO_PICKER" });
                 }}
-                style={{
-                  padding: "0.75rem 1.75rem",
-                  borderRadius: "10px",
-                  border: "1.5px solid var(--color-border)",
-                  backgroundColor: "transparent",
-                  color: "var(--color-text-muted)",
-                  fontWeight: 600,
-                  fontSize: "1rem",
-                  cursor: "pointer",
-                  fontFamily: "inherit",
-                }}
+                style={{ padding: "12px 28px", borderRadius: "10px", border: "1.5px solid #E2E8F0", background: "transparent", color: "#94A3B8", fontWeight: 600, fontSize: "16px", cursor: "pointer", fontFamily: "inherit" }}
               >
                 ← {t("nav.backToSubsections", "Back to subsection list")}
               </button>
@@ -962,17 +833,7 @@ export default function LearningPage() {
                   setChunkAnswers({});
                   startChunk(currentChunkId, currentChunkMode);
                 }}
-                style={{
-                  padding: "0.75rem 1.75rem",
-                  borderRadius: "10px",
-                  border: "none",
-                  backgroundColor: "var(--color-primary)",
-                  color: "#fff",
-                  fontWeight: 700,
-                  fontSize: "1rem",
-                  cursor: "pointer",
-                  fontFamily: "inherit",
-                }}
+                style={{ padding: "12px 28px", borderRadius: "10px", border: "none", background: "#F97316", color: "#FFFFFF", fontWeight: 700, fontSize: "16px", cursor: "pointer", fontFamily: "inherit" }}
               >
                 {t("chunkQuestions.restudy", "Re-study this section")}
               </button>
@@ -984,141 +845,41 @@ export default function LearningPage() {
   }
 
   // Determine max width based on phase
-  const isCardPhase = phase === "CARDS" || phase === "REMEDIATING" || phase === "REMEDIATING_2";
-  const isChatPhase = phase === "CHECKING" || phase === "RECHECKING" || phase === "RECHECKING_2";
+  const isCardPhase = phase === "CARDS";
+  const isChatPhase = phase === "CHUNK_QUESTIONS";
 
   return (
-    <div style={{
-      maxWidth: isCardPhase ? "1200px" : "800px",
-      margin: "0 auto",
-      padding: "1.5rem 1.5rem 3rem",
-    }}>
+    <div style={{ margin: "0 auto", padding: "24px 24px 48px", maxWidth: isCardPhase ? "100%" : "900px" }}>
       {/* ── Prerequisite Warning Modal ── */}
       {prereqWarning && (
-        <div style={{
-          position: "fixed",
-          inset: 0,
-          zIndex: 1000,
-          backgroundColor: "rgba(0, 0, 0, 0.55)",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          padding: "1rem",
-        }}>
-          <div style={{
-            backgroundColor: "var(--color-bg-card)",
-            borderRadius: "var(--radius-xl)",
-            padding: "2rem",
-            maxWidth: "480px",
-            width: "100%",
-            boxShadow: "0 20px 60px rgba(0,0,0,0.3)",
-            display: "flex",
-            flexDirection: "column",
-            gap: "1rem",
-          }}>
-            {/* Header */}
-            <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-              <AlertCircle size={28} color="var(--color-danger)" style={{ flexShrink: 0 }} />
-              <h2 style={{
-                margin: 0,
-                fontSize: "1.25rem",
-                fontWeight: 800,
-                color: "var(--color-text)",
-                lineHeight: 1.3,
-              }}>
+        <div style={{ position: "fixed", inset: 0, zIndex: 1000, backgroundColor: "rgba(0,0,0,0.55)", display: "flex", alignItems: "center", justifyContent: "center", padding: "16px" }}>
+          <div style={{ backgroundColor: "#FFFFFF", borderRadius: "16px", padding: "32px", maxWidth: "480px", width: "100%", boxShadow: "0 20px 60px rgba(0,0,0,0.3)", display: "flex", flexDirection: "column", gap: "16px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+              <AlertCircle size={28} color="#EF4444" style={{ flexShrink: 0 }} />
+              <h2 style={{ margin: 0, fontSize: "20px", fontWeight: 800, color: "#0F172A", lineHeight: 1.2 }}>
                 {t("learning.notReadyYet")}
               </h2>
             </div>
-
-            {/* Subtitle */}
-            <p style={{
-              margin: 0,
-              fontSize: "0.95rem",
-              color: "var(--color-text-muted)",
-              lineHeight: 1.6,
-            }}>
+            <p style={{ margin: 0, fontSize: "15px", color: "#64748B", lineHeight: 1.5 }}>
               {t("learning.helpsMasterFirst")}
             </p>
-
-            {/* Unmet prerequisites list */}
-            <ul style={{
-              margin: 0,
-              paddingLeft: "1.25rem",
-              display: "flex",
-              flexDirection: "column",
-              gap: "0.35rem",
-            }}>
+            <ul style={{ margin: 0, paddingLeft: "20px", display: "flex", flexDirection: "column", gap: "4px" }}>
               {prereqWarning.unmet.map((prereq) => (
-                <li
-                  key={prereq.concept_id}
-                  style={{
-                    fontSize: "0.95rem",
-                    color: "var(--color-text)",
-                    fontWeight: 600,
-                    lineHeight: 1.5,
-                  }}
-                >
+                <li key={prereq.concept_id} style={{ fontSize: "15px", color: "#0F172A", fontWeight: 600 }}>
                   {prereq.concept_title}
                 </li>
               ))}
             </ul>
-
-            {/* Action buttons */}
-            <div style={{
-              display: "flex",
-              gap: "0.75rem",
-              marginTop: "0.5rem",
-              flexWrap: "wrap",
-            }}>
+            <div style={{ display: "flex", gap: "12px", marginTop: "8px", flexWrap: "wrap" }}>
               <button
-                onClick={() => {
-                  setPrereqWarning(null);
-                  navigate("/map");
-                }}
-                style={{
-                  flex: "1 1 auto",
-                  padding: "0.65rem 1.25rem",
-                  borderRadius: "var(--radius-md)",
-                  border: "none",
-                  backgroundColor: "var(--color-primary)",
-                  color: "#fff",
-                  fontSize: "0.95rem",
-                  fontWeight: 700,
-                  cursor: "pointer",
-                  fontFamily: "inherit",
-                  transition: "opacity 0.15s",
-                }}
-                onMouseEnter={(e) => (e.currentTarget.style.opacity = "0.88")}
-                onMouseLeave={(e) => (e.currentTarget.style.opacity = "1")}
+                onClick={() => { setPrereqWarning(null); navigate("/map"); }}
+                style={{ flex: "1 1 auto", padding: "10px 20px", borderRadius: "8px", border: "none", backgroundColor: "#F97316", color: "#FFFFFF", fontSize: "15px", fontWeight: 700, cursor: "pointer" }}
               >
                 {t("learning.learnPrereqFirst")}
               </button>
               <button
-                onClick={() => {
-                  setPrereqWarning(null);
-                  startLesson(decodeURIComponent(conceptId), null, []);
-                }}
-                style={{
-                  flex: "1 1 auto",
-                  padding: "0.65rem 1.25rem",
-                  borderRadius: "var(--radius-md)",
-                  border: "1px solid var(--color-border)",
-                  backgroundColor: "transparent",
-                  color: "var(--color-text-muted)",
-                  fontSize: "0.95rem",
-                  fontWeight: 600,
-                  cursor: "pointer",
-                  fontFamily: "inherit",
-                  transition: "color 0.15s, border-color 0.15s",
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.color = "var(--color-text)";
-                  e.currentTarget.style.borderColor = "var(--color-text-muted)";
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.color = "var(--color-text-muted)";
-                  e.currentTarget.style.borderColor = "var(--color-border)";
-                }}
+                onClick={() => { setPrereqWarning(null); startLesson(decodeURIComponent(conceptId), null, []); }}
+                style={{ flex: "1 1 auto", padding: "10px 20px", borderRadius: "8px", border: "1px solid #E2E8F0", backgroundColor: "transparent", color: "#64748B", fontSize: "15px", fontWeight: 600, cursor: "pointer" }}
               >
                 {t("learning.startAnyway")}
               </button>
@@ -1129,40 +890,21 @@ export default function LearningPage() {
 
       {/* ── Exit bar (Socratic check phases only — cards phase uses "Back to subsections" instead) ── */}
       {isChatPhase && (
-        <div style={{
-          display: "flex", justifyContent: "flex-end", alignItems: "center",
-          marginBottom: "0.75rem", gap: "0.75rem",
-        }}>
+        <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", marginBottom: "12px", gap: "12px" }}>
           {showExitConfirm ? (
-            <div style={{
-              display: "flex", alignItems: "center", gap: "0.75rem",
-              padding: "0.5rem 1rem", borderRadius: "10px",
-              backgroundColor: "var(--color-surface)",
-              border: "2px solid var(--color-danger)",
-            }}>
-              <span style={{ fontSize: "0.9rem", color: "var(--color-text)", fontWeight: 600 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "12px", padding: "8px 16px", borderRadius: "10px", backgroundColor: "#FFFFFF", border: "2px solid #EF4444" }}>
+              <span style={{ fontSize: "14px", color: "#0F172A", fontWeight: 600 }}>
                 {t("learning.exitConfirm")}
               </span>
               <button
                 onClick={handleExitConfirm}
-                style={{
-                  padding: "0.35rem 0.9rem", borderRadius: "8px", border: "none",
-                  backgroundColor: "var(--color-danger)", color: "#fff",
-                  fontSize: "0.85rem", fontWeight: 700,
-                  cursor: "pointer", fontFamily: "inherit",
-                }}
+                style={{ padding: "6px 14px", borderRadius: "8px", border: "none", backgroundColor: "#EF4444", color: "#FFFFFF", fontSize: "13px", fontWeight: 700, cursor: "pointer" }}
               >
                 {t("learning.exitYes")}
               </button>
               <button
                 onClick={() => setShowExitConfirm(false)}
-                style={{
-                  padding: "0.35rem 0.9rem", borderRadius: "8px",
-                  border: "1px solid var(--color-border)",
-                  backgroundColor: "transparent", color: "var(--color-text-muted)",
-                  fontSize: "0.85rem", fontWeight: 600,
-                  cursor: "pointer", fontFamily: "inherit",
-                }}
+                style={{ padding: "6px 14px", borderRadius: "8px", border: "1px solid #E2E8F0", backgroundColor: "transparent", color: "#64748B", fontSize: "13px", fontWeight: 600, cursor: "pointer" }}
               >
                 {t("learning.exitNo")}
               </button>
@@ -1170,14 +912,7 @@ export default function LearningPage() {
           ) : (
             <button
               onClick={() => setShowExitConfirm(true)}
-              style={{
-                display: "flex", alignItems: "center", gap: "0.35rem",
-                padding: "0.4rem 0.9rem", borderRadius: "8px",
-                border: "1px solid var(--color-border)",
-                backgroundColor: "transparent", color: "var(--color-text-muted)",
-                fontSize: "0.85rem", fontWeight: 600,
-                cursor: "pointer", fontFamily: "inherit", transition: "all 0.15s",
-              }}
+              style={{ display: "flex", alignItems: "center", gap: "4px", padding: "6px 14px", borderRadius: "8px", border: "1px solid #E2E8F0", backgroundColor: "transparent", color: "#64748B", fontSize: "13px", fontWeight: 600, cursor: "pointer" }}
             >
               <LogOut size={14} />
               {t("learning.exitLesson")}
@@ -1190,53 +925,65 @@ export default function LearningPage() {
 
       {/* Primary learning phases */}
       {phase === "CARDS" && (
-        <div style={{ display: "flex", gap: "0.75rem", alignItems: "flex-start" }}>
-          <VerticalProgressRail total={cards?.length ?? 0} current={currentCardIndex} cardStates={{}} />
+        <div style={{ display: "flex", gap: "12px", alignItems: "flex-start" }}>
+          <VerticalProgressRail total={cards?.length ?? 0} current={currentCardIndex} cardStates={sharedCardStates} />
           <div style={{ flex: 1, minWidth: 0 }}>
             {chunkList?.length > 0 && (
-              <div style={{ marginBottom: "0.75rem" }}>
+              <div style={{ marginBottom: "12px" }}>
                 <button
-                  onClick={() => dispatch({ type: "RETURN_TO_PICKER" })}
-                  style={{
-                    background: "none", border: "none", cursor: "pointer",
-                    color: "var(--color-primary)", fontSize: "0.875rem",
-                    padding: "0.25rem 0.5rem", display: "flex", alignItems: "center", gap: "0.25rem",
-                  }}
+                  onClick={() => setShowBackConfirm(true)}
+                  style={{ background: "none", border: "none", cursor: "pointer", color: "#F97316", fontSize: "14px", padding: "4px 8px", display: "flex", alignItems: "center", gap: "4px" }}
                 >
                   ← {t("nav.backToSubsections", "Back to subsections")}
                 </button>
               </div>
             )}
-            <CardLearningView />
+            <CardLearningView onCardStatesChange={setSharedCardStates} />
           </div>
         </div>
       )}
       {phase === "COMPLETED" && <CompletionView />}
 
-      {/* Remediation phases — cards with remediation banner */}
-      {(phase === "REMEDIATING" || phase === "REMEDIATING_2") && (
-        <div style={{ display: "flex", gap: "0.75rem", alignItems: "flex-start" }}>
-          <VerticalProgressRail total={cards?.length ?? 0} current={currentCardIndex} cardStates={{}} />
-          <div style={{ flex: 1, minWidth: 0 }}>
-            {chunkList?.length > 0 && (
-              <div style={{ marginBottom: "0.75rem" }}>
-                <button
-                  onClick={() => dispatch({ type: "RETURN_TO_PICKER" })}
-                  style={{
-                    background: "none", border: "none", cursor: "pointer",
-                    color: "var(--color-primary)", fontSize: "0.875rem",
-                    padding: "0.25rem 0.5rem", display: "flex", alignItems: "center", gap: "0.25rem",
-                  }}
-                >
-                  ← {t("nav.backToSubsections", "Back to subsections")}
-                </button>
-              </div>
-            )}
-            <CardLearningView remediationMode={true} />
+
+      {/* Back to subsections confirmation modal */}
+      {showBackConfirm && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="back-confirm-title"
+          style={{ position: "fixed", inset: 0, zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", backgroundColor: "rgba(0,0,0,0.5)" }}
+          onClick={() => setShowBackConfirm(false)}
+        >
+          <div
+            style={{ backgroundColor: "#FFFFFF", border: "1px solid #E2E8F0", borderRadius: "16px", padding: "24px", maxWidth: "400px", width: "90%", boxShadow: "0 8px 32px rgba(0,0,0,0.15)" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "12px" }}>
+              <AlertCircle size={22} color="#F59E0B" />
+              <h2 id="back-confirm-title" style={{ margin: 0, fontSize: "16px", fontWeight: 700, color: "#0F172A" }}>
+                {t("confirm.leaveSection")}
+              </h2>
+            </div>
+            <p style={{ margin: "0 0 20px", fontSize: "14px", color: "#64748B", lineHeight: 1.5 }}>
+              {t("confirm.leaveSectionMessage")}
+            </p>
+            <div style={{ display: "flex", gap: "10px", justifyContent: "flex-end" }}>
+              <button
+                onClick={() => setShowBackConfirm(false)}
+                style={{ padding: "8px 16px", borderRadius: "8px", border: "1px solid #E2E8F0", backgroundColor: "transparent", color: "#64748B", fontSize: "14px", fontWeight: 600, cursor: "pointer" }}
+              >
+                {t("confirm.cancel")}
+              </button>
+              <button
+                onClick={() => { dispatch({ type: "RETURN_TO_PICKER" }); setShowBackConfirm(false); }}
+                style={{ padding: "8px 16px", borderRadius: "8px", border: "none", backgroundColor: "#EF4444", color: "#FFFFFF", fontSize: "14px", fontWeight: 700, cursor: "pointer" }}
+              >
+                {t("confirm.confirm")}
+              </button>
+            </div>
           </div>
         </div>
       )}
-
 
     </div>
   );

@@ -1,31 +1,36 @@
 import { useAdaptiveStore } from '../../store/adaptiveStore';
+import { useTranslation } from 'react-i18next';
+import { cn } from '../ui/lib/utils';
 
 export default function StreakMeter({ compact = false }) {
-  const streak = useAdaptiveStore((s) => s.streak);
-  if (streak < 1) return null;
+  const dailyStreak = useAdaptiveStore((s) => s.dailyStreak);
+  const streakMultiplier = useAdaptiveStore((s) => s.streakMultiplier);
+  const { t } = useTranslation();
 
-  const onFire = streak >= 3;
+  if (dailyStreak < 1) return null;
+
+  const onFire = dailyStreak >= 3;
 
   return (
     <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: '0.3rem',
-        padding: compact ? '0.2rem 0.5rem' : '0.3rem 0.7rem',
-        borderRadius: '9999px',
-        background: onFire
-          ? 'linear-gradient(135deg, #f97316, #ef4444)'
-          : 'color-mix(in srgb, var(--color-primary) 15%, transparent)',
-        border: `1.5px solid ${onFire ? '#f97316' : 'var(--color-border)'}`,
-        animation: onFire ? 'streak-fire 1.5s ease-in-out infinite' : 'none',
-        fontWeight: 700,
-        fontSize: compact ? '0.75rem' : '0.85rem',
-        color: onFire ? '#fff' : 'var(--color-text)',
-        whiteSpace: 'nowrap',
-      }}
+      className={cn(
+        "flex items-center gap-1.5 rounded-full font-bold whitespace-nowrap",
+        compact ? "px-2 py-0.5 text-xs" : "px-3 py-1 text-sm",
+        onFire
+          ? "bg-gradient-to-r from-orange-500 to-red-500 text-white border-[1.5px] border-orange-500 animate-[pulse_1.5s_ease-in-out_infinite]"
+          : "bg-[color-mix(in_srgb,var(--color-primary)_15%,transparent)] text-[var(--color-text)] border-[1.5px] border-[var(--color-border)]"
+      )}
+      title={t('streak.daily', { count: dailyStreak })}
     >
-      {onFire ? '\uD83D\uDD25' : '\u2713'} {streak}
+      <span className={cn(onFire && "animate-[pulse_1.5s_ease-in-out_infinite]")}>
+        {onFire ? '\uD83D\uDD25' : '\u2713'}
+      </span>
+      {' '}{dailyStreak}{t('streak.days')}
+      {streakMultiplier > 1.0 && (
+        <span className="ml-1 text-[0.7rem] opacity-90">
+          {streakMultiplier}x
+        </span>
+      )}
     </div>
   );
 }

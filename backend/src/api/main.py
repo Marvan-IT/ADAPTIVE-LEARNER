@@ -1,5 +1,5 @@
 """
-ADA REST API — FastAPI application.
+Adaptive Learner REST API — FastAPI application.
 Week 1: RAG + Graph integrated endpoints.
 Week 2: Pedagogical Loop — teaching sessions with Socratic checks.
 """
@@ -36,7 +36,7 @@ from api.chunk_knowledge_service import ChunkKnowledgeService
 from api.teaching_router import router as teaching_router
 from api.teaching_service import TeachingService
 import api.teaching_router as teaching_router_module
-from adaptive.adaptive_router import router as adaptive_router, cards_router as adaptive_cards_router
+from adaptive.adaptive_router import router as adaptive_router
 import adaptive.adaptive_router as adaptive_router_module
 from api.admin_router import router as admin_router
 from auth.router import router as auth_router
@@ -205,7 +205,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="ADA - Adaptive Math Learning API",
+    title="Adaptive Learner - Math Learning API",
     description="Hybrid RAG + Graph engine for adaptive math tutoring",
     version="1.0.0",
     lifespan=lifespan,
@@ -214,14 +214,6 @@ app = FastAPI(
 # Wire slowapi into the app
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[o.strip() for o in os.getenv("FRONTEND_URL", "http://localhost:5173").split(",") if o.strip()],
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "X-API-Key", "Authorization"],
-)
-
 
 # ── API-key authentication middleware ──────────────────────────────
 @app.middleware("http")
@@ -265,13 +257,25 @@ async def api_key_middleware(request: Request, call_next):
         return JSONResponse({"detail": "Unauthorized"}, status_code=401)
     return await call_next(request)
 
+# CORSMiddleware must be added AFTER @app.middleware("http") so it becomes
+# the outermost middleware (Starlette LIFO order). If placed before, the
+# BaseHTTPMiddleware wrapper around api_key_middleware can interfere with
+# CORS preflight responses, breaking PATCH/PUT/DELETE for cross-origin requests.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[o.strip() for o in os.getenv("FRONTEND_URL", "http://localhost:5173").split(",") if o.strip()],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+    allow_headers=["Content-Type", "X-API-Key", "Authorization"],
+    allow_credentials=True,
+)
+
 
 # ── Week 2: Teaching router ──────────────────────────────────────
 app.include_router(teaching_router)
 
 # ── Week 3: Adaptive Learning Engine router ───────────────────────
 app.include_router(adaptive_router)
-app.include_router(adaptive_cards_router)
+# adaptive_cards_router removed — teaching_router owns /api/v2/sessions/{id}/complete-card
 
 # ── Admin Console router ──────────────────────────────────────────
 app.include_router(admin_router)
@@ -441,10 +445,27 @@ def _require_book(book_slug: str) -> None:
         raise HTTPException(status_code=404, detail=f"Book '{book_slug}' not found or not yet processed")
 
 
-@app.get("/api/v1/graph/info", response_model=GraphInfoResponse)
-async def graph_info(book_slug: str = "prealgebra"):
-    """Dependency graph statistics."""
+async def _require_visible_book(book_slug: str, db: AsyncSession) -> None:
+    """Raise 404 if the book or its subject is hidden from students."""
+    from db.models import Book as BookModel, Subject
     _require_book(book_slug)
+    book = (await db.execute(
+        select(BookModel).where(BookModel.book_slug == book_slug)
+    )).scalar_one_or_none()
+    if not book or book.is_hidden:
+        raise HTTPException(status_code=404, detail=f"Book '{book_slug}' not found")
+    if book.subject:
+        subj = (await db.execute(
+            select(Subject).where(Subject.slug == book.subject)
+        )).scalar_one_or_none()
+        if subj and subj.is_hidden:
+            raise HTTPException(status_code=404, detail=f"Book '{book_slug}' not found")
+
+
+@app.get("/api/v1/graph/info", response_model=GraphInfoResponse)
+async def graph_info(book_slug: str = "prealgebra", db: AsyncSession = Depends(get_db)):
+    """Dependency graph statistics."""
+    await _require_visible_book(book_slug, db)
     info = _chunk_knowledge_svc.get_graph_info(book_slug)
     return GraphInfoResponse(
         num_nodes=info["num_nodes"],
@@ -456,18 +477,18 @@ async def graph_info(book_slug: str = "prealgebra"):
 
 
 @app.get("/api/v1/graph/nodes")
-async def graph_nodes(book_slug: str = "prealgebra"):
+async def graph_nodes(book_slug: str = "prealgebra", db: AsyncSession = Depends(get_db)):
     """List all concept nodes with graph properties."""
-    _require_book(book_slug)
+    await _require_visible_book(book_slug, db)
     nodes = _chunk_knowledge_svc.get_all_nodes(book_slug)
     return {"nodes": nodes, "count": len(nodes)}
 
 
 @app.post("/api/v1/graph/learning-path", response_model=LearningPathResponse)
 @limiter.limit("60/minute")
-async def learning_path(request: Request, req: LearningPathRequest, book_slug: str = "prealgebra"):
+async def learning_path(request: Request, req: LearningPathRequest, book_slug: str = "prealgebra", db: AsyncSession = Depends(get_db)):
     """Compute the optimal learning path to reach a target concept."""
-    _require_book(book_slug)
+    await _require_visible_book(book_slug, db)
     result = _chunk_knowledge_svc.get_learning_path(book_slug, req.target_concept_id, req.mastered_concepts)
     return LearningPathResponse(
         target=result["target"],
@@ -477,29 +498,39 @@ async def learning_path(request: Request, req: LearningPathRequest, book_slug: s
 
 
 @app.get("/api/v1/graph/full")
-async def graph_full(book_slug: str = "prealgebra"):
+async def graph_full(book_slug: str = "prealgebra", db: AsyncSession = Depends(get_db)):
     """Full graph with nodes and edges for frontend visualization."""
-    _require_book(book_slug)
+    await _require_visible_book(book_slug, db)
     nodes = _chunk_knowledge_svc.get_all_nodes(book_slug)
     edges = _chunk_knowledge_svc.get_all_edges(book_slug)
     return {"nodes": nodes, "edges": edges}
 
 
 @app.get("/api/v1/graph/topological-order")
-async def topological_order(book_slug: str = "prealgebra"):
+async def topological_order(book_slug: str = "prealgebra", db: AsyncSession = Depends(get_db)):
     """Return all concepts in a valid learning sequence."""
-    _require_book(book_slug)
+    await _require_visible_book(book_slug, db)
     order = _chunk_knowledge_svc.get_topological_order(book_slug)
     return {"order": order, "count": len(order)}
 
 
 @app.get("/api/v1/books")
 async def list_books_v1(db: AsyncSession = Depends(get_db)):
-    from db.models import Book as BookModel
-    rows = (await db.execute(
+    from db.models import Book as BookModel, Subject
+    # Exclude books whose subject is hidden
+    hidden_subj_rows = (await db.execute(
+        select(Subject.slug).where(Subject.is_hidden == True)
+    )).scalars().all()
+    hidden_subjects = set(hidden_subj_rows)
+
+    query = (
         select(BookModel)
-        .where(BookModel.status == "PUBLISHED")
-        .order_by(BookModel.subject, BookModel.title)
+        .where(BookModel.status == "PUBLISHED", BookModel.is_hidden == False)
+    )
+    if hidden_subjects:
+        query = query.where(BookModel.subject.notin_(hidden_subjects))
+    rows = (await db.execute(
+        query.order_by(BookModel.subject, BookModel.title)
     )).scalars().all()
     return [
         {"slug": b.book_slug, "title": b.title, "subject": b.subject, "processed": True}

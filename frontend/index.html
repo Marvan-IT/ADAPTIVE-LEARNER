@@ -4,7 +4,20 @@
     <meta charset="UTF-8" />
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧠</text></svg>" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>ADA - Adaptive Math Tutor</title>
+    <title>Adaptive Learner</title>
+    <script>
+      (function() {
+        var theme = localStorage.getItem("ada_theme");
+        if (theme !== "light" && theme !== "dark") {
+          var old = localStorage.getItem("ada_style");
+          theme = (old === "dark" || old === "light") ? old : "dark";
+        }
+        var style = localStorage.getItem("ada_teaching_style");
+        if (!style || !/^(default|pirate|astronaut|gamer)$/.test(style)) style = "default";
+        var dt = style !== "default" ? style : theme;
+        document.documentElement.setAttribute("data-theme", dt);
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

@@ -25,8 +25,13 @@ from config import (
     XP_MASTERY,
     XP_MASTERY_BONUS,
     XP_CONSOLATION,
-    MASTERY_THRESHOLD,
 )
+from api.teaching_schemas import StudentAnalyticsResponse, MasteryEvent
+
+# MASTERY_THRESHOLD was removed from config.py as part of the chunk-exam-gate
+# migration (it is now deprecated). The business value 70 is kept here as a
+# local constant so the mastery-determination tests remain meaningful.
+MASTERY_THRESHOLD = 70
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -298,3 +303,106 @@ class TestLearningProfileConstraints:
                 assert 1.0 <= score <= 3.0, (
                     f"compute_numeric_state_score({speed!r}, {comp!r}) = {score}"
                 )
+
+
+# ── Tests: StudentAnalyticsResponse — total_study_time_sec ───────────────────
+
+def _make_analytics_response(**overrides) -> dict:
+    """Return a minimal valid StudentAnalyticsResponse payload."""
+    base = {
+        "student_id": "student-1",
+        "display_name": "Alice",
+        "xp": 0,
+        "streak": 0,
+        "total_concepts_mastered": 0,
+        "total_concepts_attempted": 0,
+        "mastery_rate": 0.0,
+        "mastery_timeline": [],
+        "avg_check_score": None,
+        "total_socratic_sessions": 0,
+        "avg_wrong_attempts_per_card": 0.0,
+        "avg_hints_per_card": 0.0,
+        "avg_time_on_card_sec": 0.0,
+        "total_study_time_sec": 0.0,
+        "reviews_due_now": 0,
+        "reviews_upcoming_7d": 0,
+        "hardest_concept_id": None,
+        "hardest_concept_wrong_attempts": 0,
+    }
+    base.update(overrides)
+    return base
+
+
+class TestStudentAnalyticsResponseTotalStudyTime:
+    """
+    Verify total_study_time_sec field on StudentAnalyticsResponse.
+
+    Business criterion: the analytics endpoint must expose cumulative study
+    time so students and admins can see total time-on-task across all card
+    interactions. When no interactions exist the value must be 0.0.
+    """
+
+    def test_field_present_in_schema(self):
+        """StudentAnalyticsResponse schema declares total_study_time_sec as a float field."""
+        fields = StudentAnalyticsResponse.model_fields
+        assert "total_study_time_sec" in fields
+
+    def test_field_type_is_float(self):
+        """total_study_time_sec annotation is float (not int, str, or optional)."""
+        import inspect
+        annotation = StudentAnalyticsResponse.model_fields["total_study_time_sec"].annotation
+        assert annotation is float
+
+    def test_zero_value_accepted_when_no_interactions_exist(self):
+        """
+        Business: when a student has no card interactions the endpoint returns
+        total_study_time_sec = 0.0 (SQL COALESCE ensures this).
+        Schema must accept 0.0 without raising a validation error.
+        """
+        response = StudentAnalyticsResponse(**_make_analytics_response(total_study_time_sec=0.0))
+        assert response.total_study_time_sec == 0.0
+
+    def test_positive_float_value_accepted(self):
+        """A realistic study time (e.g. 4 530.5 seconds ~ 75 min) is accepted."""
+        response = StudentAnalyticsResponse(**_make_analytics_response(total_study_time_sec=4530.5))
+        assert response.total_study_time_sec == 4530.5
+
+    def test_large_float_value_accepted(self):
+        """Very large study times (many hours across many sessions) are valid floats."""
+        response = StudentAnalyticsResponse(**_make_analytics_response(total_study_time_sec=360000.0))
+        assert response.total_study_time_sec == 360000.0
+
+    def test_integer_coerced_to_float(self):
+        """
+        Pydantic v2 coerces int → float for float-annotated fields.
+        The router rounds to one decimal place but the schema must accept
+        both int and float inputs without error.
+        """
+        response = StudentAnalyticsResponse(**_make_analytics_response(total_study_time_sec=300))
+        assert response.total_study_time_sec == 300.0
+        assert isinstance(response.total_study_time_sec, float)
+
+    def test_missing_field_raises_validation_error(self):
+        """
+        total_study_time_sec is a required field — omitting it must raise
+        a Pydantic ValidationError (no silent default of 0).
+        """
+        payload = _make_analytics_response()
+        del payload["total_study_time_sec"]
+        with pytest.raises(ValidationError) as exc_info:
+            StudentAnalyticsResponse(**payload)
+        assert "total_study_time_sec" in str(exc_info.value)
+
+    def test_none_value_raises_validation_error(self):
+        """
+        total_study_time_sec is not Optional — passing None must fail validation.
+        """
+        with pytest.raises(ValidationError):
+            StudentAnalyticsResponse(**_make_analytics_response(total_study_time_sec=None))
+
+    def test_serialization_includes_field(self):
+        """model_dump() output contains total_study_time_sec with the correct value."""
+        response = StudentAnalyticsResponse(**_make_analytics_response(total_study_time_sec=123.4))
+        dumped = response.model_dump()
+        assert "total_study_time_sec" in dumped
+        assert dumped["total_study_time_sec"] == 123.4

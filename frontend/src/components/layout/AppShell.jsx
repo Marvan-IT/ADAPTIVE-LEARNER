@@ -3,16 +3,17 @@ import { Outlet, Navigate, NavLink, useNavigate, useLocation } from "react-route
 import { AnimatePresence, motion } from "framer-motion";
 import { useTranslation } from "react-i18next";
 import { useStudent } from "../../context/StudentContext";
+import { useAuth } from "../../context/AuthContext";
 import { useTheme } from "../../context/ThemeContext";
-import StyleSwitcher from "./StyleSwitcher";
 import LanguageSelector from "../LanguageSelector";
 import {
-  Brain, Map, BookOpen, LogOut,
+  Brain, Map, BookOpen, LogOut, Trophy,
   ChevronLeft, ChevronRight, Sun, Moon,
 } from "lucide-react";
 import { useAdaptiveStore } from "../../store/adaptiveStore";
 import LevelBadge from "../game/LevelBadge";
 import StreakMeter from "../game/StreakMeter";
+import StreakMultiplierBadge from "../game/StreakMultiplierBadge";
 import AdaptiveModeIndicator from "../game/AdaptiveModeIndicator";
 
 /* ── Sidebar nav link ─────────────────── */
@@ -102,13 +103,23 @@ function XPBar({ xp, level }) {
 /* ── Main AppShell ─────────────────────── */
 export default function AppShell() {
   const { t } = useTranslation();
-  const { student, logout, loading } = useStudent();
+  const { student, logout, loading: studentLoading } = useStudent();
+  const { user, loading: authLoading } = useAuth();
   const { toggleTheme, isDark } = useTheme();
   const navigate = useNavigate();
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(false);
+  // Auto-collapse sidebar when entering a learning session
+  useEffect(() => {
+    if (location.pathname.startsWith("/learn/")) {
+      setCollapsed(true);
+    }
+  }, [location.pathname]);
+
   const xp    = useAdaptiveStore((s) => s.xp);
   const level = useAdaptiveStore((s) => s.level);
+
+  const loading = studentLoading || authLoading || (!!user?.student_id && !student);
 
   if (loading) {
     return (
@@ -127,7 +138,7 @@ export default function AppShell() {
     );
   }
 
-  if (!student) return <Navigate to="/" />;
+  if (!student) return <Navigate to="/login" replace />;
 
   const initial = (student.display_name || "S")[0].toUpperCase();
 
@@ -194,6 +205,7 @@ export default function AppShell() {
         <nav style={{ display: "flex", flexDirection: "column", gap: "var(--sp-1)", marginBottom: "var(--sp-6)", flexShrink: 0 }}>
           <SidebarLink to="/map"     icon={Map}      label={t("nav.conceptMap")}      collapsed={collapsed} />
           <SidebarLink to="/history" icon={BookOpen}  label={t("nav.learningHistory") || "Learning History"} collapsed={collapsed} />
+          <SidebarLink to="/leaderboard" icon={Trophy} label={t("leaderboard.title", "Leaderboard")} collapsed={collapsed} />
         </nav>
 
         {/* Divider */}
@@ -231,37 +243,13 @@ export default function AppShell() {
             paddingLeft: collapsed ? 0 : "var(--sp-1)",
           }}>
             <StreakMeter compact />
+            <StreakMultiplierBadge />
             {!collapsed && <AdaptiveModeIndicator compact />}
           </div>
         </div>
 
         {/* Divider */}
         <div style={{ height: "1px", background: "var(--color-sidebar-border)", marginBottom: "var(--sp-4)", flexShrink: 0 }} />
-
-        {/* Zone 4 — Style switcher (themes) */}
-        <AnimatePresence>
-          {!collapsed && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.15 }}
-              style={{ marginBottom: "var(--sp-4)", paddingLeft: "var(--sp-1)", flexShrink: 0 }}
-            >
-              <div style={{
-                fontSize: "0.65rem",
-                fontWeight: 700,
-                color: "var(--color-sidebar-text)",
-                textTransform: "uppercase",
-                letterSpacing: "0.07em",
-                marginBottom: "var(--sp-2)",
-              }}>
-                {t("customize.style") || "Style"}
-              </div>
-              <StyleSwitcher />
-            </motion.div>
-          )}
-        </AnimatePresence>
 
         {/* Bottom zone — pinned */}
         <div style={{
@@ -335,7 +323,7 @@ export default function AppShell() {
                   transition={{ duration: 0.18 }}
                   style={{ overflow: "hidden", whiteSpace: "nowrap" }}
                 >
-                  {isDark ? "Light mode" : "Dark mode"}
+                  {isDark ? t("nav.lightMode", "Light mode") : t("nav.darkMode", "Dark mode")}
                 </motion.span>
               )}
             </AnimatePresence>
@@ -368,7 +356,7 @@ export default function AppShell() {
 
           {/* Sign out */}
           <button
-            onClick={() => { logout(); navigate("/"); }}
+            onClick={async () => { await logout(); navigate("/login"); }}
             className="sidebar-item"
             style={{ color: "var(--color-danger)", justifyContent: collapsed ? "center" : "flex-start" }}
           >
@@ -382,7 +370,7 @@ export default function AppShell() {
                   transition={{ duration: 0.18 }}
                   style={{ overflow: "hidden", whiteSpace: "nowrap" }}
                 >
-                  {t("nav.switch")}
+                  {t("nav.logout", "Logout")}
                 </motion.span>
               )}
             </AnimatePresence>

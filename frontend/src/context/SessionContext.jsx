@@ -25,6 +25,7 @@ const initialState = {
   phase: "IDLE",
   session: null,
   conceptTitle: "",
+  bookTitle: "",
   // Card-based learning
   cards: [],
   currentCardIndex: 0,
@@ -97,6 +98,7 @@ function sessionReducer(state, action) {
         ...state,
         cards: action.payload.cards,
         conceptTitle: action.payload.concept_title,
+        bookTitle: action.payload.book_title || state.bookTitle,
         totalQuestions: action.payload.total_questions,
         phase: "CARDS",
         loading: false,
@@ -390,6 +392,8 @@ function sessionReducer(state, action) {
         })),
         cards: [],
         currentCardIndex: 0,
+        maxReachedIndex: 0,
+        cardAnswers: {},
       };
 
     case "CHUNK_ITEM_COMPLETE":
@@ -429,15 +433,15 @@ export function SessionProvider({ children }) {
   const { style } = useTheme();
 
   const friendlyError = (err) => {
-    console.error("[ADA] API error:", err.code, err.response?.status, err.message);
+    console.error("[AL] API error:", err.code, err.response?.status, err.message);
     if (err.code === "ECONNABORTED" || err.message?.includes("timeout")) {
       return i18n.t("error.timeout");
     }
     if (err.response?.status === 401) {
-      return "Authentication failed — check API key config.";
+      return i18n.t("error.authFailed", "Authentication failed — check API key config.");
     }
     if (err.response?.status === 503) {
-      return err.response?.data?.detail || "Service not ready — please wait a moment and try again.";
+      return err.response?.data?.detail || i18n.t("error.serviceNotReady", "Service not ready — please wait a moment and try again.");
     }
     if (err.response?.status >= 400) {
       const detail = err.response?.data?.detail;
@@ -462,7 +466,7 @@ export function SessionProvider({ children }) {
 
         // Check for chunk list — if the concept has chunks, use chunk flow
         const chunkListRes = await getChunkList(sessionRes.data.id);
-        const chunkListData = chunkListRes.data;
+        const chunkListData = chunkListRes?.data ?? {};
         if (chunkListData.chunks && chunkListData.chunks.length > 0) {
           // Chunk path: show subsection picker — student selects which chunk to start
           dispatch({ type: "CHUNK_LIST_LOADED", payload: chunkListData });
@@ -568,7 +572,21 @@ export function SessionProvider({ children }) {
 
       // CASE D: mid-batch — record interaction and advance index
       try {
-        await recordCardInteraction(state.session.id, signals);
+        const res = await recordCardInteraction(state.session.id, signals);
+        // Award XP from backend gamification engine (replaces hardcoded awardXP(10))
+        const xpData = res?.data?.xp_awarded;
+        if (xpData?.final_xp) {
+          useAdaptiveStore.getState().awardXP(xpData.final_xp);
+        }
+        // Update daily streak if returned
+        if (xpData?.streak_info) {
+          useAdaptiveStore.getState().setDailyStreak(xpData.streak_info);
+        }
+        // Handle new badges
+        const newBadges = res?.data?.new_badges;
+        if (newBadges?.length) {
+          newBadges.forEach((b) => useAdaptiveStore.getState().addBadge(b));
+        }
       } catch (err) {
         console.error("[card] recordCardInteraction failed:", err);
       }
@@ -633,7 +651,15 @@ export function SessionProvider({ children }) {
     });
     try {
       if (signals) {
-        await recordCardInteraction(state.session.id, signals).catch((err) => console.error("[SessionContext] card interaction failed:", err));
+        const res = await recordCardInteraction(state.session.id, signals).catch((err) => console.error("[SessionContext] card interaction failed:", err));
+          // Award XP from backend response
+          const xpData = res?.data?.xp_awarded;
+          if (xpData?.final_xp) {
+            useAdaptiveStore.getState().awardXP(xpData.final_xp);
+          }
+          if (res?.data?.new_badges?.length) {
+            res.data.new_badges.forEach((b) => useAdaptiveStore.getState().addBadge(b));
+          }
       }
       await completeCards(state.session.id);
     } catch (err) {
@@ -667,6 +693,7 @@ export function SessionProvider({ children }) {
           }
         } catch (err) {
           console.error("[finishCards] auto-complete chunk failed:", err);
+          dispatch({ type: "ERROR", payload: i18n.t("error.chunkCompleteFailed", "Failed to save your progress. Please try again.") });
         }
       }
       dispatch({ type: "RETURN_TO_PICKER" });
@@ -680,6 +707,7 @@ export function SessionProvider({ children }) {
       dispatch({ type: "CHUNK_CARDS_LOADED", payload: response });
     } catch (err) {
       console.error("Failed to load chunk cards:", err);
+      dispatch({ type: "ERROR", payload: friendlyError(err) });
     }
   }, [state.session?.id]);
 
@@ -749,6 +777,29 @@ export function SessionProvider({ children }) {
     }
   }, [state.session?.id]);
 
+  const reloadCurrentChunk = useCallback(async () => {
+    if (!state.session?.id || !state.currentChunkId || state.phase !== "CARDS") return;
+    dispatch({ type: "CHUNK_LOADING" });
+    try {
+      const res = await generateChunkCards(state.session.id, state.currentChunkId);
+      if (res?.cards?.length) {
+        dispatch({
+          type: "CHUNK_CARDS_LOADED_NEW",
+          payload: {
+            cards: res.cards,
+            questions: res.questions ?? [],
+            chunk_index_after: res.chunk_index,
+            chunk_id: state.currentChunkId,
+          },
+        });
+      } else {
+        dispatch({ type: "RETURN_TO_PICKER" });
+      }
+    } catch (err) {
+      dispatch({ type: "ERROR", payload: friendlyError(err) });
+    }
+  }, [state.session?.id, state.currentChunkId, state.phase]);
+
   const reset = useCallback(() => {
     dispatch({ type: "RESET" });
   }, []);
@@ -771,6 +822,7 @@ export function SessionProvider({ children }) {
         completeChunkAction,
         completeChunkItem,
         submitChunkAnswers,
+        reloadCurrentChunk,
         currentChunkIndex: state.currentChunkIndex,
         totalChunks: state.totalChunks,
         // Chunk navigation

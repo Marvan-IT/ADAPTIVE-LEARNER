@@ -4,6 +4,8 @@ import { ThemeProvider } from "./context/ThemeContext";
 import { AuthProvider } from "./context/AuthContext";
 import { StudentProvider } from "./context/StudentContext";
 import { SessionProvider } from "./context/SessionContext";
+import { ToastProvider, Toaster } from "./components/ui/Toast";
+import { DialogProvider } from "./context/DialogProvider";
 import { useAuth } from "./context/AuthContext";
 import ProtectedRoute from "./components/ProtectedRoute";
 import LoginPage from "./pages/LoginPage";
@@ -18,7 +20,22 @@ import AdminPage from "./pages/AdminPage";
 import AdminSubjectPage from "./pages/AdminSubjectPage";
 import AdminTrackPage from "./pages/AdminTrackPage";
 import AdminReviewPage from "./pages/AdminReviewPage";
+import AdminAnalyticsPage from "./pages/AdminAnalyticsPage";
+import AdminSettingsPage from "./pages/AdminSettingsPage";
+import AdminStudentsPage from "./pages/AdminStudentsPage";
+import AdminStudentDetailPage from "./pages/AdminStudentDetailPage";
+import AdminSessionsPage from "./pages/AdminSessionsPage";
+import AdminBookContentPage from "./pages/AdminBookContentPage";
+import LeaderboardPage from "./pages/LeaderboardPage";
+import AdminStudentProgressReport from "./pages/AdminStudentProgressReport";
+import BadgeCelebration from "./components/game/BadgeCelebration";
 import AppShell from "./components/layout/AppShell";
+import StudentLayout from "./layouts/StudentLayout";
+import AdminLayout from "./layouts/AdminLayout";
+import AuthLayout from "./layouts/AuthLayout";
+import DashboardPage from "./pages/DashboardPage";
+import AchievementsPage from "./pages/AchievementsPage";
+import SettingsPage from "./pages/SettingsPage";
 import { trackPageView } from "./utils/analytics";
 
 class ErrorBoundary extends Component {
@@ -49,6 +66,37 @@ function PageViewTracker() {
   return null;
 }
 
+function NotFoundRedirect() {
+  const { user, loading } = useAuth();
+  if (loading) {
+    return (
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "center",
+          alignItems: "center",
+          height: "100vh",
+          background: "#0f0a1a",
+        }}
+      >
+        <div
+          style={{
+            width: "44px",
+            height: "44px",
+            borderRadius: "50%",
+            border: "3px solid var(--color-primary)",
+            borderTopColor: "transparent",
+            animation: "spin 0.8s linear infinite",
+          }}
+          aria-hidden="true"
+        />
+      </div>
+    );
+  }
+  if (user) return <Navigate to="/map" replace />;
+  return <Navigate to="/" replace />;
+}
+
 function RootRedirect() {
   const { user, loading } = useAuth();
   if (loading) {
@@ -67,7 +115,7 @@ function RootRedirect() {
             width: "44px",
             height: "44px",
             borderRadius: "50%",
-            border: "3px solid #7c3aed",
+            border: "3px solid var(--color-primary)",
             borderTopColor: "transparent",
             animation: "spin 0.8s linear infinite",
           }}
@@ -77,7 +125,7 @@ function RootRedirect() {
     );
   }
   if (!user) return <Navigate to="/login" replace />;
-  return <Navigate to={user.role === "admin" ? "/admin" : "/map"} replace />;
+  return <Navigate to={user.role === "admin" ? "/admin" : "/dashboard"} replace />;
 }
 
 export default function App() {
@@ -87,34 +135,42 @@ export default function App() {
         <PageViewTracker />
         <ThemeProvider>
           <AuthProvider>
-            <StudentProvider>
-              <SessionProvider>
-                <Routes>
-                  {/* Public auth routes */}
-                  <Route path="/login" element={<LoginPage />} />
-                  <Route path="/register" element={<RegisterPage />} />
-                  <Route path="/verify-otp" element={<OtpVerifyPage />} />
-                  <Route path="/forgot-password" element={<ForgotPasswordPage />} />
-                  <Route path="/reset-password" element={<ResetPasswordPage />} />
+            <ToastProvider>
+              <DialogProvider>
+                <StudentProvider>
+                  <SessionProvider>
+                    <Routes>
+                  {/* Public auth routes (shared layout) */}
+                  <Route element={<AuthLayout />}>
+                    <Route path="/login" element={<LoginPage />} />
+                    <Route path="/register" element={<RegisterPage />} />
+                    <Route path="/verify-otp" element={<OtpVerifyPage />} />
+                    <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+                    <Route path="/reset-password" element={<ResetPasswordPage />} />
+                  </Route>
 
                   {/* Student routes (protected) */}
                   <Route
                     element={
                       <ProtectedRoute allowedRoles={["student"]}>
-                        <AppShell />
+                        <StudentLayout />
                       </ProtectedRoute>
                     }
                   >
+                    <Route path="/dashboard" element={<DashboardPage />} />
                     <Route path="/map" element={<ConceptMapPage />} />
                     <Route path="/learn/:conceptId" element={<LearningPage />} />
                     <Route path="/history" element={<StudentHistoryPage />} />
+                    <Route path="/leaderboard" element={<LeaderboardPage />} />
+                    <Route path="/achievements" element={<AchievementsPage />} />
+                    <Route path="/settings" element={<SettingsPage />} />
                   </Route>
 
                   {/* Admin routes (protected) */}
                   <Route
                     element={
                       <ProtectedRoute allowedRoles={["admin"]}>
-                        <Outlet />
+                        <AdminLayout />
                       </ProtectedRoute>
                     }
                   >
@@ -122,14 +178,25 @@ export default function App() {
                     <Route path="/admin/subjects/:subjectSlug" element={<AdminSubjectPage />} />
                     <Route path="/admin/books/:slug/track" element={<AdminTrackPage />} />
                     <Route path="/admin/books/:slug/review" element={<AdminReviewPage />} />
+                    <Route path="/admin/books/:slug/content" element={<AdminBookContentPage />} />
+                    <Route path="/admin/analytics" element={<AdminAnalyticsPage />} />
+                    <Route path="/admin/settings" element={<AdminSettingsPage />} />
+                    <Route path="/admin/students" element={<AdminStudentsPage />} />
+                    <Route path="/admin/students/:id" element={<AdminStudentDetailPage />} />
+                    <Route path="/admin/students/:id/progress" element={<AdminStudentProgressReport />} />
+                    <Route path="/admin/sessions" element={<AdminSessionsPage />} />
                   </Route>
 
                   {/* Root redirect */}
                   <Route path="/" element={<RootRedirect />} />
-                  <Route path="*" element={<Navigate to="/login" replace />} />
+                  <Route path="*" element={<NotFoundRedirect />} />
                 </Routes>
-              </SessionProvider>
-            </StudentProvider>
+                    <BadgeCelebration />
+                  </SessionProvider>
+                </StudentProvider>
+                <Toaster />
+              </DialogProvider>
+            </ToastProvider>
           </AuthProvider>
         </ThemeProvider>
       </BrowserRouter>

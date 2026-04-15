@@ -2,25 +2,9 @@ import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { motion, AnimatePresence } from "framer-motion";
-import { Brain, User, Mail, Lock, AlertCircle, X } from "lucide-react";
+import { User, Mail, Lock, AlertCircle } from "lucide-react";
 import { registerUser } from "../api/auth";
-
-const PALETTE = {
-  bg: "#0f0a1a",
-  card: "#1a1025",
-  accent: "#7c3aed",
-  accentHover: "#6d28d9",
-  text: "#e2e8f0",
-  muted: "#94a3b8",
-  inputBg: "#2d1f3d",
-  inputBorder: "#4c3a6e",
-  inputBorderFocus: "#7c3aed",
-  error: "#ef4444",
-  errorBg: "rgba(239,68,68,0.08)",
-  success: "#22c55e",
-  tag: "rgba(124,58,237,0.15)",
-  tagBorder: "rgba(124,58,237,0.3)",
-};
+import { Button, StrengthBar, passwordStrength } from "../components/ui";
 
 const SUPPORTED_LANGUAGES = [
   { code: "en", label: "English" },
@@ -38,55 +22,6 @@ const SUPPORTED_LANGUAGES = [
   { code: "zh", label: "Chinese" },
 ];
 
-const STYLES = [
-  { id: "default", emoji: "📚", label: "Default" },
-  { id: "pirate", emoji: "🏴‍☠️", label: "Pirate" },
-  { id: "astronaut", emoji: "🚀", label: "Space" },
-  { id: "gamer", emoji: "🎮", label: "Gamer" },
-];
-
-function passwordStrength(pw) {
-  if (!pw) return { score: 0, label: "", color: "transparent" };
-  let score = 0;
-  if (pw.length >= 8) score++;
-  if (/[A-Z]/.test(pw)) score++;
-  if (/[0-9]/.test(pw)) score++;
-  if (/[^A-Za-z0-9]/.test(pw)) score++;
-  const labels = ["", "Weak", "Fair", "Good", "Strong"];
-  const colors = ["transparent", "#ef4444", "#f59e0b", "#3b82f6", "#22c55e"];
-  return { score, label: labels[score], color: colors[score] };
-}
-
-function StrengthBar({ password }) {
-  const { score, label, color } = passwordStrength(password);
-  if (!password) return null;
-  return (
-    <div style={{ marginTop: "0.5rem" }}>
-      <div
-        style={{
-          display: "flex",
-          gap: "4px",
-          marginBottom: "4px",
-        }}
-      >
-        {[1, 2, 3, 4].map((i) => (
-          <div
-            key={i}
-            style={{
-              flex: 1,
-              height: "3px",
-              borderRadius: "2px",
-              background: i <= score ? color : "rgba(255,255,255,0.1)",
-              transition: "background 0.2s",
-            }}
-          />
-        ))}
-      </div>
-      <span style={{ fontSize: "0.75rem", color }}>{label}</span>
-    </div>
-  );
-}
-
 function InputField({
   id,
   label,
@@ -102,36 +37,25 @@ function InputField({
   required,
   children,
 }) {
+  const isFocused = focusedField === id;
   return (
-    <div style={{ marginBottom: "1.1rem" }}>
+    <div className="mb-4">
       <label
         htmlFor={id}
-        style={{
-          display: "block",
-          color: PALETTE.muted,
-          fontSize: "0.8rem",
-          fontWeight: 600,
-          letterSpacing: "0.04em",
-          textTransform: "uppercase",
-          marginBottom: "0.5rem",
-        }}
+        className="block text-[13px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-2"
       >
         {label}
       </label>
-      <div style={{ position: "relative" }}>
+      <div className="relative">
         {Icon && (
           <Icon
             size={16}
-            color={focusedField === id ? "#a78bfa" : PALETTE.inputBorder}
+            className={`absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none transition-colors duration-150 ${
+              isFocused
+                ? "text-[var(--color-primary)]"
+                : "text-[var(--color-border-strong)]"
+            }`}
             aria-hidden="true"
-            style={{
-              position: "absolute",
-              left: "14px",
-              top: "50%",
-              transform: "translateY(-50%)",
-              pointerEvents: "none",
-              transition: "color 0.15s",
-            }}
           />
         )}
         <input
@@ -144,20 +68,13 @@ function InputField({
           onBlur={onBlur}
           placeholder={placeholder}
           required={required}
-          style={{
-            width: "100%",
-            boxSizing: "border-box",
-            padding: `0.75rem 0.875rem 0.75rem ${Icon ? "2.5rem" : "0.875rem"}`,
-            background: PALETTE.inputBg,
-            border: `1px solid ${
-              focusedField === id ? PALETTE.inputBorderFocus : PALETTE.inputBorder
-            }`,
-            borderRadius: "10px",
-            color: PALETTE.text,
-            fontSize: "0.95rem",
-            outline: "none",
-            transition: "border-color 0.15s",
-          }}
+          className={`w-full h-[52px] bg-[var(--color-surface-2)] border-2 rounded-2xl text-[var(--color-text)] text-[0.95rem] outline-none transition-[border-color,box-shadow] duration-150 ${
+            Icon ? "pl-10 pr-3.5" : "px-3.5"
+          } ${
+            isFocused
+              ? "border-[var(--color-primary)] ring-2 ring-[var(--color-primary)]/15"
+              : "border-[var(--color-border)]"
+          }`}
         />
       </div>
       {children}
@@ -173,33 +90,11 @@ export default function RegisterPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [interests, setInterests] = useState([]);
-  const [interestInput, setInterestInput] = useState("");
-  const [preferredStyle, setPreferredStyle] = useState("default");
+  const [age, setAge] = useState("");
   const [preferredLanguage, setPreferredLanguage] = useState("en");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [focusedField, setFocusedField] = useState(null);
-
-  const addInterest = (val) => {
-    const trimmed = val.trim().toLowerCase();
-    if (trimmed && !interests.includes(trimmed) && interests.length < 10) {
-      setInterests((prev) => [...prev, trimmed]);
-    }
-    setInterestInput("");
-  };
-
-  const removeInterest = (tag) =>
-    setInterests((prev) => prev.filter((i) => i !== tag));
-
-  const handleInterestKeyDown = (e) => {
-    if (e.key === "Enter" || e.key === ",") {
-      e.preventDefault();
-      addInterest(interestInput);
-    } else if (e.key === "Backspace" && !interestInput && interests.length) {
-      removeInterest(interests[interests.length - 1]);
-    }
-  };
 
   const validateForm = () => {
     if (!displayName.trim()) return t("auth.errorNameRequired", "Display name is required.");
@@ -222,8 +117,7 @@ export default function RegisterPage() {
         display_name: displayName.trim(),
         email: email.trim(),
         password,
-        interests,
-        preferred_style: preferredStyle,
+        age: age ? parseInt(age, 10) : null,
         preferred_language: preferredLanguage,
       });
       navigate("/verify-otp", {
@@ -244,93 +138,20 @@ export default function RegisterPage() {
   };
 
   const strength = passwordStrength(password);
+  const isDisabled = loading || strength.score < 2 || password !== confirmPassword || !displayName.trim() || !email.trim();
 
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        background: PALETTE.bg,
-        display: "flex",
-        alignItems: "flex-start",
-        justifyContent: "center",
-        padding: "2rem 1rem",
-        fontFamily: "Inter, system-ui, sans-serif",
-        overflowY: "auto",
-      }}
-    >
-      {/* Background glow */}
-      <div
-        aria-hidden="true"
-        style={{
-          position: "fixed",
-          top: "20%",
-          left: "50%",
-          transform: "translate(-50%, -50%)",
-          width: "600px",
-          height: "600px",
-          background:
-            "radial-gradient(circle at 50% 50%, rgba(124,58,237,0.1), transparent 65%)",
-          pointerEvents: "none",
-          zIndex: 0,
-        }}
-      />
-
-      <motion.div
-        initial={{ opacity: 0, y: 24 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.35, ease: "easeOut" }}
-        style={{
-          position: "relative",
-          zIndex: 1,
-          width: "100%",
-          maxWidth: "460px",
-        }}
-      >
-        {/* Branding */}
-        <div style={{ textAlign: "center", marginBottom: "1.75rem" }}>
-          <div
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              width: "52px",
-              height: "52px",
-              borderRadius: "14px",
-              background: "rgba(124,58,237,0.15)",
-              border: "1px solid rgba(124,58,237,0.3)",
-              marginBottom: "0.875rem",
-            }}
-          >
-            <Brain size={26} color="#a78bfa" aria-hidden="true" />
-          </div>
-          <h1
-            style={{
-              fontSize: "1.65rem",
-              fontWeight: 800,
-              color: PALETTE.text,
-              letterSpacing: "-0.02em",
-              margin: 0,
-              marginBottom: "0.3rem",
-            }}
-          >
-            {t("auth.createAccountTitle", "Create your account")}
-          </h1>
-          <p style={{ color: PALETTE.muted, fontSize: "0.875rem", margin: 0 }}>
-            {t("auth.registerSubtitle", "Start your learning journey today")}
-          </p>
-        </div>
-
+    <>
         {/* Card */}
-        <div
-          style={{
-            background: PALETTE.card,
-            borderRadius: "20px",
-            border: "1px solid rgba(124,58,237,0.18)",
-            padding: "2rem",
-            boxShadow:
-              "0 4px 6px rgba(0,0,0,0.3), 0 0 0 1px rgba(255,255,255,0.03)",
-          }}
-        >
+        <div className="bg-[var(--color-surface)] rounded-2xl p-8 shadow-sm">
+          {/* Heading */}
+          <h1 className="text-3xl font-bold text-[var(--color-text)] mb-2">
+            {t("auth.joinAdventure", "Join the adventure!")}
+          </h1>
+          <p className="text-[var(--color-text-muted)] mb-8">
+            {t("auth.registerSubtitle", "Create your account and start learning")}
+          </p>
+
           {/* Error */}
           <AnimatePresence>
             {error && (
@@ -339,17 +160,10 @@ export default function RegisterPage() {
                 initial={{ opacity: 0, height: 0 }}
                 animate={{ opacity: 1, height: "auto" }}
                 exit={{ opacity: 0, height: 0 }}
+                className="flex items-center gap-2 rounded-[10px] px-4 py-3 mb-5 text-sm text-[var(--color-danger)]"
                 style={{
-                  background: PALETTE.errorBg,
-                  border: `1px solid ${PALETTE.error}40`,
-                  borderRadius: "10px",
-                  padding: "0.75rem 1rem",
-                  marginBottom: "1.25rem",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "0.5rem",
-                  color: PALETTE.error,
-                  fontSize: "0.875rem",
+                  background: "color-mix(in srgb, var(--color-danger) 8%, transparent)",
+                  border: "1px solid color-mix(in srgb, var(--color-danger) 40%, transparent)",
                 }}
                 role="alert"
               >
@@ -421,194 +235,46 @@ export default function RegisterPage() {
               required
             >
               {confirmPassword && password !== confirmPassword && (
-                <p
-                  style={{
-                    color: PALETTE.error,
-                    fontSize: "0.78rem",
-                    marginTop: "4px",
-                  }}
-                >
+                <p className="text-[var(--color-danger)] text-xs mt-1">
                   {t("auth.passwordMismatchHint", "Passwords do not match")}
                 </p>
               )}
             </InputField>
 
-            {/* Interests */}
-            <div style={{ marginBottom: "1.1rem" }}>
+            {/* Age */}
+            <div className="mb-4">
               <label
-                htmlFor="reg-interests"
-                style={{
-                  display: "block",
-                  color: PALETTE.muted,
-                  fontSize: "0.8rem",
-                  fontWeight: 600,
-                  letterSpacing: "0.04em",
-                  textTransform: "uppercase",
-                  marginBottom: "0.5rem",
-                }}
+                htmlFor="reg-age"
+                className="block text-[13px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-2"
               >
-                {t("form.interestsLabel", "Interests")}{" "}
-                <span style={{ fontWeight: 400, textTransform: "none", fontSize: "0.75rem" }}>
-                  {t("auth.interestsOptional", "(optional)")}
+                {t("auth.ageLabel", "Age")}{" "}
+                <span className="font-normal normal-case text-xs">
+                  {t("auth.ageOptional", "(optional)")}
                 </span>
               </label>
-              <div
-                style={{
-                  display: "flex",
-                  flexWrap: "wrap",
-                  gap: "6px",
-                  padding: "0.5rem",
-                  background: PALETTE.inputBg,
-                  border: `1px solid ${
-                    focusedField === "reg-interests"
-                      ? PALETTE.inputBorderFocus
-                      : PALETTE.inputBorder
-                  }`,
-                  borderRadius: "10px",
-                  transition: "border-color 0.15s",
-                  minHeight: "44px",
-                  alignItems: "center",
-                }}
-              >
-                {interests.map((tag) => (
-                  <span
-                    key={tag}
-                    style={{
-                      display: "inline-flex",
-                      alignItems: "center",
-                      gap: "4px",
-                      background: PALETTE.tag,
-                      border: `1px solid ${PALETTE.tagBorder}`,
-                      borderRadius: "6px",
-                      padding: "2px 8px",
-                      color: "#c4b5fd",
-                      fontSize: "0.82rem",
-                      fontWeight: 500,
-                    }}
-                  >
-                    {tag}
-                    <button
-                      type="button"
-                      onClick={() => removeInterest(tag)}
-                      aria-label={`Remove ${tag}`}
-                      style={{
-                        background: "none",
-                        border: "none",
-                        cursor: "pointer",
-                        color: "#a78bfa",
-                        padding: 0,
-                        display: "inline-flex",
-                        alignItems: "center",
-                      }}
-                    >
-                      <X size={12} aria-hidden="true" />
-                    </button>
-                  </span>
-                ))}
-                <input
-                  id="reg-interests"
-                  value={interestInput}
-                  onChange={(e) => setInterestInput(e.target.value)}
-                  onKeyDown={handleInterestKeyDown}
-                  onBlur={() => {
-                    if (interestInput.trim()) addInterest(interestInput);
-                    setFocusedField(null);
-                  }}
-                  onFocus={() => setFocusedField("reg-interests")}
-                  placeholder={
-                    interests.length === 0
-                      ? t("form.interestsPlaceholder", "space, music, games...")
-                      : ""
-                  }
-                  style={{
-                    flex: 1,
-                    minWidth: "100px",
-                    background: "transparent",
-                    border: "none",
-                    outline: "none",
-                    color: PALETTE.text,
-                    fontSize: "0.9rem",
-                    padding: "2px 4px",
-                  }}
-                />
-              </div>
-              <p
-                style={{
-                  color: PALETTE.muted,
-                  fontSize: "0.75rem",
-                  marginTop: "4px",
-                }}
-              >
-                {t("auth.interestsHint", "Press Enter or comma to add")}
-              </p>
-            </div>
-
-            {/* Learning style */}
-            <div style={{ marginBottom: "1.1rem" }}>
-              <label
-                style={{
-                  display: "block",
-                  color: PALETTE.muted,
-                  fontSize: "0.8rem",
-                  fontWeight: 600,
-                  letterSpacing: "0.04em",
-                  textTransform: "uppercase",
-                  marginBottom: "0.5rem",
-                }}
-              >
-                {t("form.styleLabel", "Tutor Style")}
-              </label>
-              <div style={{ display: "flex", gap: "8px" }}>
-                {STYLES.map((s) => (
-                  <button
-                    key={s.id}
-                    type="button"
-                    onClick={() => setPreferredStyle(s.id)}
-                    aria-label={t("aria.styleOption", { style: s.label })}
-                    style={{
-                      flex: 1,
-                      padding: "0.6rem 0.25rem",
-                      borderRadius: "10px",
-                      border: `1px solid ${
-                        preferredStyle === s.id
-                          ? PALETTE.accent
-                          : PALETTE.inputBorder
-                      }`,
-                      background:
-                        preferredStyle === s.id
-                          ? "rgba(124,58,237,0.18)"
-                          : PALETTE.inputBg,
-                      color: preferredStyle === s.id ? "#c4b5fd" : PALETTE.muted,
-                      cursor: "pointer",
-                      transition: "all 0.15s",
-                      display: "flex",
-                      flexDirection: "column",
-                      alignItems: "center",
-                      gap: "4px",
-                      fontSize: "0.8rem",
-                      fontWeight: preferredStyle === s.id ? 600 : 400,
-                    }}
-                  >
-                    <span style={{ fontSize: "1.2rem" }}>{s.emoji}</span>
-                    {s.label}
-                  </button>
-                ))}
-              </div>
+              <input
+                id="reg-age"
+                type="number"
+                min={5}
+                max={120}
+                value={age}
+                onChange={(e) => setAge(e.target.value)}
+                onFocus={() => setFocusedField("reg-age")}
+                onBlur={() => setFocusedField(null)}
+                placeholder={t("auth.agePlaceholder", "Your age")}
+                className={`w-full h-[52px] px-3.5 bg-[var(--color-surface-2)] border-2 rounded-2xl text-[var(--color-text)] text-[0.95rem] outline-none transition-[border-color,box-shadow] duration-150 ${
+                  focusedField === "reg-age"
+                    ? "border-[var(--color-primary)] ring-2 ring-[var(--color-primary)]/15"
+                    : "border-[var(--color-border)]"
+                }`}
+              />
             </div>
 
             {/* Language */}
-            <div style={{ marginBottom: "1.5rem" }}>
+            <div className="mb-6">
               <label
                 htmlFor="reg-language"
-                style={{
-                  display: "block",
-                  color: PALETTE.muted,
-                  fontSize: "0.8rem",
-                  fontWeight: 600,
-                  letterSpacing: "0.04em",
-                  textTransform: "uppercase",
-                  marginBottom: "0.5rem",
-                }}
+                className="block text-[13px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-2"
               >
                 {t("form.languageLabel", "Preferred Language")}
               </label>
@@ -616,25 +282,13 @@ export default function RegisterPage() {
                 id="reg-language"
                 value={preferredLanguage}
                 onChange={(e) => setPreferredLanguage(e.target.value)}
-                style={{
-                  width: "100%",
-                  padding: "0.75rem 0.875rem",
-                  background: PALETTE.inputBg,
-                  border: `1px solid ${PALETTE.inputBorder}`,
-                  borderRadius: "10px",
-                  color: PALETTE.text,
-                  fontSize: "0.95rem",
-                  outline: "none",
-                  cursor: "pointer",
-                  appearance: "none",
-                  WebkitAppearance: "none",
-                }}
+                className="w-full h-[52px] px-3.5 bg-[var(--color-surface-2)] border-2 border-[var(--color-border)] rounded-2xl text-[var(--color-text)] text-[0.95rem] outline-none cursor-pointer appearance-none"
               >
                 {SUPPORTED_LANGUAGES.map((lang) => (
                   <option
                     key={lang.code}
                     value={lang.code}
-                    style={{ background: PALETTE.card }}
+                    className="bg-[var(--color-surface-2)]"
                   >
                     {lang.label}
                   </option>
@@ -643,87 +297,29 @@ export default function RegisterPage() {
             </div>
 
             {/* Submit */}
-            <button
+            <Button
               type="submit"
-              disabled={loading || strength.score < 2 || password !== confirmPassword || !displayName.trim() || !email.trim()}
-              style={{
-                width: "100%",
-                padding: "0.875rem",
-                background:
-                  loading || strength.score < 2 || password !== confirmPassword || !displayName.trim() || !email.trim()
-                    ? "rgba(124,58,237,0.4)"
-                    : PALETTE.accent,
-                color: "#fff",
-                border: "none",
-                borderRadius: "10px",
-                fontSize: "0.95rem",
-                fontWeight: 700,
-                cursor:
-                  loading || strength.score < 2 || password !== confirmPassword || !displayName.trim() || !email.trim()
-                    ? "not-allowed"
-                    : "pointer",
-                transition: "background 0.15s",
-                letterSpacing: "0.01em",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: "0.5rem",
-              }}
-              onMouseEnter={(e) => {
-                if (!loading) e.currentTarget.style.background = PALETTE.accentHover;
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background =
-                  loading || strength.score < 2 || password !== confirmPassword || !displayName.trim() || !email.trim()
-                    ? "rgba(124,58,237,0.4)"
-                    : PALETTE.accent;
-              }}
+              variant="primary"
+              size="lg"
+              loading={loading}
+              disabled={isDisabled}
+              className="w-full"
             >
-              {loading ? (
-                <>
-                  <div
-                    style={{
-                      width: "16px",
-                      height: "16px",
-                      border: "2px solid rgba(255,255,255,0.3)",
-                      borderTopColor: "#fff",
-                      borderRadius: "50%",
-                      animation: "spin 0.7s linear infinite",
-                    }}
-                    aria-hidden="true"
-                  />
-                  {t("form.submitting", "Creating...")}
-                </>
-              ) : (
-                t("auth.signUpButton", "Sign Up")
-              )}
-            </button>
+              {t("auth.signUpButton", "Sign Up")}
+            </Button>
           </form>
         </div>
 
         {/* Login link */}
-        <p
-          style={{
-            textAlign: "center",
-            color: PALETTE.muted,
-            fontSize: "0.9rem",
-            marginTop: "1.5rem",
-            paddingBottom: "2rem",
-          }}
-        >
+        <p className="text-center text-[var(--color-text-muted)] text-sm mt-6 pb-8">
           {t("auth.haveAccount", "Already have an account?")}{" "}
           <Link
             to="/login"
-            style={{
-              color: "#a78bfa",
-              fontWeight: 600,
-              textDecoration: "none",
-            }}
+            className="text-[var(--color-primary)] font-semibold no-underline hover:underline"
           >
             {t("auth.signIn", "Sign In")}
           </Link>
         </p>
-      </motion.div>
-    </div>
+    </>
   );
 }

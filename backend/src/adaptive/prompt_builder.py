@@ -25,6 +25,8 @@ from adaptive.schemas import GenerationProfile, LearningProfile
 # ── Language name map ─────────────────────────────────────────────────────────
 # Import the canonical map from api/prompts.py to avoid divergence.
 from api.prompts import LANGUAGE_NAMES as _LANGUAGE_NAMES
+from api.prompts import STYLE_MODIFIERS as _STYLE_MODIFIERS
+from api.prompts import _build_interests_block
 
 # Max chars of concept source text injected into the user prompt.
 _CONCEPT_TEXT_LIMIT = 3000
@@ -265,7 +267,7 @@ def _build_system_prompt(
 
     # ── Section 1: Identity + output mandate ──────────────────────────────
     parts: list[str] = [
-        "You are an expert adaptive math tutor for the ADA platform.\n"
+        "You are an expert adaptive math tutor for the Adaptive Learner platform.\n"
         "Your response MUST be a single valid JSON object — nothing else.\n"
         "Do NOT wrap it in markdown code fences. Do NOT add any commentary, "
         "explanation, or text before or after the JSON object.",
@@ -465,12 +467,21 @@ def build_next_card_prompt(
     blended_state_score: float = 2.0,
     engagement_strategy: str | None = None,
     content_piece_images: list[dict] | None = None,
+    style: str = "default",
+    interests: list[str] | None = None,
 ) -> tuple[str, str]:
     """
     Build (system_prompt, user_prompt) for a single adaptive next-card LLM call.
     Reuses _build_system_prompt() unchanged, then overrides schema + card count.
     Adds STUDENT CONTEXT block with historical signals and motivational note rules.
     """
+
+    # ── Style persona prefix (highest priority — prepended before base prompt) ─────
+    _style_modifier = _STYLE_MODIFIERS.get(style or "default", "")
+    _style_prefix = f"{_style_modifier}\n\n" if _style_modifier else ""
+
+    # ── Interests block (appended at end of system prompt) ────────────────────────
+    _interests_block = _build_interests_block(interests or [])
 
     # Reuse existing system prompt, then override schema and card rules
     base_sys = _build_system_prompt(learning_profile, gen_profile, language)
@@ -546,7 +557,7 @@ def build_next_card_prompt(
     if engagement_strategy and engagement_strategy in _strategy_blocks:
         sys_overrides += "\n\n" + _strategy_blocks[engagement_strategy]
 
-    system_prompt = base_sys + sys_overrides
+    system_prompt = _style_prefix + base_sys + sys_overrides + _interests_block
 
     # User prompt: concept info
     title = concept_detail.get("concept_title", "Unknown Concept")

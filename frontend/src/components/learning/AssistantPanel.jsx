@@ -15,7 +15,7 @@ const MAX_IDLE_TRIGGERS_PER_CARD = 2;
 const modeColors = {
   NORMAL:     "linear-gradient(135deg, var(--color-accent), var(--color-primary))",
   FAST:       "linear-gradient(135deg, var(--xp-gold), #f97316)",
-  SLOW:       "linear-gradient(135deg, var(--adapt-slow), #818cf8)",
+  SLOW:       "linear-gradient(135deg, var(--adapt-slow), var(--color-primary-dark))",
   STRUGGLING: "linear-gradient(135deg, var(--adapt-struggling), #fb923c)",
   BORED:      "linear-gradient(135deg, var(--adapt-bored), #06b6d4)",
 };
@@ -70,6 +70,9 @@ export default function AssistantPanel() {
 
   // Idle timer — check if student needs help (max 2 nudges per card)
   useEffect(() => {
+    // Clear any previous interval before starting a new one
+    if (idleTimerRef.current) clearInterval(idleTimerRef.current);
+
     const checkIdle = () => {
       if (!cards[currentCardIndex]) return;
       if (idleTriggersRef.current >= MAX_IDLE_TRIGGERS_PER_CARD) return;
@@ -87,7 +90,9 @@ export default function AssistantPanel() {
     };
 
     idleTimerRef.current = setInterval(checkIdle, 10000);
-    return () => clearInterval(idleTimerRef.current);
+    return () => {
+      if (idleTimerRef.current) clearInterval(idleTimerRef.current);
+    };
   }, [currentCardIndex, cards, sendAssistMessage]);
 
   const handleSubmit = (e) => {
@@ -103,8 +108,8 @@ export default function AssistantPanel() {
   return (
     <div
       style={{
-        backgroundColor: "var(--color-surface)",
-        borderRadius: "16px",
+        background: "var(--color-surface)",
+        borderRadius: "1rem",
         border: "2px solid var(--color-border)",
         overflow: "hidden",
         display: "flex",
@@ -116,20 +121,20 @@ export default function AssistantPanel() {
       {/* Header — color changes with adaptive mode */}
       <div
         style={{
-          background: modeColors[mode] || modeColors.NORMAL,
-          padding: "0.75rem 1rem",
           display: "flex",
           alignItems: "center",
-          gap: "0.6rem",
-          transition: "background 0.4s ease",
+          gap: "0.625rem",
+          padding: "0.75rem 1rem",
+          transition: "background 400ms ease-in-out",
+          background: modeColors[mode] || modeColors.NORMAL,
         }}
       >
         <div
           style={{
-            width: "32px",
-            height: "32px",
+            width: "2rem",
+            height: "2rem",
             borderRadius: "50%",
-            backgroundColor: "rgba(255,255,255,0.2)",
+            background: "rgba(255,255,255,0.2)",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -138,7 +143,13 @@ export default function AssistantPanel() {
           <Brain size={16} color="#fff" />
         </div>
         <div>
-          <div style={{ color: "#fff", fontWeight: 700, fontSize: "0.9rem" }}>
+          <div
+            style={{
+              color: "#fff",
+              fontWeight: 700,
+              fontSize: "0.9rem",
+            }}
+          >
             {t("assist.title")}
           </div>
           <div
@@ -159,7 +170,7 @@ export default function AssistantPanel() {
           flex: 1,
           overflowY: "auto",
           padding: "0.75rem",
-          backgroundColor: "var(--color-bg)",
+          background: "var(--color-bg)",
         }}
       >
         {/* Welcome message */}
@@ -174,12 +185,12 @@ export default function AssistantPanel() {
           >
             <Sparkles
               size={24}
-              style={{ marginBottom: "0.4rem", opacity: 0.5 }}
+              style={{ marginBottom: "0.375rem", opacity: 0.5 }}
             />
             <p style={{ margin: 0, fontWeight: 600 }}>
               {t("assist.welcome")}
             </p>
-            <p style={{ margin: "0.3rem 0 0", fontSize: "0.8rem", opacity: 0.8 }}>
+            <p style={{ marginTop: "0.25rem", marginBottom: 0, fontSize: "0.8rem", opacity: 0.8 }}>
               {t("assist.welcomeHint")}
             </p>
           </div>
@@ -194,29 +205,29 @@ export default function AssistantPanel() {
               transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
               style={{
                 display: "flex",
-                justifyContent: msg.role === "user" ? "flex-end" : "flex-start",
                 marginBottom: "0.5rem",
+                justifyContent: msg.role === "user" ? "flex-end" : "flex-start",
               }}
             >
               <div
                 style={{
                   maxWidth: "90%",
                   padding: "0.5rem 0.75rem",
-                  borderRadius:
-                    msg.role === "user"
-                      ? "12px 4px 12px 12px"
-                      : "4px 12px 12px 12px",
-                  backgroundColor:
-                    msg.role === "user"
-                      ? "var(--color-primary)"
-                      : "var(--color-surface)",
-                  color: msg.role === "user" ? "#fff" : "var(--color-text)",
-                  border:
-                    msg.role === "user"
-                      ? "none"
-                      : "1px solid var(--color-border)",
                   fontSize: "0.85rem",
-                  lineHeight: 1.5,
+                  lineHeight: 1.6,
+                  ...(msg.role === "user"
+                    ? {
+                        borderRadius: "12px 4px 12px 12px",
+                        background: "var(--color-primary)",
+                        color: "#fff",
+                        border: "none",
+                      }
+                    : {
+                        borderRadius: "4px 12px 12px 12px",
+                        background: "var(--color-surface)",
+                        color: "var(--color-text)",
+                        border: "1px solid var(--color-border)",
+                      }),
                 }}
               >
                 {msg.role === "assistant" ? (
@@ -241,14 +252,19 @@ export default function AssistantPanel() {
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            style={{ display: "flex", gap: "4px", padding: "0.4rem 0.5rem", alignItems: "center" }}
+            style={{
+              display: "flex",
+              gap: "0.25rem",
+              padding: "0.375rem 0.5rem",
+              alignItems: "center",
+            }}
           >
             {[0, 1, 2].map((i) => (
               <div
                 key={i}
                 style={{
-                  width: 6,
-                  height: 6,
+                  width: "0.375rem",
+                  height: "0.375rem",
                   borderRadius: "50%",
                   background: "var(--color-text-muted)",
                   animation: `dots-bounce 1.2s ease-in-out ${i * 0.2}s infinite`,
@@ -264,14 +280,14 @@ export default function AssistantPanel() {
       {/* Input */}
       <div
         style={{
-          padding: "0.6rem 0.75rem",
+          padding: "0.625rem 0.75rem",
           borderTop: "2px solid var(--color-border)",
-          backgroundColor: "var(--color-surface)",
+          background: "var(--color-surface)",
         }}
       >
         <form
           onSubmit={handleSubmit}
-          style={{ display: "flex", gap: "0.4rem" }}
+          style={{ display: "flex", gap: "0.375rem" }}
         >
           <input
             ref={inputRef}
@@ -284,7 +300,7 @@ export default function AssistantPanel() {
             className="ada-input"
             style={{
               flex: 1,
-              padding: "0.55rem 0.75rem",
+              padding: "0.5rem 0.75rem",
               fontSize: "0.85rem",
               borderRadius: "10px",
             }}
@@ -300,17 +316,14 @@ export default function AssistantPanel() {
               height: "38px",
               borderRadius: "10px",
               border: "none",
-              backgroundColor:
-                input.trim() && !assistLoading
-                  ? "var(--color-primary)"
-                  : "var(--color-border)",
-              color:
-                input.trim() && !assistLoading
-                  ? "#fff"
-                  : "var(--color-text-muted)",
-              cursor:
-                input.trim() && !assistLoading ? "pointer" : "not-allowed",
               flexShrink: 0,
+              cursor: input.trim() && !assistLoading ? "pointer" : "not-allowed",
+              background: input.trim() && !assistLoading
+                ? "var(--color-primary)"
+                : "var(--color-border)",
+              color: input.trim() && !assistLoading
+                ? "#fff"
+                : "var(--color-text-muted)",
             }}
           >
             <Send size={16} />

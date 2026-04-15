@@ -10,7 +10,7 @@ import { RefreshCw, Map, ArrowRight } from "lucide-react";
 import { motion } from "framer-motion";
 import ProgressRing from "../ui/ProgressRing";
 
-const CONFETTI_COLORS = ["#6366f1", "#22c55e", "#8b5cf6", "#f59e0b", "#ef4444", "#06b6d4"];
+const CONFETTI_COLORS = ["#F97316", "#22c55e", "#EA580C", "#f59e0b", "#ef4444", "#06b6d4"];
 
 function Confetti() {
   const pieces = Array.from({ length: 14 }, (_, i) => i);
@@ -78,34 +78,26 @@ export default function CompletionView() {
       initial={{ opacity: 0, scale: 0.92, y: 16 }}
       animate={{ opacity: 1, scale: 1, y: 0 }}
       transition={{ type: "spring", stiffness: 320, damping: 28 }}
-      style={{
-        backgroundColor: "var(--color-surface)",
-        borderRadius: "var(--radius-xl)",
-        border: "2px solid var(--color-border)",
-        overflow: "hidden",
-        position: "relative",
-        maxWidth: "480px",
-        margin: "0 auto",
-      }}
+      className="bg-[var(--color-surface)] rounded-[var(--radius-xl)] border-2 border-[var(--color-border)] overflow-hidden relative max-w-[480px] mx-auto"
     >
       {mastered && <Confetti />}
 
       {/* Header gradient banner */}
-      <div style={{
-        background: mastered
-          ? "linear-gradient(135deg, var(--color-success), #16a34a)"
-          : "linear-gradient(135deg, #f59e0b, #d97706)",
-        padding: "1.5rem 2rem 2.5rem",
-        textAlign: "center",
-        color: "#fff",
-      }}>
-        <div style={{ fontSize: "2rem", marginBottom: "0.25rem" }}>
+      <div
+        className="text-center text-white px-8 pt-6 pb-10"
+        style={{
+          background: mastered
+            ? "linear-gradient(135deg, var(--color-success), #16a34a)"
+            : "linear-gradient(135deg, #FB923C, #F97316)",
+        }}
+      >
+        <div className="text-[2rem] mb-1">
           {mastered ? "🎉" : "📚"}
         </div>
-        <h2 style={{ fontSize: "1.4rem", fontWeight: 800, margin: 0 }}>
+        <h2 className="text-[1.4rem] font-extrabold m-0">
           {mastered ? t("completion.mastered") : t("completion.almostThere")}
         </h2>
-        <p style={{ fontSize: "0.9rem", opacity: 0.9, marginTop: "0.25rem" }}>
+        <p className="text-[0.9rem] opacity-90 mt-1">
           {mastered
             ? t("completion.masteredMsg", { title: conceptTitle })
             : t("completion.almostMsg", { title: conceptTitle })}
@@ -113,34 +105,28 @@ export default function CompletionView() {
       </div>
 
       {/* Score + Actions */}
-      <div style={{ padding: "2rem", textAlign: "center" }}>
+      <div className="p-8 text-center">
         {/* ProgressRing centered */}
-        <div style={{ position: "relative", display: "inline-flex", alignItems: "center", justifyContent: "center", marginBottom: "1.5rem", marginTop: "-2.5rem" }}>
-          <div style={{ borderRadius: "50%", backgroundColor: "var(--color-surface)", padding: "4px", boxShadow: "var(--shadow-lg)" }}>
+        <div className="relative inline-flex items-center justify-center mb-6 -mt-10">
+          <div className="rounded-full bg-[var(--color-surface)] p-1 shadow-lg">
             <ProgressRing score={score} size={130} strokeWidth={9} />
           </div>
-          <div style={{
-            position: "absolute",
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            justifyContent: "center",
-          }}>
-            <span style={{ fontSize: "2rem", fontWeight: 800, color: scoreColor, lineHeight: 1 }}>
+          <div className="absolute flex flex-col items-center justify-center">
+            <span className="text-[2rem] font-extrabold leading-none" style={{ color: scoreColor }}>
               {score}
             </span>
-            <span style={{ fontSize: "0.65rem", color: "var(--color-text-muted)", fontWeight: 700 }}>
+            <span className="text-[0.65rem] text-[var(--color-text-muted)] font-bold">
               {t("completion.outOf")}
             </span>
           </div>
         </div>
 
-        <p style={{ fontWeight: 700, color: scoreColor, marginBottom: "1.5rem", fontSize: "1rem" }}>
+        <p className="font-bold mb-6 text-base" style={{ color: scoreColor }}>
           {scoreLabel}
         </p>
 
         {/* Actions */}
-        <div style={{ display: "flex", flexDirection: "column", gap: "0.65rem", maxWidth: "300px", margin: "0 auto" }}>
+        <div className="flex flex-col gap-2.5 max-w-[300px] mx-auto">
           {!mastered && (
             <motion.button
               whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.97 }}
@@ -149,15 +135,7 @@ export default function CompletionView() {
                 dispatch({ type: "SESSION_COMPLETED" });
                 window.location.reload();
               }}
-              style={{
-                display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem",
-                width: "100%", padding: "0.75rem",
-                borderRadius: "var(--radius-md)", border: "none",
-                backgroundColor: "var(--color-primary)", color: "#fff",
-                fontSize: "1rem", fontWeight: 700,
-                cursor: "pointer", fontFamily: "inherit",
-                boxShadow: "var(--shadow-sm)",
-              }}
+              className="flex items-center justify-center gap-2 w-full py-3 rounded-[var(--radius-md)] border-none bg-[var(--color-primary-dark)] text-white text-base font-bold cursor-pointer font-[inherit] shadow-sm"
             >
               <RefreshCw size={18} /> {t("completion.tryAgain")}
             </motion.button>
@@ -171,15 +149,7 @@ export default function CompletionView() {
                 dispatch({ type: "SESSION_COMPLETED" });
                 navigate(`/learn/${encodeURIComponent(nextConcept.concept_id)}`);
               }}
-              style={{
-                display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem",
-                width: "100%", padding: "0.75rem",
-                borderRadius: "var(--radius-md)", border: "none",
-                backgroundColor: "var(--color-primary)", color: "#fff",
-                fontSize: "1rem", fontWeight: 700,
-                cursor: "pointer", fontFamily: "inherit",
-                boxShadow: "var(--shadow-sm)",
-              }}
+              className="flex items-center justify-center gap-2 w-full py-3 rounded-[var(--radius-md)] border-none bg-[var(--color-primary-dark)] text-white text-base font-bold cursor-pointer font-[inherit] shadow-sm"
             >
               <ArrowRight size={18} />
               {t("completion.next", { title: nextConcept.concept_title || formatConceptTitle(nextConcept.concept_id) })}
@@ -193,14 +163,7 @@ export default function CompletionView() {
               dispatch({ type: "SESSION_COMPLETED" });
               navigate("/map");
             }}
-            style={{
-              display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem",
-              width: "100%", padding: "0.65rem",
-              borderRadius: "var(--radius-md)", border: "1.5px solid var(--color-border)",
-              backgroundColor: "transparent", color: "var(--color-text-muted)",
-              fontSize: "0.9rem", fontWeight: 600,
-              cursor: "pointer", fontFamily: "inherit",
-            }}
+            className="flex items-center justify-center gap-2 w-full py-2.5 rounded-[var(--radius-md)] border-[1.5px] border-[var(--color-border)] bg-transparent text-[var(--color-text-muted)] text-[0.9rem] font-semibold cursor-pointer font-[inherit]"
           >
             <Map size={16} /> {t("learning.backToMap")}
           </motion.button>

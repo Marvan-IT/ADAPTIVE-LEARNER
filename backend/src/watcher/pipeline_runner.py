@@ -78,7 +78,7 @@ async def run_pipeline(pdf_path: Path, subject: str) -> None:
     from src.db.connection import async_session_factory
 
     slug = derive_slug(pdf_path.name)
-    code = derive_code(slug)
+    code = derive_code(slug)  # may collide; resolved from books.yaml after Stage 1
     _setup_file_log(slug)
 
     logger.info("[%s] Waiting for file to stabilise...", slug)
@@ -89,47 +89,74 @@ async def run_pipeline(pdf_path: Path, subject: str) -> None:
 
     try:
         # Stage 1 — Calibrate + register in books.yaml
-        logger.info("[%s] Stage 1/5: Calibrating fonts...", slug)
+        logger.info("[%s] Stage 1/7: Calibrating fonts...", slug)
         entry = calibrate_book(pdf_path, slug, subject)
         _append_to_books_yaml(entry)
+        # Resolve authoritative book_code from books.yaml (derive_code can collide)
+        import yaml as _yaml
+        _bk_data = _yaml.safe_load((BACKEND_DIR / "books.yaml").read_text(encoding="utf-8"))
+        for _b in _bk_data.get("books", []):
+            if _b["book_slug"] == slug:
+                code = _b["book_code"]
+                break
         # Hot-register into ALL in-memory BOOK_REGISTRY instances so stage 2 can find it.
-        # pipeline.py imports from 'config' (no src. prefix), pipeline_runner imports from 'src.config'
-        # — two separate module objects. Patch both via sys.modules.
         import sys as _sys
         from src.config import BookConfig as _BookConfig
         _cfg_entry = _BookConfig(**entry).model_dump()
         for _mod_name in ("src.config", "config"):
             _mod = _sys.modules.get(_mod_name)
-            if _mod and hasattr(_mod, "BOOK_REGISTRY") and code not in _mod.BOOK_REGISTRY:
+            if _mod and hasattr(_mod, "BOOK_REGISTRY"):
                 _mod.BOOK_REGISTRY[code] = _cfg_entry
                 if hasattr(_mod, "BOOK_CODE_MAP"):
                     _mod.BOOK_CODE_MAP[slug] = code
                 logger.info("[%s] Hot-registered '%s' into %s.BOOK_REGISTRY", slug, code, _mod_name)
-        logger.info("[%s] Stage 1/5: Done", slug)
+        logger.info("[%s] Stage 1/7: Done", slug)
 
         # Stage 2 — Mathpix whole-PDF extraction (sync → thread so we don't block)
-        logger.info("[%s] Stage 2/5: Mathpix PDF extraction (30–60 min)...", slug)
+        logger.info("[%s] Stage 2/7: Mathpix PDF extraction (30–60 min)...", slug)
         await asyncio.to_thread(run_whole_pdf_pipeline, code)
-        logger.info("[%s] Stage 2/5: Done", slug)
+        logger.info("[%s] Stage 2/7: Done", slug)
 
-        # Stage 3 — Chunk pipeline + image validation
-        logger.info("[%s] Stage 3/5: Building chunks + images...", slug)
+        # Stage 3 — Structure analysis (TOC parsing, boundary candidates, frequencies)
+        logger.info("[%s] Stage 3/7: Analyzing book structure...", slug)
         mmd_path = OUTPUT_DIR / slug / "book.mmd"
-        async with async_session_factory() as db:
-            await build_chunks(slug, mmd_path, db, rebuild=False)
-            removed = await validate_and_clean_images(slug, db)
-        logger.info("[%s] Stage 3/5: Done. Removed %d orphan image rows.", slug, removed)
+        mmd_text = mmd_path.read_text(encoding="utf-8")
+        from src.extraction.ocr_validator import validate_and_analyze
+        quality_report = validate_and_analyze(mmd_text, slug)
+        logger.info(
+            "[%s] Stage 3/7: Done. quality=%.3f toc_entries=%d signal_types=%d",
+            slug, quality_report.quality_score, len(quality_report.toc_entries), len(quality_report.signal_stats),
+        )
 
-        # Stage 4 — Dependency graph
-        logger.info("[%s] Stage 4/5: Building dependency graph...", slug)
+        # Stage 4 — Book Profiler (LLM, one-time, cached — ~$0.003 first run, $0 thereafter)
+        logger.info("[%s] Stage 4/7: Profiling book structure (LLM)...", slug)
+        from src.extraction.book_profiler import load_or_create_profile
+        profile = await load_or_create_profile(mmd_text, slug, quality_report)
+        logger.info(
+            "[%s] Stage 4/7: Done. subject=%s boundary_signals=%d exercise_markers=%d noise_patterns=%d",
+            slug, profile.subject,
+            sum(1 for s in profile.subsection_signals if s.is_boundary),
+            len(profile.exercise_markers),
+            len(profile.noise_patterns),
+        )
+
+        # Stage 5 — Chunk pipeline (parse with profile + embed + persist + image validation)
+        logger.info("[%s] Stage 5/7: Building chunks & embeddings...", slug)
+        async with async_session_factory() as db:
+            await build_chunks(slug, mmd_path, db, rebuild=False, profile=profile)
+            removed = await validate_and_clean_images(slug, db)
+        logger.info("[%s] Stage 5/7: Done. Removed %d orphan image rows.", slug, removed)
+
+        # Stage 6 — Dependency graph
+        logger.info("[%s] Stage 6/7: Building dependency graph...", slug)
         graph_path = OUTPUT_DIR / slug / "graph.json"
         from src.extraction.graph_builder import build_graph
         async with async_session_factory() as db:
             await build_graph(db, slug, graph_path)
-        logger.info("[%s] Stage 4/5: Done", slug)
+        logger.info("[%s] Stage 6/7: Done", slug)
 
-        # Stage 5 — Hot-load into running server
-        logger.info("[%s] Stage 5/5: Hot-loading into server...", slug)
+        # Stage 7 — Hot-load into running server
+        logger.info("[%s] Stage 7/7: Hot-loading into server...", slug)
         api_base = os.getenv("API_BASE_URL", "http://localhost:8889")
         api_key = os.getenv("API_SECRET_KEY", "")
         try:
@@ -139,9 +166,9 @@ async def run_pipeline(pdf_path: Path, subject: str) -> None:
                 timeout=30,
             )
             resp.raise_for_status()
-            logger.info("[%s] Stage 5/5: Hot-load successful", slug)
+            logger.info("[%s] Stage 7/7: Hot-load successful", slug)
         except Exception as exc:
-            logger.error("[%s] Stage 5/5: Hot-load failed: %s", slug, exc)
+            logger.error("[%s] Stage 7/7: Hot-load failed: %s", slug, exc)
 
         logger.info("[%s] Pipeline complete", slug)
 

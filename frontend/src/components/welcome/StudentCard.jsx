@@ -49,7 +49,7 @@ export default function StudentCard({ student, onContinue, onNewStudent }) {
           display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem",
           width: "100%", padding: "0.8rem",
           borderRadius: "12px", border: "none",
-          backgroundColor: "var(--color-primary)", color: "#fff",
+          backgroundColor: "var(--color-primary-dark)", color: "#fff",
           fontSize: "1.1rem", fontWeight: 700,
           cursor: "pointer", fontFamily: "inherit",
           transition: "all 0.2s",

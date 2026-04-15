@@ -4,12 +4,12 @@ Tables: students, teaching_sessions, conversation_messages, student_mastery.
 """
 
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
-    String, Text, Boolean, SmallInteger, Integer, Float, DateTime,
-    ForeignKey, UniqueConstraint, Column, func,
+    String, Text, Boolean, SmallInteger, Integer, Float, DateTime, Date,
+    ForeignKey, UniqueConstraint, CheckConstraint, Column, Index, func, text,
 )
 from sqlalchemy.dialects.postgresql import UUID, ARRAY, JSONB, TIMESTAMP as TIMESTAMPTZ
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -33,6 +33,7 @@ class Student(Base):
     interests: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
     preferred_style: Mapped[str] = mapped_column(String(20), default="default")
     preferred_language: Mapped[str] = mapped_column(String(10), default="en")
+    age: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )
@@ -43,6 +44,9 @@ class Student(Base):
     )
     xp: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     streak: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    daily_streak: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    daily_streak_best: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    last_active_date: Mapped[date | None] = mapped_column(Date, nullable=True)
 
     # ── Adaptive learning extended history ────────────────────────────────
     section_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
@@ -85,10 +89,19 @@ class Student(Base):
     spaced_reviews: Mapped[list["SpacedReview"]] = relationship(
         back_populates="student", cascade="all, delete-orphan"
     )
+    xp_events: Mapped[list["XpEvent"]] = relationship(
+        back_populates="student", cascade="all, delete-orphan"
+    )
+    badges: Mapped[list["StudentBadge"]] = relationship(
+        back_populates="student", cascade="all, delete-orphan"
+    )
 
 
 class TeachingSession(Base):
     __tablename__ = "teaching_sessions"
+    __table_args__ = (
+        Index("ix_teaching_sessions_student_started", "student_id", "started_at"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -167,6 +180,7 @@ class ConversationMessage(Base):
         UUID(as_uuid=True),
         ForeignKey("teaching_sessions.id", ondelete="CASCADE"),
         nullable=False,
+        index=True,
     )
     role: Mapped[str] = mapped_column(String(20), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
@@ -214,10 +228,13 @@ class CardInteraction(Base):
     """
 
     __tablename__ = "card_interactions"
+    __table_args__ = (
+        Index("ix_card_interactions_student_concept", "student_id", "concept_id"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     session_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("teaching_sessions.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=True), ForeignKey("teaching_sessions.id", ondelete="CASCADE"), nullable=False, index=True
     )
     student_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("students.id", ondelete="CASCADE"), nullable=False
@@ -238,6 +255,7 @@ class CardInteraction(Base):
     engagement_signal: Mapped[str | None] = mapped_column(String(50), nullable=True)
     strategy_applied: Mapped[str | None] = mapped_column(String(50), nullable=True)
     strategy_effective: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    difficulty: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
 
     session: Mapped["TeachingSession"] = relationship(back_populates="card_interactions")
     student: Mapped["Student"] = relationship(back_populates="card_interactions")
@@ -257,6 +275,11 @@ class SpacedReview(Base):
             "student_id", "concept_id", "review_number",
             name="uq_spaced_review_student_concept_number",
         ),
+        Index(
+            "ix_spaced_reviews_student_due_pending",
+            "student_id", "due_at",
+            postgresql_where=text("completed_at IS NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -273,6 +296,10 @@ class SpacedReview(Base):
 
 class ConceptChunk(Base):
     __tablename__ = "concept_chunks"
+    __table_args__ = (
+        Index("ix_concept_chunks_book_concept", "book_slug", "concept_id"),
+        Index("ix_concept_chunks_book_concept_order", "book_slug", "concept_id", "order_index"),
+    )
 
     id          = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     book_slug   = Column(Text, nullable=False)
@@ -284,6 +311,10 @@ class ConceptChunk(Base):
     latex       = Column(ARRAY(Text), server_default="{}")
     chunk_type  = Column(Text, nullable=False, server_default="teaching")
     is_optional = Column(Boolean, nullable=False, server_default="false")
+    is_hidden   = Column(Boolean, nullable=False, server_default="false")
+    exam_disabled = Column(Boolean, nullable=False, server_default="false")
+    chunk_type_locked = Column(Boolean, default=False, server_default="false", nullable=False)
+    admin_section_name = Column(Text, nullable=True)
     embedding   = Column(Vector(1536), nullable=True)
     created_at  = Column(TIMESTAMPTZ(timezone=True), server_default=func.now())
 
@@ -294,7 +325,7 @@ class ChunkImage(Base):
     __tablename__ = "chunk_images"
 
     id          = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    chunk_id    = Column(UUID(as_uuid=True), ForeignKey("concept_chunks.id", ondelete="CASCADE"), nullable=False)
+    chunk_id    = Column(UUID(as_uuid=True), ForeignKey("concept_chunks.id", ondelete="CASCADE"), nullable=False, index=True)
     image_url   = Column(Text, nullable=False)
     caption     = Column(Text, nullable=True)
     order_index = Column(Integer, default=0)
@@ -311,6 +342,7 @@ class Book(Base):
     subject      = Column(Text, nullable=False)
     status       = Column(Text, nullable=False, default="PROCESSING")
     pdf_filename = Column(Text, nullable=True)
+    is_hidden    = Column(Boolean, nullable=False, server_default="false")
     created_at   = Column(DateTime(timezone=True), server_default=func.now())
     published_at = Column(DateTime(timezone=True), nullable=True)
 
@@ -321,7 +353,144 @@ class Subject(Base):
     id         = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     slug       = Column(Text, unique=True, nullable=False)
     label      = Column(Text, nullable=False)
+    is_hidden  = Column(Boolean, nullable=False, server_default="false")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class AdminGraphOverride(Base):
+    """Manual edge additions or removals applied on top of the auto-generated
+    dependency graph.  Each override is scoped to a single book and records
+    which admin created it."""
+
+    __tablename__ = "admin_graph_overrides"
+    __table_args__ = (
+        UniqueConstraint(
+            "book_slug", "action", "source_concept", "target_concept",
+            name="uq_graph_override",
+        ),
+        CheckConstraint(
+            "action IN ('add_edge', 'remove_edge')",
+            name="ck_graph_override_action",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    book_slug: Mapped[str] = mapped_column(Text, nullable=False)
+    action: Mapped[str] = mapped_column(Text, nullable=False)  # 'add_edge' or 'remove_edge'
+    source_concept: Mapped[str] = mapped_column(Text, nullable=False)
+    target_concept: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMPTZ(timezone=True), server_default=func.now()
+    )
+
+
+class AdminConfig(Base):
+    """Platform-wide admin configuration stored as key/value pairs.
+
+    Tracks which admin last changed each setting and when."""
+
+    __tablename__ = "admin_config"
+
+    key: Mapped[str] = mapped_column(Text, primary_key=True)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMPTZ(timezone=True), server_default=func.now()
+    )
+
+
+class XpEvent(Base):
+    """Append-only audit log of every XP award.
+
+    multiplier captures streak/bonus modifiers applied to base_xp.
+    final_xp = round(base_xp * multiplier), minimum 1.
+    metadata_ maps to the DB column 'metadata' (JSONB) to avoid clashing
+    with SQLAlchemy's Base.metadata attribute.
+    """
+
+    __tablename__ = "xp_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    student_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("students.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    session_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("teaching_sessions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    interaction_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("card_interactions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    event_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    base_xp: Mapped[int] = mapped_column(Integer, nullable=False)
+    multiplier: Mapped[float] = mapped_column(
+        Float, default=1.0, server_default="1.0", nullable=False
+    )
+    final_xp: Mapped[int] = mapped_column(Integer, nullable=False)
+    metadata_: Mapped[dict | None] = mapped_column(
+        "metadata", JSONB, nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+        index=True,
+    )
+
+    student: Mapped["Student"] = relationship(back_populates="xp_events")
+
+
+class StudentBadge(Base):
+    """One row per (student, badge_key) pair.
+
+    The unique constraint on (student_id, badge_key) makes badge awards
+    idempotent — the badge_engine can INSERT … ON CONFLICT DO NOTHING.
+    metadata_ maps to the DB column 'metadata' (JSONB).
+    """
+
+    __tablename__ = "student_badges"
+    __table_args__ = (
+        UniqueConstraint("student_id", "badge_key", name="uq_student_badges_student_badge"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    student_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("students.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    badge_key: Mapped[str] = mapped_column(String(50), nullable=False)
+    awarded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        server_default=func.now(),
+        index=True,
+    )
+    metadata_: Mapped[dict | None] = mapped_column(
+        "metadata", JSONB, nullable=True
+    )
+
+    student: Mapped["Student"] = relationship(back_populates="badges")
 
 
 # Register auth tables with Base.metadata so Alembic autogenerate and

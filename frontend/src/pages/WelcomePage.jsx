@@ -108,10 +108,10 @@ export default function WelcomePage() {
             marginBottom: "1.75rem",
             animation: "pulse-glow 2.5s infinite",
           }}>
-            <Brain size={72} color="#6366f1" aria-hidden="true" />
+            <Brain size={72} color="var(--color-primary)" aria-hidden="true" />
           </div>
 
-          {/* ADA title */}
+          {/* App title */}
           <h1 style={{
             fontSize: "4rem",
             fontWeight: 800,
@@ -119,12 +119,12 @@ export default function WelcomePage() {
             lineHeight: 1,
             letterSpacing: "-0.03em",
             marginBottom: "1rem",
-            background: "linear-gradient(135deg, #6366f1, #8b5cf6)",
+            background: "linear-gradient(135deg, var(--color-primary), var(--color-primary-dark))",
             WebkitBackgroundClip: "text",
             WebkitTextFillColor: "transparent",
             backgroundClip: "text",
           }}>
-            {t("app.title", "ADA")}
+            {t("app.title", "Adaptive Learner")}
           </h1>
 
           {/* Tagline */}

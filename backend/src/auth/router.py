@@ -37,17 +37,13 @@ router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 
 # Import the shared slowapi limiter so auth endpoints respect the same
 # rate-limiting budget as the rest of the API.
-try:
-    from api.rate_limiter import limiter as _limiter
-    _LIMITER_AVAILABLE = True
-except ImportError:
-    _LIMITER_AVAILABLE = False
-    _limiter = None
+from api.rate_limiter import limiter
 
 
 # ── Registration ───────────────────────────────────────────────────────────
 
 
+@limiter.limit("5/minute")
 @router.post("/register", status_code=201)
 async def register(
     request: Request,
@@ -80,19 +76,23 @@ async def register(
 # ── OTP verification + auto-login ─────────────────────────────────────────
 
 
-@router.post("/verify-otp", response_model=LoginResponse)
+@limiter.limit("10/minute")
+@router.post("/verify-otp")
 async def verify_otp(
     request: Request,
     req: VerifyOtpRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """Verify the 6-digit email OTP and return access + refresh tokens.
+    """Verify the 6-digit OTP for email verification or password reset.
 
-    The frontend receives tokens immediately so the user is logged in straight
-    after verification without a separate /login call.
+    For email_verify: returns access + refresh tokens (auto-login).
+    For password_reset: returns a success message (no tokens).
     """
     try:
-        user = await service.verify_otp(db, req.email, req.otp, "email_verify")
+        user = await service.verify_otp(db, req.email, req.otp, req.purpose)
+        if req.purpose == "password_reset":
+            await db.commit()
+            return {"message": "OTP verified"}
         response = await service.create_tokens_for_user(
             db,
             user,
@@ -116,6 +116,7 @@ async def verify_otp(
 # ── Login ──────────────────────────────────────────────────────────────────
 
 
+@limiter.limit("10/minute")
 @router.post("/login", response_model=LoginResponse)
 async def login(
     request: Request,
@@ -158,6 +159,7 @@ async def login(
 # ── Token refresh ──────────────────────────────────────────────────────────
 
 
+@limiter.limit("30/minute")
 @router.post("/refresh", response_model=LoginResponse)
 async def refresh(
     request: Request,
@@ -190,8 +192,10 @@ async def refresh(
 # ── Current user ───────────────────────────────────────────────────────────
 
 
+@limiter.limit("60/minute")
 @router.get("/me", response_model=UserResponse)
 async def me(
+    request: Request,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -216,6 +220,7 @@ async def me(
 # ── Password reset flow ────────────────────────────────────────────────────
 
 
+@limiter.limit("3/minute")
 @router.post("/forgot-password")
 async def forgot_password(
     request: Request,
@@ -237,6 +242,7 @@ async def forgot_password(
     }
 
 
+@limiter.limit("5/minute")
 @router.post("/reset-password")
 async def reset_password(
     request: Request,
@@ -271,6 +277,7 @@ async def reset_password(
 # ── OTP resend ─────────────────────────────────────────────────────────────
 
 
+@limiter.limit("3/minute")
 @router.post("/resend-otp")
 async def resend_otp(
     request: Request,
@@ -301,8 +308,10 @@ async def resend_otp(
 # ── Logout ─────────────────────────────────────────────────────────────────
 
 
+@limiter.limit("30/minute")
 @router.post("/logout")
 async def logout(
+    request: Request,
     req: RefreshRequest,
     db: AsyncSession = Depends(get_db),
 ):

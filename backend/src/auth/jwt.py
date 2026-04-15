@@ -1,5 +1,5 @@
 """
-JWT utilities for ADA authentication.
+JWT utilities for Adaptive Learner authentication.
 
 - Access tokens: short-lived HS256 JWTs (15 min)
 - Refresh tokens: opaque random strings stored hashed in the DB (30 days)

@@ -18,7 +18,6 @@ import {
   Loader,
 } from "lucide-react";
 import { useAdaptiveStore } from "../../store/adaptiveStore";
-import { updateStudentProgress } from "../../api/students";
 import { regenerateMCQ } from "../../api/sessions";
 import { resolveImageUrl } from "../../api/client";
 import { useStudent } from "../../context/StudentContext";
@@ -32,11 +31,17 @@ const WRONG_FEEDBACK_MS = 1800;
 function DifficultyBadge({ difficulty }) {
   const { t } = useTranslation();
   return (
-    <div className="flex gap-0.5 items-center" title={t("learning.difficultyLabel", { value: difficulty, max: 5 })}>
+    <div
+      style={{ display: "flex", gap: "2px", alignItems: "center" }}
+      title={t("learning.difficultyLabel", { value: difficulty, max: 5 })}
+    >
       {[1, 2, 3, 4, 5].map((i) => (
         <span
           key={i}
-          className={`text-xs ${i <= (difficulty || 3) ? "text-yellow-400" : "text-[var(--color-border)]"}`}
+          style={{
+            fontSize: "0.75rem",
+            color: i <= (difficulty || 3) ? "#facc15" : "#E2E8F0",
+          }}
         >
           ★
         </span>
@@ -51,16 +56,10 @@ function CheckInCard({ card, onSelect }) {
   const [selected, setSelected] = useState(null);
   const options = card.options || [];
 
-  const moodColors = ["#6366f1", "#22c55e", "#f59e0b", "#ef4444"];
+  const moodColors = ["var(--color-primary)", "#22c55e", "var(--color-warning, #FBBF24)", "#ef4444"];
 
   return (
-    <div style={{
-      display: "flex",
-      flexDirection: "column",
-      alignItems: "center",
-      gap: "1rem",
-      padding: "1rem 0",
-    }}>
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "1rem", paddingTop: "1rem", paddingBottom: "1rem" }}>
       <div className="markdown-content" style={{ textAlign: "center", maxWidth: "480px" }}>
         <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]} skipHtml={true}>
           {card.content}
@@ -107,7 +106,7 @@ function CheckInCard({ card, onSelect }) {
   );
 }
 
-export default function CardLearningView({ remediationMode = false }) {
+export default function CardLearningView({ remediationMode = false, onCardStatesChange }) {
   const { t } = useTranslation();
   const {
     cards,
@@ -118,7 +117,6 @@ export default function CardLearningView({ remediationMode = false }) {
     goToNextCard,
     goToPrevCard,
     finishCards,
-    startRecheck,
     sendAssistMessage,
     loading,
     assistLoading,
@@ -174,6 +172,11 @@ export default function CardLearningView({ remediationMode = false }) {
   // Per-card question state: { mcqIdx, mcqCorrect, mcqFeedback, quickCheckDone, checkinDone }
   const [cardStates, setCardStates] = useState({});
   const feedbackTimerRef = useRef(null);
+
+  // Notify parent (LearningPage) when cardStates changes so VerticalProgressRail gets live data
+  useEffect(() => {
+    if (onCardStatesChange) onCardStatesChange(cardStates);
+  }, [cardStates, onCardStatesChange]);
 
   // Assistant panel reveal: hidden until first answer submitted
   const [showAssistant, setShowAssistant] = useState(false);
@@ -233,12 +236,12 @@ export default function CardLearningView({ remediationMode = false }) {
   // Unified question source: prefer replacementMcq (generated after wrong answer),
   // then new schema card.question.
   // Normalize to a consistent shape: { question, options, correct_index, explanation }
-  const mcq = (() => {
+  const mcq = useMemo(() => {
     const raw = cs.replacementMcq || card?.question || null;
     if (!raw) return null;
     // New schema uses "text" field; old schema uses "question" field
     return raw.text ? { ...raw, question: raw.text } : raw;
-  })();
+  }, [cs.replacementMcq, card]);
 
   // Split questions into pools (only for cards that have questions[] — old schema)
   const mcqPool = useMemo(
@@ -324,10 +327,7 @@ export default function CardLearningView({ remediationMode = false }) {
       if (correct) setChunkCorrect((n) => n + 1);
 
       if (correct) {
-        awardXP(10);
         recordAnswer(true);
-        const { streak } = useAdaptiveStore.getState();
-        updateStudentProgress(student?.id, 10, streak).catch(() => {});
       } else {
         recordAnswer(false);
       }
@@ -414,12 +414,9 @@ export default function CardLearningView({ remediationMode = false }) {
       const correct = optionIndex === q.correct_index;
       trackEvent("question_answered", { question_type: "mcq", correct, card_index: currentCardIndex, concept_id: session?.concept_id, concept_title: conceptTitle });
 
-      // XP + streak tracking
+      // Answer streak tracking (XP comes from backend via recordCardInteraction response)
       if (correct) {
-        awardXP(10);
         recordAnswer(true);
-        const { streak } = useAdaptiveStore.getState();
-        updateStudentProgress(student?.id, 10, streak).catch(() => {});
       } else {
         recordAnswer(false);
       }
@@ -460,23 +457,33 @@ export default function CardLearningView({ remediationMode = false }) {
   );
 
 
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
   // Collect signals and call adaptive goToNextCard
   const handleNextCard = useCallback(async () => {
+    if (isSubmitting) return;
     if (feedbackTimerRef.current) {
       clearTimeout(feedbackTimerRef.current);
       feedbackTimerRef.current = null;
     }
 
-    await goToNextCard({
-      cardIndex:           currentCardIndex,
-      timeOnCardSec:       cardStartTimeRef.current !== null ? (performance.now() - cardStartTimeRef.current) / 1000 : 0,
-      wrongAttempts:       wrongAttemptsRef.current,
-      selectedWrongOption: selectedWrongOptionRef.current,
-      hintsUsed:           hintsUsedRef.current,
-      idleTriggers:        idleTriggerCount,
-    });
-    setShowAssistant(false);
-  }, [currentCardIndex, idleTriggerCount, goToNextCard]);
+    setIsSubmitting(true);
+    try {
+      await goToNextCard({
+        cardIndex:           currentCardIndex,
+        timeOnCardSec:       cardStartTimeRef.current !== null ? (performance.now() - cardStartTimeRef.current) / 1000 : 0,
+        wrongAttempts:       wrongAttemptsRef.current,
+        selectedWrongOption: selectedWrongOptionRef.current,
+        hintsUsed:           hintsUsedRef.current,
+        idleTriggers:        idleTriggerCount,
+        isCorrect:           cs.mcqCorrect || cs.quickCheckDone,
+        difficulty:          card?.difficulty ?? null,
+      });
+      setShowAssistant(false);
+    } finally {
+      setIsSubmitting(false);
+    }
+  }, [currentCardIndex, idleTriggerCount, goToNextCard, isSubmitting, cs.mcqCorrect, cs.quickCheckDone, card?.difficulty]);
 
   const handleNextChunk = useCallback(async () => {
     // If exam questions were generated for this teaching chunk, show Q&A first
@@ -505,28 +512,19 @@ export default function CardLearningView({ remediationMode = false }) {
       hintsUsed:         hintsUsedRef.current,
       idleTriggers:      idleTriggerCount,
       adaptationApplied: adaptationApplied ?? null,
+      isCorrect:         cs.mcqCorrect || cs.quickCheckDone,
+      difficulty:        card?.difficulty ?? null,
     };
-    if (remediationMode && session?.id) {
-      // Record last card interaction then trigger recheck
-      startRecheck(session.id);
-    } else {
-      finishCards(signals);
-    }
-  }, [currentCardIndex, idleTriggerCount, adaptationApplied, remediationMode, session, startRecheck, finishCards]);
+    finishCards(signals);
+  }, [currentCardIndex, idleTriggerCount, adaptationApplied, finishCards, cs.mcqCorrect, cs.quickCheckDone, card?.difficulty]);
 
   // Loading skeleton while adaptive card is being fetched
   if (adaptiveCardLoading) {
     return (
-      <div className="flex gap-4 items-start">
-        <div className="flex-1 min-w-0">
+      <div style={{ display: "flex", gap: "2rem", alignItems: "flex-start" }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
           <CardSkeleton />
-          <p style={{
-            textAlign: "center",
-            color: "var(--color-text-muted)",
-            fontSize: "0.9rem",
-            marginTop: "0.75rem",
-            fontWeight: 600,
-          }}>
+          <p style={{ textAlign: "center", color: "var(--color-text-muted)", fontSize: "0.9rem", marginTop: "0.75rem", fontWeight: 600 }}>
             {t("learning.generatingCard")}
           </p>
         </div>
@@ -540,14 +538,7 @@ export default function CardLearningView({ remediationMode = false }) {
   if (!card) {
     if (cards.length === 0) {
       return (
-        <div style={{
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          justifyContent: "center",
-          height: "50vh",
-          gap: "1rem",
-        }}>
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "50vh", gap: "1rem" }}>
           <p style={{ color: "var(--color-text-muted)", fontSize: "1rem" }}>
             {(loading || nextCardInFlight) ? t("learning.generatingCards") : t("learning.noCardsError")}
           </p>
@@ -562,9 +553,9 @@ export default function CardLearningView({ remediationMode = false }) {
   const headerGradient = "linear-gradient(135deg, var(--color-primary), var(--color-accent))";
 
   return (
-    <div className="flex gap-6 items-start">
+    <div style={{ display: "flex", gap: "20px", alignItems: "flex-start" }}>
       {/* ─── Main Card Area ─── */}
-      <div className="flex-1 min-w-0 transition-all duration-500">
+      <div style={{ flex: 1, minWidth: 0, transition: "all 0.5s" }}>
         {/* Segmented progress bar */}
         <ProgressDots cards={cards} cardStates={cardStates} currentCardIndex={currentCardIndex} />
 
@@ -577,21 +568,40 @@ export default function CardLearningView({ remediationMode = false }) {
 
         {/* Legacy chunk progress bar — old totalChunks field */}
         {totalChunks > 0 && chunkList.length === 0 && (
-          <div style={{ marginBottom: "12px" }}>
-            <div style={{ fontSize: "0.75rem", color: "#888", marginBottom: "4px" }}>
+          <div style={{ marginBottom: "0.75rem" }}>
+            <div style={{ fontSize: "0.75rem", color: "#9ca3af", marginBottom: "0.25rem" }}>
               {t("chunk.progress", { current: currentChunkIndex + 1, total: totalChunks })}
             </div>
-            <div style={{ height: "4px", background: "#e5e7eb", borderRadius: "2px" }}>
+            <div style={{ height: "4px", backgroundColor: "#e5e7eb", borderRadius: "2px" }}>
               <div
                 style={{
                   height: "100%",
-                  background: "#6366f1",
+                  backgroundColor: "var(--color-primary)",
                   borderRadius: "2px",
+                  transition: "width 300ms ease-in-out",
                   width: `${((currentChunkIndex + 1) / totalChunks) * 100}%`,
-                  transition: "width 0.3s ease",
                 }}
               />
             </div>
+          </div>
+        )}
+
+        {/* Practice mode banner — shown when current chunk is an exercise chunk */}
+        {chunkList[chunkIndex]?.chunk_type === "exercise" && !remediationMode && (
+          <div style={{
+            marginBottom: "0.75rem",
+            padding: "0.5rem 1rem",
+            borderRadius: "12px",
+            backgroundColor: "#fffbeb",
+            border: "1.5px solid #fcd34d",
+            color: "#92400e",
+            fontSize: "0.875rem",
+            fontWeight: 600,
+            display: "flex",
+            alignItems: "center",
+            gap: "0.5rem",
+          }}>
+            <span aria-hidden="true">✏️</span> {t("learning.practiceMode", "Practice Mode — applying what you learned")}
           </div>
         )}
 
@@ -600,61 +610,48 @@ export default function CardLearningView({ remediationMode = false }) {
 
         {/* Motivational micro-feedback banner */}
         {motivationalNote && (
-          <div style={{
-            marginBottom: "0.75rem",
-            padding: "0.5rem 1rem",
-            borderRadius: "var(--radius-md)",
-            backgroundColor: "color-mix(in srgb, var(--color-success) 10%, var(--color-surface))",
-            border: "1.5px solid color-mix(in srgb, var(--color-success) 30%, var(--color-border))",
-            color: "var(--color-text)",
-            fontSize: "0.875rem",
-            fontWeight: 600,
-            display: "flex",
-            alignItems: "center",
-            gap: "0.5rem",
-          }}>
-            {performanceVsBaseline === "FASTER" && <span>⚡</span>}
+          <div
+            style={{
+              marginBottom: "0.75rem",
+              padding: "0.5rem 1rem",
+              borderRadius: "12px",
+              color: "var(--color-text)",
+              fontSize: "0.875rem",
+              fontWeight: 600,
+              display: "flex",
+              alignItems: "center",
+              gap: "0.5rem",
+              backgroundColor: "color-mix(in srgb, var(--color-success) 10%, var(--color-surface))",
+              border: "1.5px solid color-mix(in srgb, var(--color-success) 30%, var(--color-border))",
+            }}
+          >
+            {performanceVsBaseline === "FASTER" && <span aria-hidden="true">⚡</span>}
             {motivationalNote}
           </div>
         )}
 
         {/* Card Content */}
         <div
+          style={{ backgroundColor: "#FFFFFF", borderRadius: "16px", border: "2px solid #E2E8F0", overflow: "hidden" }}
           className={`${mode === "SLOW" ? "adaptive-slow" : ""} ${mode === "FAST" ? "adaptive-excelling" : ""} ${mode === "STRUGGLING" ? "adaptive-struggling" : ""}`}
-          style={{
-            backgroundColor: "var(--color-surface)",
-            borderRadius: "16px",
-            border: "2px solid var(--color-border)",
-            overflow: "hidden",
-          }}
         >
           {/* Card Header */}
-          <div style={{
-            background: headerGradient,
-            padding: "1rem 1.5rem",
-            display: "flex",
-            alignItems: "center",
-            gap: "0.75rem",
-          }}>
-            <div style={{
-              width: "36px", height: "36px", borderRadius: "50%",
-              backgroundColor: "rgba(255,255,255,0.2)",
-              display: "flex", alignItems: "center", justifyContent: "center",
-              color: "#fff", fontWeight: 800, fontSize: "0.9rem",
-              flexShrink: 0,
-            }}>
+          <div
+            style={{ display: "flex", alignItems: "center", gap: "12px", padding: "16px 24px", background: headerGradient }}
+          >
+            <div style={{ width: "36px", height: "36px", borderRadius: "50%", backgroundColor: "rgba(255,255,255,0.2)", display: "flex", alignItems: "center", justifyContent: "center", color: "#FFFFFF", fontWeight: 800, fontSize: "14px", flexShrink: 0 }}>
               {currentCardIndex + 1}
             </div>
-            <div className="flex-1 min-w-0">
-              <div style={{ color: "#fff", fontWeight: 700, fontSize: "1.05rem" }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ color: "#FFFFFF", fontWeight: 700, fontSize: "16px" }}>
                 {card.title}
               </div>
-              <div style={{ color: "rgba(255,255,255,0.8)", fontSize: "0.78rem", fontWeight: 500 }}>
-                {conceptTitle} — Card {currentCardIndex + 1}
+              <div style={{ color: "rgba(255,255,255,0.8)", fontSize: "12px", fontWeight: 500 }}>
+                {conceptTitle} — {t("learning.cardProgress", { current: currentCardIndex + 1 })}
               </div>
             </div>
             {/* Game HUD */}
-            <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", flexShrink: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "6px", flexShrink: 0 }}>
               <StreakMeter compact />
               <AdaptiveModeIndicator compact />
               {card.difficulty != null && (
@@ -664,24 +661,24 @@ export default function CardLearningView({ remediationMode = false }) {
           </div>
 
           {/* Card Body */}
-          <div style={{ padding: "1.5rem 1.75rem" }}>
+          <div style={{ padding: "24px 28px" }}>
             {/* Recovery card indicator */}
             {card?.is_recovery && (
-              <div style={{ fontSize: "0.8rem", color: "#f59e0b", marginBottom: "8px", fontWeight: 600 }}>
+              <div style={{ fontSize: "0.8rem", color: "var(--color-primary)", marginBottom: "0.5rem", fontWeight: 600 }}>
                 &#8635; Let's approach this differently
               </div>
             )}
 
             {/* Direct image_url rendering — new schema */}
             {card?.image_url && (
-              <div style={{ margin: "16px 0", textAlign: "center" }}>
+              <div style={{ margin: "1rem 0", textAlign: "center" }}>
                 <img
                   src={resolveImageUrl(card.image_url)}
                   alt={card.caption || "Diagram"}
                   style={{ maxWidth: "100%", maxHeight: "400px", borderRadius: "8px", objectFit: "contain" }}
                 />
                 {card.caption && (
-                  <p style={{ fontSize: "0.85rem", color: "#666", marginTop: "6px", fontStyle: "italic" }}>
+                  <p style={{ fontSize: "0.85rem", color: "#6b7280", marginTop: "6px", fontStyle: "italic" }}>
                     {card.caption}
                   </p>
                 )}
@@ -713,11 +710,11 @@ export default function CardLearningView({ remediationMode = false }) {
                     <button
                       onClick={() => updateCardState(currentCardIndex, { checkinDone: true })}
                       style={{
-                        padding: "0.6rem 1.5rem",
+                        padding: "0.625rem 1.5rem",
                         borderRadius: "9999px",
                         border: "none",
-                        backgroundColor: "#7c3aed",
-                        color: "#fff",
+                        backgroundColor: "var(--color-primary)",
+                        color: "#ffffff",
                         fontWeight: 700,
                         fontSize: "0.9rem",
                         cursor: "pointer",
@@ -729,23 +726,15 @@ export default function CardLearningView({ remediationMode = false }) {
                   </div>
                 )}
                 {cardType === "FUN" && cs.checkinDone && (
-                  <div style={{ marginTop: "0.75rem", fontSize: "0.85rem", color: "#7c3aed", fontWeight: 600 }}>
+                  <div style={{ marginTop: "0.75rem", fontSize: "0.85rem", color: "var(--color-primary)", fontWeight: 600 }}>
                     {t("learning.noted")}
                   </div>
                 )}
 
                 {/* Questions Section — old schema: cards with questions[] array */}
                 {mcqPool.length > 0 && cardType !== "FUN" && cardType !== "VISUAL" && (
-                  <div style={{
-                    marginTop: "1.5rem",
-                    paddingTop: "1.25rem",
-                    borderTop: "2px solid var(--color-border)",
-                  }}>
-                    <div style={{
-                      display: "flex", alignItems: "center", gap: "0.4rem",
-                      fontSize: "0.9rem", fontWeight: 700, color: "var(--color-primary)",
-                      marginBottom: "1rem",
-                    }}>
+                  <div style={{ marginTop: "24px", paddingTop: "20px", borderTop: "2px solid #E2E8F0" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "14px", fontWeight: 700, color: "#F97316", marginBottom: "16px" }}>
                       <BookOpen size={16} />
                       {t("learning.testUnderstanding")}
                     </div>
@@ -778,15 +767,17 @@ export default function CardLearningView({ remediationMode = false }) {
 
         {/* Mastery readiness bar — computed from live in-session MCQ performance */}
         {masteryData.withMCQ > 0 && (
-          <div className="mt-2">
-            <div className="flex justify-between text-xs mb-1" style={{ color: "var(--color-text-muted)" }}>
+          <div style={{ marginTop: "0.5rem" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.75rem", marginBottom: "0.25rem", color: "var(--color-text-muted)" }}>
               <span>{t("learning.masteryReadiness")}</span>
               <span>{masteryData.correct}/{masteryData.withMCQ} correct</span>
             </div>
-            <div className="h-1.5 rounded-full overflow-hidden" style={{ backgroundColor: "var(--color-border)" }}>
+            <div style={{ height: "6px", borderRadius: "9999px", overflow: "hidden", backgroundColor: "var(--color-border)" }}>
               <div
-                className="h-full rounded-full transition-all duration-500"
                 style={{
+                  height: "100%",
+                  borderRadius: "9999px",
+                  transition: "all 500ms",
                   width: `${masteryData.score * 100}%`,
                   backgroundColor:
                     masteryData.score >= 0.8
@@ -822,22 +813,14 @@ export default function CardLearningView({ remediationMode = false }) {
           onFinish={handleFinish}
           remediationMode={remediationMode}
           chunkQuestions={chunkQuestions}
+          isSubmitting={isSubmitting}
           t={t}
         />
 
       </div>
 
       {/* ─── Assistant Panel — slides in after first answer ─── */}
-      <div
-        style={{
-          width: "320px",
-          opacity: 1,
-          flexShrink: 0,
-          position: "sticky",
-          top: "70px",
-          alignSelf: "flex-start",
-        }}
-      >
+      <div style={{ width: "320px", flexShrink: 0, position: "sticky", top: "70px", alignSelf: "flex-start" }}>
         <div style={{ width: "320px" }}>
           <AssistantPanel />
         </div>
@@ -855,34 +838,27 @@ function ProgressDots({ cards, cardStates, currentCardIndex }) {
   const manyCards = cards.length > 20;
   const dotSize = manyCards ? 6 : 8;
   return (
-    <div
-      style={{
-        display: "flex",
-        flexWrap: "wrap",
-        justifyContent: "center",
-        gap: "4px",
-        maxWidth: "100%",
-        marginBottom: "1rem",
-      }}
-    >
+    <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", gap: "4px", maxWidth: "100%", marginBottom: "1rem" }}>
       {cards.map((_, i) => {
         const csDot = cardStates[i];
         const isDone = csDot?.mcqCorrect || csDot?.quickCheckDone;
-        const colorClass = isDone
-          ? "bg-[var(--color-success)]"
+        const bgColor = isDone
+          ? "var(--color-success)"
           : i === currentCardIndex
-          ? "bg-[var(--color-primary)]"
+          ? "var(--color-primary)"
           : i < currentCardIndex
-          ? "bg-[var(--color-primary)]/60"
-          : "bg-[var(--color-border)]";
+          ? "color-mix(in srgb, var(--color-primary) 60%, transparent)"
+          : "var(--color-border)";
         return (
           <div
             key={i}
-            className={`rounded-full transition-all duration-300 ${colorClass}`}
             style={{
               width: dotSize,
               height: dotSize,
+              borderRadius: "9999px",
+              transition: "all 300ms",
               flexShrink: 0,
+              backgroundColor: bgColor,
             }}
           />
         );
@@ -894,19 +870,21 @@ function ProgressDots({ cards, cardStates, currentCardIndex }) {
 /* ─── Remediation banner ─── */
 function RemediationBanner() {
   return (
-    <div style={{
-      marginBottom: "0.875rem",
-      padding: "0.625rem 1rem",
-      borderRadius: "var(--radius-md)",
-      backgroundColor: "color-mix(in srgb, #f59e0b 12%, var(--color-surface))",
-      border: "1.5px solid color-mix(in srgb, #f59e0b 35%, var(--color-border))",
-      color: "var(--color-text)",
-      fontSize: "0.875rem",
-      fontWeight: 700,
-      display: "flex",
-      alignItems: "center",
-      gap: "0.5rem",
-    }}>
+    <div
+      style={{
+        marginBottom: "0.875rem",
+        padding: "0.625rem 1rem",
+        borderRadius: "12px",
+        color: "var(--color-text)",
+        fontSize: "0.875rem",
+        fontWeight: 700,
+        display: "flex",
+        alignItems: "center",
+        gap: "0.5rem",
+        backgroundColor: "color-mix(in srgb, var(--color-primary) 12%, var(--color-surface))",
+        border: "1.5px solid color-mix(in srgb, var(--color-primary) 35%, var(--color-border))",
+      }}
+    >
       <span aria-hidden="true">💪</span>
       Let's look at these parts together!
     </div>
@@ -917,31 +895,38 @@ function RemediationBanner() {
 function NavButtons({
   currentCardIndex, maxReachedIndex, isLastCard, isLastCardOfNonFinalChunk,
   canProceed, loading, nextChunkInFlight, nextChunkCards,
-  onPrev, onNext, onNextChunk, onFinish, remediationMode, chunkQuestions, t,
+  onPrev, onNext, onNextChunk, onFinish, remediationMode, chunkQuestions, isSubmitting, t,
 }) {
   // Determine which primary action to show on the right side
   const showNextSection = isLastCardOfNonFinalChunk && canProceed;
   const showFinish = isLastCard && canProceed;
   const showNextCard = !showNextSection && !showFinish;
 
+  const prevDisabled = currentCardIndex === 0;
+  const nextSectionDisabled = nextChunkInFlight && !nextChunkCards;
+  const finishDisabled = loading;
+  const nextCardActive = currentCardIndex < maxReachedIndex || (canProceed && !isLastCard);
+  const nextCardDisabled = isSubmitting || (currentCardIndex < maxReachedIndex ? false : (!canProceed || isLastCard));
+
   return (
-    <div style={{
-      display: "flex", justifyContent: "space-between", alignItems: "center",
-      marginTop: "1rem", gap: "0.5rem",
-    }}>
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: "1rem", gap: "0.5rem" }}>
       <button
         onClick={onPrev}
-        disabled={currentCardIndex === 0}
+        disabled={prevDisabled}
         style={{
-          display: "flex", alignItems: "center", gap: "0.4rem",
-          padding: "0.7rem 1.2rem", borderRadius: "12px",
+          display: "flex",
+          alignItems: "center",
+          gap: "6px",
+          padding: "0.75rem 1.25rem",
+          borderRadius: "12px",
           border: "2px solid var(--color-border)",
           backgroundColor: "var(--color-surface)",
-          color: currentCardIndex === 0 ? "var(--color-text-muted)" : "var(--color-text)",
-          fontWeight: 600, fontSize: "0.9rem",
-          cursor: currentCardIndex === 0 ? "not-allowed" : "pointer",
+          fontWeight: 600,
+          fontSize: "0.9rem",
           fontFamily: "inherit",
-          opacity: currentCardIndex === 0 ? 0.5 : 1,
+          color: prevDisabled ? "var(--color-text-muted)" : "var(--color-text)",
+          cursor: prevDisabled ? "not-allowed" : "pointer",
+          opacity: prevDisabled ? 0.5 : 1,
         }}
       >
         <ChevronLeft size={18} /> {t("learning.previous")}
@@ -950,15 +935,20 @@ function NavButtons({
       {showNextSection && (
         <button
           onClick={onNextChunk}
-          disabled={nextChunkInFlight && !nextChunkCards}
+          disabled={nextSectionDisabled}
           style={{
-            display: "flex", alignItems: "center", gap: "0.4rem",
-            padding: "0.7rem 1.4rem", borderRadius: "12px", border: "none",
-            backgroundColor: (nextChunkInFlight && !nextChunkCards) ? "var(--color-border)" : "var(--color-primary)",
-            color: (nextChunkInFlight && !nextChunkCards) ? "var(--color-text-muted)" : "#fff",
-            fontWeight: 700, fontSize: "0.95rem",
-            cursor: (nextChunkInFlight && !nextChunkCards) ? "not-allowed" : "pointer",
+            display: "flex",
+            alignItems: "center",
+            gap: "6px",
+            padding: "0.75rem 1.25rem",
+            borderRadius: "12px",
+            border: "none",
+            fontWeight: 700,
+            fontSize: "0.95rem",
             fontFamily: "inherit",
+            backgroundColor: nextSectionDisabled ? "var(--color-border)" : "var(--color-primary)",
+            color: nextSectionDisabled ? "var(--color-text-muted)" : "#ffffff",
+            cursor: nextSectionDisabled ? "not-allowed" : "pointer",
           }}
         >
           {nextChunkInFlight && !nextChunkCards ? (
@@ -977,15 +967,21 @@ function NavButtons({
       {showFinish && (
         <button
           onClick={onFinish}
-          disabled={loading}
+          disabled={finishDisabled}
           style={{
-            display: "flex", alignItems: "center", gap: "0.4rem",
-            padding: "0.7rem 1.5rem", borderRadius: "12px", border: "none",
-            backgroundColor: loading ? "var(--color-border)" : "var(--color-success)",
-            color: "#fff", fontWeight: 700, fontSize: "0.95rem",
-            cursor: loading ? "not-allowed" : "pointer",
+            display: "flex",
+            alignItems: "center",
+            gap: "6px",
+            padding: "0.75rem 1.5rem",
+            borderRadius: "12px",
+            border: "none",
+            color: "#ffffff",
+            fontWeight: 700,
+            fontSize: "0.95rem",
             fontFamily: "inherit",
-            boxShadow: loading ? "none" : "0 4px 12px rgba(34,197,94,0.3)",
+            backgroundColor: finishDisabled ? "var(--color-border)" : "#22C55E",
+            cursor: finishDisabled ? "not-allowed" : "pointer",
+            boxShadow: finishDisabled ? "none" : "0 4px 12px rgba(34,197,94,0.3)",
           }}
         >
           {loading ? (
@@ -1005,15 +1001,22 @@ function NavButtons({
       {showNextCard && (
         <button
           onClick={onNext}
-          disabled={currentCardIndex < maxReachedIndex ? false : (!canProceed || isLastCard)}
+          disabled={nextCardDisabled}
           style={{
-            display: "flex", alignItems: "center", gap: "0.4rem",
-            padding: "0.7rem 1.2rem", borderRadius: "12px", border: "none",
-            backgroundColor: (currentCardIndex < maxReachedIndex || (canProceed && !isLastCard)) ? "var(--color-primary)" : "var(--color-border)",
-            color: (currentCardIndex < maxReachedIndex || (canProceed && !isLastCard)) ? "#fff" : "var(--color-text-muted)",
-            fontWeight: 600, fontSize: "0.9rem",
-            cursor: (currentCardIndex < maxReachedIndex || (canProceed && !isLastCard)) ? "pointer" : "not-allowed",
+            display: "flex",
+            alignItems: "center",
+            gap: "6px",
+            padding: "0.75rem 1.25rem",
+            borderRadius: "12px",
+            border: "none",
+            fontWeight: 600,
+            fontSize: "0.9rem",
             fontFamily: "inherit",
+            backgroundColor: nextCardActive ? "var(--color-primary-dark, #EA580C)" : "var(--color-border)",
+            color: nextCardActive ? "#ffffff" : "var(--color-text-muted)",
+            cursor: nextCardDisabled ? "not-allowed" : "pointer",
+            opacity: isSubmitting ? 0.6 : 1,
+            pointerEvents: isSubmitting ? "none" : "auto",
           }}
         >
           {t("learning.next")} <ChevronRight size={18} />
@@ -1044,27 +1047,15 @@ function MCQBlock({ question, index, feedback, isCorrect, onAnswer }) {
             : "var(--color-border)"
         }`,
         backgroundColor: isCorrect
-          ? "rgba(34,197,94,0.05)"
+          ? "color-mix(in srgb, var(--color-success, #22c55e) 5%, var(--color-bg))"
           : answered && !feedback?.correct
-          ? "rgba(239,68,68,0.05)"
+          ? "color-mix(in srgb, var(--color-danger, #ef4444) 5%, var(--color-bg))"
           : "var(--color-bg)",
         animation: answered && !feedback?.correct ? "shake 0.35s ease-out" : "none",
       }}
     >
-      <div
-        style={{
-          fontSize: "0.95rem", fontWeight: 600, color: "var(--color-text)",
-          marginBottom: "0.75rem", lineHeight: 1.5,
-        }}
-      >
-        <span
-          style={{
-            display: "inline-flex", alignItems: "center", justifyContent: "center",
-            width: "24px", height: "24px", borderRadius: "50%",
-            backgroundColor: "var(--color-primary)", color: "#fff",
-            fontSize: "0.75rem", fontWeight: 800, marginRight: "0.5rem", flexShrink: 0,
-          }}
-        >
+      <div style={{ fontSize: "15px", fontWeight: 600, color: "#0F172A", marginBottom: "12px", lineHeight: 1.5 }}>
+        <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: "24px", height: "24px", borderRadius: "50%", backgroundColor: "#EA580C", color: "#FFFFFF", fontSize: "12px", fontWeight: 800, marginRight: "8px", flexShrink: 0 }}>
           {index}
         </span>
         <ReactMarkdown
@@ -1077,7 +1068,7 @@ function MCQBlock({ question, index, feedback, isCorrect, onAnswer }) {
         </ReactMarkdown>
       </div>
 
-      <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
         {question.options.map((opt, oi) => {
           const isSelected = answered && feedback?.answer === oi;
           const optIsCorrect = oi === question.correct_index;
@@ -1088,8 +1079,8 @@ function MCQBlock({ question, index, feedback, isCorrect, onAnswer }) {
           let bgColor = "var(--color-surface)";
           let textColor = "var(--color-text)";
 
-          if (showCorrect) { borderColor = "#22c55e"; bgColor = "rgba(34,197,94,0.1)"; textColor = "#166534"; }
-          else if (showWrong) { borderColor = "#ef4444"; bgColor = "rgba(239,68,68,0.1)"; textColor = "#991b1b"; }
+          if (showCorrect) { borderColor = "var(--color-success, #22c55e)"; bgColor = "color-mix(in srgb, var(--color-success, #22c55e) 10%, transparent)"; textColor = "var(--color-success-dark, #166534)"; }
+          else if (showWrong) { borderColor = "var(--color-danger, #ef4444)"; bgColor = "color-mix(in srgb, var(--color-danger, #ef4444) 10%, transparent)"; textColor = "var(--color-danger-dark, #991b1b)"; }
 
           return (
             <button
@@ -1128,7 +1119,7 @@ function MCQBlock({ question, index, feedback, isCorrect, onAnswer }) {
                   width: "28px", height: "28px", borderRadius: "50%",
                   display: "flex", alignItems: "center", justifyContent: "center",
                   flexShrink: 0, fontSize: "0.75rem", fontWeight: 700,
-                  backgroundColor: showCorrect ? "#22c55e" : showWrong ? "#ef4444" : "color-mix(in srgb, var(--color-primary) 10%, var(--color-surface))",
+                  backgroundColor: showCorrect ? "var(--color-success, #22c55e)" : showWrong ? "var(--color-danger, #ef4444)" : "color-mix(in srgb, var(--color-primary) 10%, var(--color-surface))",
                   color: showCorrect || showWrong ? "#fff" : "var(--color-primary)",
                 }}
               >
@@ -1151,11 +1142,15 @@ function MCQBlock({ question, index, feedback, isCorrect, onAnswer }) {
       {answered && (
         <div
           style={{
-            marginTop: "0.6rem",
+            marginTop: "0.625rem",
             padding: "0.5rem 0.75rem",
             borderRadius: "8px",
-            backgroundColor: feedback.correct ? "rgba(34,197,94,0.08)" : "rgba(239,68,68,0.08)",
-            fontSize: "0.85rem", lineHeight: 1.4, color: "var(--color-text)",
+            fontSize: "0.85rem",
+            lineHeight: 1.4,
+            color: "var(--color-text)",
+            backgroundColor: feedback.correct
+              ? "color-mix(in srgb, var(--color-success, #22c55e) 8%, transparent)"
+              : "color-mix(in srgb, var(--color-danger, #ef4444) 8%, transparent)",
           }}
         >
           <span style={{ fontWeight: 700, color: feedback.correct ? "var(--color-success)" : "var(--color-danger)" }}>
@@ -1167,4 +1162,3 @@ function MCQBlock({ question, index, feedback, isCorrect, onAnswer }) {
     </div>
   );
 }
-

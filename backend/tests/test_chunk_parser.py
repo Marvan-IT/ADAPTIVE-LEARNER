@@ -545,6 +545,155 @@ class TestParseBookMmdWithSyntheticContent:
             assert chunk.text.strip(), f"Empty text found: {chunk.heading}"
 
 
+# ── Track C fix verification tests ───────────────────────────────────────────
+
+
+class TestMaxRealSectionCap:
+    """Verify _MAX_REAL_SECTION_IN_CHAPTER was raised from 10 to 99 (Track C fix)."""
+
+    def test_max_real_section_cap_is_99(self):
+        """_MAX_REAL_SECTION_IN_CHAPTER must equal 99.
+
+        Business rule: the old value of 10 incorrectly discarded legitimate
+        instructional sections in nursing/allied-health OpenStax books whose
+        chapters have >10 sections. The body-word filter (MIN_SECTION_BODY_WORDS=30)
+        and TOC whitelist now handle fake section rejection instead.
+        """
+        from extraction.chunk_parser import _MAX_REAL_SECTION_IN_CHAPTER
+        assert _MAX_REAL_SECTION_IN_CHAPTER == 99, (
+            f"Expected 99 (Track C fix), got {_MAX_REAL_SECTION_IN_CHAPTER}. "
+            "Sections numbered >10 per chapter in nursing books were wrongly discarded."
+        )
+
+    def test_section_numbered_11_is_not_rejected_by_cap(self, tmp_path):
+        """Section 1.11 must produce a chunk now that the cap is 99.
+
+        Business rule: with _MAX_REAL_SECTION_IN_CHAPTER=10 the old code dropped
+        section 1.11, incorrectly classifying it as a figure reference. Any book
+        with 11+ sections per chapter would silently lose content.
+        """
+        _BODY = (
+            "This important mathematical concept is foundational for students. "
+            "Careful study and regular practice are essential for mastering this topic. "
+            "Students who understand it will succeed in subsequent chapters.\n"
+        )
+        content = (
+            f"### 1.11 Eleventh Section\n\nContent for section eleven. {_BODY}\n"
+            f"### 1.1 First Section\n\nContent for section one. {_BODY}\n"
+        )
+        mmd = tmp_path / "book.mmd"
+        mmd.write_text(content, encoding="utf-8")
+        chunks = parse_book_mmd(mmd, "nursingbook")
+        concept_ids = {c.concept_id for c in chunks}
+        # With cap=99, section 1.11 must not be discarded
+        assert "nursingbook_1.11" in concept_ids, (
+            f"Section 1.11 was incorrectly filtered. Present concepts: {sorted(concept_ids)}"
+        )
+
+
+class TestTocWhitelistFiltering:
+    """Verify that the TOC whitelist drops fake sections (Track C fix, hardcoded path)."""
+
+    # A body long enough to clear MIN_SECTION_BODY_WORDS=30
+    _REAL_BODY = (
+        "This important mathematical concept is foundational for students. "
+        "Careful study and regular practice are essential for mastering this topic. "
+        "Understanding this helps with all subsequent chapters in the book. "
+        "Always review your work and check answers carefully.\n"
+    )
+
+    def _build_toc_mmd(self, real_sections: list[str], fake_sections: list[str]) -> str:
+        """
+        Build a synthetic .mmd with:
+        1. A dense TOC region listing only real_sections (≥3 entries triggers detection)
+        2. Body content for both real and fake sections
+
+        The TOC region must appear in the first 20% of the document. We front-load it
+        with enough X.Y lines to breach the density threshold of 3 matches per 2000-char
+        window in parse_toc().
+        """
+        toc_lines = []
+        # List every real section number so the TOC region has high density
+        for sn in real_sections:
+            toc_lines.append(f"{sn} Real Section {sn}\n")
+        # Also pad with a few extra X.Y entries to ensure density ≥ 3
+        for extra in ["1.98", "1.99"]:
+            if extra not in real_sections:
+                toc_lines.append(f"{extra} Extra Padding Entry\n")
+
+        toc_block = "\n".join(toc_lines) + "\n\n"
+
+        # Body sections — real ones have sufficient text, fake ones are short stubs
+        body_parts = []
+        for sn in real_sections:
+            ch, sec = sn.split(".")
+            body_parts.append(
+                f"### {ch}.{sec} Real Section\n\n"
+                f"Content for section {sn}. {self._REAL_BODY}\n"
+            )
+        for sn in fake_sections:
+            ch, sec = sn.split(".")
+            body_parts.append(
+                f"### {ch}.{sec} Fake Example\n\n"
+                "Short stub text only.\n"
+            )
+
+        return toc_block + "\n".join(body_parts)
+
+    def test_parse_book_mmd_toc_whitelist_filters_fake_sections(self, tmp_path):
+        """parse_book_mmd with TOC whitelist drops sections absent from the TOC.
+
+        Business rule: when parse_toc() detects a TOC region, only sections whose
+        X.Y number appears in that TOC are real instructional sections. Section
+        numbers appearing only in the body (exercise stubs, figure references,
+        etc.) must be discarded by the whitelist filter.
+
+        Here: 1.1 is in the TOC (real); 1.37 is NOT in the TOC (fake stub).
+        After filtering, only testbook_1.1 must appear in the output.
+        """
+        content = self._build_toc_mmd(
+            real_sections=["1.1", "1.2", "1.3", "1.4"],  # all appear in TOC
+            fake_sections=["1.37"],                        # body-only stub, no TOC entry
+        )
+        mmd = tmp_path / "book.mmd"
+        mmd.write_text(content, encoding="utf-8")
+        chunks = parse_book_mmd(mmd, "testbook")
+        concept_ids = {c.concept_id for c in chunks}
+
+        # 1.37 is not in the TOC so it must be filtered out
+        assert "testbook_1.37" not in concept_ids, (
+            f"Fake section 1.37 was NOT filtered by TOC whitelist. "
+            f"Present concepts: {sorted(concept_ids)}"
+        )
+        # At least one real section must survive
+        real_ids = {cid for cid in concept_ids if cid.startswith("testbook_1.")}
+        assert real_ids, (
+            "No real sections survived — TOC whitelist may have been too aggressive. "
+            f"Present concepts: {sorted(concept_ids)}"
+        )
+
+    def test_parse_book_mmd_without_toc_keeps_numbered_sections(self, tmp_path):
+        """parse_book_mmd without a detectable TOC keeps all numbered sections that pass word filter.
+
+        Business rule: when the file has too few X.Y patterns to form a TOC (density < 3),
+        the whitelist is skipped entirely. Sections must rely solely on the body-word
+        filter and the new _MAX_REAL_SECTION_IN_CHAPTER=99 cap.
+        """
+        # Only one section — density < 3, so no TOC detected, no whitelist applied
+        content = (
+            "### 2.5 Some Section\n\n"
+            f"Content for section two point five. {self._REAL_BODY}\n"
+        )
+        mmd = tmp_path / "book.mmd"
+        mmd.write_text(content, encoding="utf-8")
+        chunks = parse_book_mmd(mmd, "sparebook")
+        concept_ids = {c.concept_id for c in chunks}
+        assert "sparebook_2.5" in concept_ids, (
+            "Section 2.5 was filtered when no TOC should have been active. "
+            f"Present concepts: {sorted(concept_ids)}"
+        )
+
+
 # ── Integration tests: require real book.mmd ──────────────────────────────────
 
 @pytest.mark.skipif(not MMD_PATH.exists(), reason="book.mmd not present in output/prealgebra/")

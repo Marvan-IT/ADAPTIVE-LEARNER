@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect } from "react";
+import { createContext, useContext, useState, useLayoutEffect } from "react";
 
 const ThemeContext = createContext();
 
@@ -24,7 +24,7 @@ export function ThemeProvider({ children }) {
   });
 
   // data-theme drives all CSS: use teaching style when it has its own theme, else use dark/light
-  useEffect(() => {
+  useLayoutEffect(() => {
     const dataTheme = (teachingStyle !== "default") ? teachingStyle : theme;
     document.documentElement.setAttribute("data-theme", dataTheme);
     localStorage.setItem("ada_theme", theme);

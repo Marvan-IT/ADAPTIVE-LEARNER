@@ -41,13 +41,6 @@ export const startSession = (studentId, conceptId, style = "default", lessonInte
     book_slug: getBookSlugFromConceptId(conceptId),
   });
 
-export const sendResponse = (sessionId, message, engagementSignal = null) =>
-  api.post(
-    `/api/v2/sessions/${sessionId}/respond`,
-    { message, engagement_signal: engagementSignal },
-    { timeout: LLM_TIMEOUT }
-  );
-
 export const switchStyle = (sessionId, style) =>
   api.put(`/api/v2/sessions/${sessionId}/style`, { style }, { timeout: LLM_TIMEOUT });
 
@@ -72,6 +65,8 @@ export const recordCardInteraction = (sessionId, signals) =>
     hints_used:         signals.hintsUsed,
     idle_triggers:      signals.idleTriggers,
     adaptation_applied: signals.adaptationApplied ?? null,
+    difficulty:         signals.difficulty ?? null,
+    is_correct:         signals.isCorrect ?? false,
   });
 
 const COMPLETE_CARD_TIMEOUT = 30_000;
@@ -96,11 +91,6 @@ export const completeCardAndGetNext = (sessionId, signals) =>
 export const updateSessionInterests = (sessionId, interests) =>
   api.put(`/api/v2/sessions/${sessionId}/interests`, { interests });
 
-export const loadRemediationCards = (sessionId) =>
-  api.post(`/api/v2/sessions/${sessionId}/remediation-cards`, {}, { timeout: CARDS_TIMEOUT });
-
-export const beginRecheck = (sessionId) =>
-  api.post(`/api/v2/sessions/${sessionId}/recheck`, {}, { timeout: LLM_TIMEOUT });
 
 export const regenerateMCQ = (sessionId, body) =>
   api.post(`/api/v2/sessions/${sessionId}/regenerate-mcq`, body, { timeout: LLM_TIMEOUT });

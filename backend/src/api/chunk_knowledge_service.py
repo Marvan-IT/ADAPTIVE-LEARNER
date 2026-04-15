@@ -7,6 +7,8 @@ No initialization needed — queries DB on demand via AsyncSession.
 
 import json
 import logging
+import re
+import threading
 from uuid import UUID
 
 import networkx as nx
@@ -19,49 +21,122 @@ from config import OUTPUT_DIR
 logger = logging.getLogger(__name__)
 
 
+_SAFE_IMAGE_URL_RE = re.compile(r"^/images/[a-zA-Z0-9_\-./() ]+$")
+
+
 def _normalize_image_url(url: str) -> str:
     if not url:
         return url
     idx = url.find("/images/")
-    if idx > 0:
-        return url[idx:]
-    return url
+    normalized = url[idx:] if idx > 0 else url
+    # Reject path traversal attempts
+    if ".." in normalized:
+        logger.warning("Rejected path traversal in image URL: %s", url)
+        return ""
+    # Reject URLs that don't match the expected /images/... pattern
+    if not _SAFE_IMAGE_URL_RE.match(normalized):
+        logger.warning("Rejected invalid image URL pattern: %s", url)
+        return ""
+    return normalized
 
 
 _graph_cache: dict[str, nx.DiGraph] = {}
+_graph_lock = threading.Lock()
 
 
 def _load_graph(book_slug: str) -> nx.DiGraph:
-    """Load graph.json as NetworkX DiGraph, cache module-level."""
-    if book_slug not in _graph_cache:
-        path = OUTPUT_DIR / book_slug / "graph.json"
-        if not path.exists():
-            raise FileNotFoundError(
-                f"[chunk-ksvc] graph.json not found for '{book_slug}': {path}. "
-                f"Run: python -m src.extraction.graph_builder --book {book_slug}"
-            )
-        data = json.loads(path.read_text(encoding="utf-8"))
-        G = nx.DiGraph()
-        for node in data["nodes"]:
-            G.add_node(node["id"], title=node.get("title", ""))
-        for edge in data["edges"]:
-            G.add_edge(edge["source"], edge["target"])
+    """Load graph.json as NetworkX DiGraph, cache module-level with thread safety."""
+    with _graph_lock:
+        if book_slug not in _graph_cache:
+            path = OUTPUT_DIR / book_slug / "graph.json"
+            if not path.exists():
+                raise FileNotFoundError(
+                    f"[chunk-ksvc] graph.json not found for '{book_slug}': {path}. "
+                    f"Run: python -m src.extraction.graph_builder --book {book_slug}"
+                )
+            data = json.loads(path.read_text(encoding="utf-8"))
+            G = nx.DiGraph()
+            for node in data["nodes"]:
+                G.add_node(node["id"], title=node.get("title", ""))
+            for edge in data["edges"]:
+                G.add_edge(edge["source"], edge["target"])
+            _graph_cache[book_slug] = G
+        return _graph_cache[book_slug]
+
+
+def invalidate_graph_cache(book_slug: str) -> None:
+    """Remove a book's graph from the in-memory cache."""
+    _graph_cache.pop(book_slug, None)
+
+
+def _apply_overrides(G: nx.DiGraph, overrides: list) -> nx.DiGraph:
+    """Apply admin graph overrides (add/remove edges) to a copy of the graph."""
+    G_copy = G.copy()
+    for ov in overrides:
+        if ov.action == "add_edge":
+            # Only add if both nodes exist in graph
+            if G_copy.has_node(ov.source_concept) and G_copy.has_node(ov.target_concept):
+                G_copy.add_edge(ov.source_concept, ov.target_concept)
+        elif ov.action == "remove_edge":
+            if G_copy.has_edge(ov.source_concept, ov.target_concept):
+                G_copy.remove_edge(ov.source_concept, ov.target_concept)
+    return G_copy
+
+
+async def reload_graph_with_overrides(book_slug: str, db) -> nx.DiGraph:
+    """Reload graph from disk, apply admin overrides from DB, update cache.
+
+    Called after admin adds/removes prerequisite overrides.
+    """
+    # Lazy import to avoid circular deps
+    from db.models import AdminGraphOverride
+
+    # Load base graph from disk (bypass cache)
+    path = OUTPUT_DIR / book_slug / "graph.json"
+    if not path.exists():
+        raise FileNotFoundError(f"graph.json not found for '{book_slug}'")
+
+    data = json.loads(path.read_text(encoding="utf-8"))
+    G = nx.DiGraph()
+    for node in data["nodes"]:
+        G.add_node(node["id"], title=node.get("title", ""))
+    for edge in data["edges"]:
+        G.add_edge(edge["source"], edge["target"])
+
+    # Fetch overrides from DB
+    result = await db.execute(
+        select(AdminGraphOverride).where(AdminGraphOverride.book_slug == book_slug)
+    )
+    overrides = result.scalars().all()
+
+    # Apply overrides
+    if overrides:
+        G = _apply_overrides(G, overrides)
+
+    # Atomically update cache
+    with _graph_lock:
         _graph_cache[book_slug] = G
-    return _graph_cache[book_slug]
+
+    logger.info("[chunk-ksvc] Graph reloaded with %d overrides for '%s'", len(overrides), book_slug)
+    return G
 
 
 class ChunkKnowledgeService:
     """Provides chunk retrieval from PostgreSQL. No initialization needed — queries DB on demand."""
 
     async def get_chunks_for_concept(
-        self, db: AsyncSession, book_slug: str, concept_id: str
+        self, db: AsyncSession, book_slug: str, concept_id: str,
+        include_hidden: bool = False,
     ) -> list[dict]:
         """Return all chunks for a concept in order_index order."""
-        result = await db.execute(
+        query = (
             select(ConceptChunk)
             .where(ConceptChunk.book_slug == book_slug, ConceptChunk.concept_id == concept_id)
             .order_by(ConceptChunk.order_index)
         )
+        if not include_hidden:
+            query = query.where(ConceptChunk.is_hidden == False)  # noqa: E712
+        result = await db.execute(query)
         chunks = result.scalars().all()
         all_chunks = [self._chunk_to_dict(c) for c in chunks]
         # Exclude chunks with no real content — heading-only stubs (e.g. "SECTION 1.1 EXERCISES",
@@ -124,15 +199,19 @@ class ChunkKnowledgeService:
             "text": chunk.text,
             "latex": chunk.latex or [],
             "images": [],  # populated separately via get_chunk_images()
-            "chunk_type":  chunk.chunk_type,
+            "chunk_type": chunk.chunk_type,
             "is_optional": chunk.is_optional,
+            "is_hidden": chunk.is_hidden,
+            "exam_disabled": chunk.exam_disabled,
+            "admin_section_name": chunk.admin_section_name,
         }
 
     # ── Graph methods (sync) ──────────────────────────────────────────────────
 
     def preload_graph(self, book_slug: str) -> None:
         """Preload graph into module cache, clearing any stale cached version."""
-        _graph_cache.pop(book_slug, None)
+        with _graph_lock:
+            _graph_cache.pop(book_slug, None)
         _load_graph(book_slug)
 
     def get_all_nodes(self, book_slug: str) -> list[dict]:
@@ -323,8 +402,8 @@ class ChunkKnowledgeService:
         chapter = num[:dot_idx] if dot_idx != -1 else num
         return {
             "concept_id": concept_id,
-            "concept_title": primary.section,   # keep 'concept_title' key for compat with adaptive_engine
-            "title": primary.section,
+            "concept_title": primary.heading,   # keep 'concept_title' key for compat with adaptive_engine
+            "title": primary.heading,
             "chapter": chapter,
             "section": num,
             "text": primary.text,

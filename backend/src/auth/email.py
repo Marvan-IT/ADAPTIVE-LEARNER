@@ -26,18 +26,22 @@ async def send_otp_email(to_email: str, otp: str, purpose: str) -> None:
     """
     if not SMTP_HOST or not SMTP_USER or not SMTP_PASSWORD:
         # Development / CI mode: log OTP so it can be used without real email
-        logger.warning("[DEV] OTP for %s (%s): %s", to_email, purpose, otp)
+        from config import ENVIRONMENT
+        if ENVIRONMENT != "production":
+            logger.warning("[DEV] OTP for %s (%s): %s", to_email, purpose, otp)
+        else:
+            logger.error("SMTP not configured in production — OTP email for %s could not be sent", to_email)
         return
 
     subject = (
-        "Your ADA verification code"
+        "Your Adaptive Learner verification code"
         if purpose == "email_verify"
-        else "Your ADA password reset code"
+        else "Your Adaptive Learner password reset code"
     )
 
     html = f"""
     <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 20px;">
-        <h2 style="color: #7c3aed;">ADA Learning Platform</h2>
+        <h2 style="color: #7c3aed;">Adaptive Learner Platform</h2>
         <p>Your verification code is:</p>
         <p style="font-size: 32px; letter-spacing: 8px; font-weight: bold;
                   color: #7c3aed; text-align: center; padding: 16px;

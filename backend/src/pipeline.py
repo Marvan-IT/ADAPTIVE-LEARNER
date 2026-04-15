@@ -1,6 +1,6 @@
 # ruff: noqa: E402
 """
-ADA Hybrid Engine Pipeline — Main Orchestrator
+Adaptive Learner Hybrid Engine Pipeline — Main Orchestrator
 
 Two pipeline modes:
 
@@ -82,7 +82,7 @@ def run_whole_pdf_pipeline(
     start_time = time.time()
 
     print(f"\n{'='*60}")
-    print("ADA Whole-PDF Pipeline (Mathpix /v3/pdf)")
+    print("Adaptive Learner Whole-PDF Pipeline (Mathpix /v3/pdf)")
     print(f"Processing: {book_code}")
     print(f"{'='*60}\n")
 
@@ -215,7 +215,7 @@ def run_pipeline(book_code: str, no_mathpix: bool = False, use_llm: bool = False
 
     # ── Step 0: Load configuration ──────────────────────────────────
     print(f"\n{'='*60}")
-    print("ADA Hybrid Engine Pipeline")
+    print("Adaptive Learner Hybrid Engine Pipeline")
     print(f"Processing: {book_code}")
     print(f"{'='*60}\n")
 
@@ -358,7 +358,7 @@ def run_all_books(no_mathpix: bool = False, use_llm: bool = False) -> dict:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="ADA Hybrid Engine Pipeline")
+    parser = argparse.ArgumentParser(description="Adaptive Learner Hybrid Engine Pipeline")
     parser.add_argument(
         "--book",
         required=True,
@@ -430,6 +430,25 @@ if __name__ == "__main__":
             "Requires OPENAI_API_KEY and DATABASE_URL in backend/.env."
         ),
     )
+    parser.add_argument(
+        "--reprofile",
+        action="store_true",
+        default=False,
+        help=(
+            "Force re-run of the LLM Book Profiler even if a cached book_profile.json exists. "
+            "Use this when the book structure has changed or the profile needs updating. "
+            "Only relevant with --chunks."
+        ),
+    )
+    parser.add_argument(
+        "--subject",
+        default=None,
+        help=(
+            "Subject hint passed to the Book Profiler (e.g. 'nursing', 'mathematics', 'biology'). "
+            "Helps the LLM classify signals correctly for subjects it might not infer from content alone. "
+            "Only relevant with --chunks."
+        ),
+    )
     args = parser.parse_args()
 
     if args.list_books:
@@ -468,9 +487,43 @@ if __name__ == "__main__":
 
         logger.info("Starting chunk pipeline for book_slug=%s, mmd=%s", _book_slug, _mmd_path)
 
+        # ── Stage 0: Structural analysis (local, $0) ──────────────────────────
+        print("\n[Stage 0] Analyzing book structure (TOC, boundaries, frequencies)...")
+        from extraction.ocr_validator import validate_and_analyze as _validate_and_analyze
+        _mmd_text = _mmd_path.read_text(encoding="utf-8")
+        _quality_report = _validate_and_analyze(_mmd_text, _book_slug)
+        print(
+            f"  OCR quality score: {_quality_report.quality_score:.3f} | "
+            f"TOC entries: {len(_quality_report.toc_entries)} | "
+            f"Signal types: {len(_quality_report.signal_stats)}"
+        )
+
+        # ── Stage 1: Book Profiler (LLM, one-time, cached) ────────────────────
+        print("\n[Stage 1] Building book profile (LLM, cached after first run)...")
+        from extraction.book_profiler import load_or_create_profile as _load_or_create_profile
+
+        _reprofile = getattr(args, "reprofile", False)
+        if _reprofile:
+            # Delete cached profile to force re-generation
+            _profile_cache = _OUTPUT_DIR / _book_slug / "book_profile.json"
+            if _profile_cache.exists():
+                _profile_cache.unlink()
+                print(f"  Deleted cached profile to force re-profiling: {_profile_cache}")
+
+        _profile = _asyncio.run(_load_or_create_profile(_mmd_text, _book_slug, _quality_report))
+        print(
+            f"  Subject: {_profile.subject} | "
+            f"Boundary signals: {sum(1 for s in _profile.subsection_signals if s.is_boundary)} | "
+            f"Exercise markers: {len(_profile.exercise_markers)} | "
+            f"Noise patterns: {len(_profile.noise_patterns)}"
+        )
+
+        # ── Stage 2: Parse + embed + persist ─────────────────────────────────
+        print("\n[Stage 2] Parsing chunks, embedding, and saving to PostgreSQL...")
+
         async def _run_chunks():
             async with _async_session_factory() as session:
-                await _build_chunks(_book_slug, _mmd_path, session, rebuild=True)
+                await _build_chunks(_book_slug, _mmd_path, session, rebuild=True, profile=_profile)
 
         _asyncio.run(_run_chunks())
 

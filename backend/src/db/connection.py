@@ -6,6 +6,8 @@ from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, Asyn
 
 from config import DATABASE_URL
 
+# PRODUCTION: Ensure DATABASE_URL includes ?sslmode=require for encrypted connections to RDS.
+# Example: postgresql+asyncpg://user:pass@host:5432/db?sslmode=require
 engine = create_async_engine(DATABASE_URL, echo=False, pool_size=20, max_overflow=80)
 
 async_session_factory = async_sessionmaker(

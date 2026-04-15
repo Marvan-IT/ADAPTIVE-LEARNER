@@ -65,6 +65,13 @@
 - Game tokens: `--node-locked/available/mastered/weak`, `--glow-xs/sm/md/lg`, `--xp-gold`, `--xp-glow`, `--adapt-slow/excelling/struggling/bored`, `--spring-bounce`, `--spring-soft`
 - Game utility classes: `.node-mastered`, `.node-locked`, `.node-available`, `.node-weak`, `.glass-panel`, `.float-card`, `.adaptive-slow`, `.adaptive-excelling`, `.adaptive-struggling`
 
+## Auth Layout (implemented)
+- `frontend/src/layouts/AuthLayout.jsx` — split-panel layout for all auth routes; uses `<Outlet />`; left panel 45% fixed desktop, right panel `lg:ms-[45%]`; RTL-safe via logical properties (`start`/`end`/`ms`)
+- `frontend/src/layouts/ConstellationBackground.jsx` — SVG ambient animation; 18 nodes, 10 edges, 4 bright nodes with pulse rings; `useReducedMotion()` guard; all colors via `var(--color-primary)`; SVG coords are the only style exception to no-inline rule
+- Auth tagline i18n keys: `auth.tagline1`–`auth.tagline4` added to all 13 locale files
+- AuthLayout rule: ZERO inline `style={{}}` — Tailwind arbitrary values only (e.g. `text-[var(--color-primary)]`, `lg:w-[45%]`, `max-w-[440px]`)
+- LanguageSelector accepts `compact` boolean prop; safe to use without a logged-in student (no crash)
+
 ## Routing
 - `/history` is inside `<AppShell />` wrapper — requires student auth
 - AppShell dropdown has: Learning History (Link), language, theme, switch student; uses `Link` from react-router-dom

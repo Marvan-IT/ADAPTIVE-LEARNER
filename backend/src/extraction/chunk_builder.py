@@ -104,10 +104,15 @@ _LATEX_MARKER_RE = re.compile(r"\$\$?")
 
 
 def _prepare_embed_text(heading: str, text: str) -> str:
-    """Clean text for embedding: remove image tags, strip LaTeX markers."""
+    """Clean text for embedding: remove image tags, strip LaTeX markers, sanitize for JSON."""
     combined = f"{heading}\n\n{text}"
     combined = _IMG_TAG_RE.sub("", combined)
     combined = _LATEX_MARKER_RE.sub("", combined)
+    # Remove control characters that break JSON serialization (keep \t, \n, \r)
+    combined = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', combined)
+    # Remove Unicode surrogates and replacement characters
+    combined = combined.encode('utf-8', errors='ignore').decode('utf-8', errors='ignore')
+    combined = combined.replace('\ufffd', '')
     # Collapse excessive whitespace introduced by stripping
     combined = re.sub(r"\n{3,}", "\n\n", combined).strip()
     return combined[:8000]  # safety truncation (text-embedding-3-small limit ~8k tokens)
@@ -118,13 +123,24 @@ def embed_text(client: OpenAI, heading: str, text: str) -> list[float]:
     Embed chunk content using text-embedding-3-small (1536 dimensions).
 
     The embedding input is: heading + "\n\n" + text, with image/LaTeX markers stripped.
+    Falls back to embedding just the heading if the full text fails.
     """
     input_text = _prepare_embed_text(heading, text)
-    response = client.embeddings.create(
-        input=input_text,
-        model=EMBEDDING_MODEL,
-    )
-    return response.data[0].embedding
+    try:
+        response = client.embeddings.create(
+            input=input_text,
+            model=EMBEDDING_MODEL,
+        )
+        return response.data[0].embedding
+    except Exception as e:
+        logger.warning("Embedding failed for '%s' (len=%d): %s. Retrying with heading only.", heading[:60], len(input_text), e)
+        # Fallback: embed just the heading (always safe, short text)
+        fallback = re.sub(r'[\x00-\x1f\x7f\ufffd]', '', heading).strip()[:500]
+        response = client.embeddings.create(
+            input=fallback or "untitled",
+            model=EMBEDDING_MODEL,
+        )
+        return response.data[0].embedding
 
 
 # ── DB persistence ─────────────────────────────────────────────────────────────
@@ -178,7 +194,8 @@ async def save_chunk(
             existing.text = chunk.text
         if existing.latex != chunk.latex:
             existing.latex = chunk.latex
-        existing.chunk_type  = chunk.chunk_type
+        if not existing.chunk_type_locked:
+            existing.chunk_type = chunk.chunk_type
         existing.is_optional = chunk.is_optional
         logger.debug("Chunk already exists, updated: %s / %s", chunk.concept_id, chunk.heading)
         return None
@@ -216,7 +233,13 @@ async def save_chunk(
 
 # ── Main entry point ──────────────────────────────────────────────────────────
 
-async def build_chunks(book_slug: str, mmd_path: Path, db: AsyncSession, rebuild: bool = False) -> None:
+async def build_chunks(
+    book_slug: str,
+    mmd_path: Path,
+    db: AsyncSession,
+    rebuild: bool = False,
+    profile=None,
+) -> None:
     """
     Full chunk pipeline: parse → download images → embed → save to DB.
 
@@ -229,6 +252,8 @@ async def build_chunks(book_slug: str, mmd_path: Path, db: AsyncSession, rebuild
         mmd_path:  Path to the book.mmd file.
         db:        Open async SQLAlchemy session (caller manages lifetime).
         rebuild:   If True, delete all existing chunks for the book before re-inserting.
+        profile:   Optional BookProfile from book_profiler. When None, uses legacy
+                   hardcoded patterns (backward compat for 16 OpenStax math books).
     """
     if rebuild:
         from sqlalchemy import delete as _sa_delete
@@ -236,7 +261,7 @@ async def build_chunks(book_slug: str, mmd_path: Path, db: AsyncSession, rebuild
         await db.commit()
         logger.info("[rebuild] Cleared all existing chunks for book_slug=%s", book_slug)
 
-    chunks = parse_book_mmd(mmd_path, book_slug)
+    chunks = parse_book_mmd(mmd_path, book_slug, profile=profile)
     logger.info("Parsed %d chunks from %s", len(chunks), mmd_path)
 
     images_dir = mmd_path.parent / "images_downloaded"

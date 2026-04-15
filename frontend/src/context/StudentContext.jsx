@@ -37,7 +37,12 @@ export function StudentProvider({ children }) {
         }
         // Hydrate Zustand game store from DB values if present
         if (res.data.xp !== undefined || res.data.streak !== undefined) {
-          initAdaptive({ xp: res.data.xp ?? 0, streak: res.data.streak ?? 0 });
+          initAdaptive({
+            xp: res.data.xp ?? 0,
+            streak: res.data.streak ?? 0,
+            daily_streak: res.data.daily_streak ?? 0,
+            daily_streak_best: res.data.daily_streak_best ?? 0,
+          });
         }
         return getStudentMastery(studentId);
       })
@@ -54,6 +59,41 @@ export function StudentProvider({ children }) {
   const setStudent = useCallback((studentData) => {
     setStudentState(studentData);
   }, []);
+
+  // Full profile + mastery refresh — catches admin changes (name, language, mastery grants)
+  const refreshStudent = useCallback(async () => {
+    if (!user?.student_id) return;
+    try {
+      const res = await getStudent(user.student_id);
+      setStudentState(res.data);
+      if (res.data.preferred_language) {
+        i18n.changeLanguage(res.data.preferred_language);
+      }
+      if (res.data.xp !== undefined || res.data.streak !== undefined) {
+        initAdaptive({
+          xp: res.data.xp ?? 0,
+          streak: res.data.streak ?? 0,
+          daily_streak: res.data.daily_streak ?? 0,
+          daily_streak_best: res.data.daily_streak_best ?? 0,
+        });
+      }
+      const masteryRes = await getStudentMastery(user.student_id);
+      setMasteredConcepts(masteryRes.data.mastered_concepts || []);
+    } catch (err) {
+      console.error("[StudentContext] refreshStudent failed:", err);
+    }
+  }, [user?.student_id, initAdaptive]);
+
+  // Auto-refresh when tab regains focus (catches admin changes made while student was away)
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible" && user?.student_id) {
+        refreshStudent();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => document.removeEventListener("visibilitychange", handleVisibility);
+  }, [refreshStudent, user?.student_id]);
 
   const refreshMastery = useCallback(async () => {
     if (!student) return;
@@ -74,7 +114,12 @@ export function StudentProvider({ children }) {
         i18n.changeLanguage(studentData.preferred_language);
       }
       if (studentData.xp !== undefined || studentData.streak !== undefined) {
-        initAdaptive({ xp: studentData.xp ?? 0, streak: studentData.streak ?? 0 });
+        initAdaptive({
+          xp: studentData.xp ?? 0,
+          streak: studentData.streak ?? 0,
+          daily_streak: studentData.daily_streak ?? 0,
+          daily_streak_best: studentData.daily_streak_best ?? 0,
+        });
       }
       try {
         const res = await getStudentMastery(studentData.id);
@@ -86,13 +131,13 @@ export function StudentProvider({ children }) {
     [initAdaptive]
   );
 
-  const logout = useCallback(() => {
+  const logout = useCallback(async () => {
     trackEvent("student_logout", { student_id: student?.id });
     setStudentState(null);
     setMasteredConcepts([]);
     resetUser();
     // Delegate token/session cleanup to AuthContext
-    authLogout();
+    await authLogout();
   }, [student?.id, authLogout]);
 
   return (
@@ -103,6 +148,7 @@ export function StudentProvider({ children }) {
         selectStudent,
         masteredConcepts,
         refreshMastery,
+        refreshStudent,
         logout,
         loading,
       }}

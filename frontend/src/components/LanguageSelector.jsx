@@ -4,16 +4,19 @@ import { LANGUAGES } from "../i18n";
 import { useStudent } from "../context/StudentContext";
 import { useSession } from "../context/SessionContext";
 import { updateLanguage } from "../api/students";
-import { Globe, Search, Check } from "lucide-react";
+import { Globe, Search, Check, ChevronDown } from "lucide-react";
 import { trackEvent } from "../utils/analytics";
+import LanguageChangeOverlay from "./LanguageChangeOverlay";
 
-export default function LanguageSelector({ compact = false }) {
+export default function LanguageSelector({ compact = false, prominent = false }) {
   const { i18n, t } = useTranslation();
   const { student } = useStudent();
-  const { dispatch: sessionDispatch } = useSession();
+  const { dispatch: sessionDispatch, reloadCurrentChunk } = useSession();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [highlightIdx, setHighlightIdx] = useState(0);
+  const [changingLang, setChangingLang] = useState(null);
+  const [apiDone, setApiDone] = useState(false);
   const containerRef = useRef(null);
   const searchRef = useRef(null);
   const listRef = useRef(null);
@@ -36,23 +39,45 @@ export default function LanguageSelector({ compact = false }) {
         language_code: lang.code,
         previous_language: previousLang,
       });
-      i18n.changeLanguage(lang.code);
-      localStorage.setItem("ada_language", lang.code);
       setOpen(false);
       setSearch("");
       if (student) {
+        // Show overlay FIRST, then apply all changes behind it
+        setChangingLang(lang);
+        setApiDone(false);
+        // Small delay so overlay renders before UI shifts
+        await new Promise((r) => setTimeout(r, 50));
         try {
+          // Apply i18n + localStorage behind the overlay
+          i18n.changeLanguage(lang.code);
+          localStorage.setItem("ada_language", lang.code);
           const res = await updateLanguage(student.id, lang.code);
-          const { translated_headings } = res.data || {};
+          const { translated_headings, session_cache_cleared } = res.data || {};
           if (translated_headings?.length > 0) {
             sessionDispatch({ type: "LANGUAGE_CHANGED", payload: { headings: translated_headings } });
           }
+          if (session_cache_cleared && reloadCurrentChunk) {
+            await reloadCurrentChunk();
+          }
         } catch {
-          // silent — localStorage is the primary persistence
+          // Still apply i18n even if API fails
+          if (i18n.language !== lang.code) {
+            i18n.changeLanguage(lang.code);
+            localStorage.setItem("ada_language", lang.code);
+          }
+        } finally {
+          // Let React finish re-rendering all state changes behind the overlay
+          // before signaling completion (prevents visible loading flicker after overlay closes)
+          await new Promise((r) => setTimeout(r, 600));
+          setApiDone(true);
         }
+      } else {
+        // No student — just switch UI language instantly
+        i18n.changeLanguage(lang.code);
+        localStorage.setItem("ada_language", lang.code);
       }
     },
-    [i18n, student, sessionDispatch]
+    [i18n, student, sessionDispatch, reloadCurrentChunk]
   );
 
   // Close on outside click
@@ -103,29 +128,111 @@ export default function LanguageSelector({ compact = false }) {
 
   return (
     <div ref={containerRef} style={{ position: "relative" }}>
-      <button
-        onClick={() => setOpen(!open)}
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: "0.3rem",
-          padding: compact ? "0.3rem 0.6rem" : "0.4rem 0.8rem",
-          background: "none",
-          border: "1px solid var(--color-border)",
-          borderRadius: "8px",
-          color: "var(--color-text)",
-          cursor: "pointer",
-          fontFamily: "inherit",
-          fontSize: compact ? "0.8rem" : "0.85rem",
-          fontWeight: 600,
-          transition: "all 0.2s",
-        }}
-        title={t("lang.search")}
-      >
-        <Globe size={compact ? 13 : 15} />
-        <span>{currentLang.flag}</span>
-        <span>{currentLang.code.toUpperCase()}</span>
-      </button>
+      {prominent ? (
+        /* ── Prominent trigger (Dashboard) ────────────────────────── */
+        <button
+          onClick={() => setOpen(!open)}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "12px",
+            padding: "10px 18px 10px 14px",
+            background: "#FFFFFF",
+            border: "2px solid #E2E8F0",
+            borderRadius: "14px",
+            cursor: "pointer",
+            fontFamily: "'Outfit', sans-serif",
+            transition: "all 0.2s ease",
+            boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
+            minWidth: "180px",
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.borderColor = "#F97316";
+            e.currentTarget.style.boxShadow = "0 4px 16px rgba(249,115,22,0.15)";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.borderColor = "#E2E8F0";
+            e.currentTarget.style.boxShadow = "0 2px 8px rgba(0,0,0,0.06)";
+          }}
+          title={t("lang.search")}
+        >
+          {/* Flag */}
+          <span style={{
+            fontSize: "28px",
+            lineHeight: 1,
+            width: "36px",
+            height: "36px",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            borderRadius: "10px",
+            backgroundColor: "#FFF7ED",
+            flexShrink: 0,
+          }}>
+            {currentLang.flag}
+          </span>
+
+          {/* Language names */}
+          <div style={{ flex: 1, textAlign: "left", minWidth: 0 }}>
+            <div style={{
+              fontSize: "15px",
+              fontWeight: 700,
+              color: "#0F172A",
+              lineHeight: 1.2,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}>
+              {currentLang.native}
+            </div>
+            <div style={{
+              fontSize: "11px",
+              fontWeight: 500,
+              color: "#94A3B8",
+              lineHeight: 1.3,
+              letterSpacing: "0.02em",
+            }}>
+              {currentLang.name}
+            </div>
+          </div>
+
+          {/* Chevron */}
+          <ChevronDown
+            size={16}
+            style={{
+              color: "#94A3B8",
+              flexShrink: 0,
+              transition: "transform 0.2s",
+              transform: open ? "rotate(180deg)" : "rotate(0deg)",
+            }}
+          />
+        </button>
+      ) : (
+        /* ── Compact trigger (TopBar / other) ─────────────────────── */
+        <button
+          onClick={() => setOpen(!open)}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "0.3rem",
+            padding: compact ? "0.3rem 0.6rem" : "0.4rem 0.8rem",
+            background: "none",
+            border: "1px solid var(--color-border)",
+            borderRadius: "8px",
+            color: "var(--color-text)",
+            cursor: "pointer",
+            fontFamily: "inherit",
+            fontSize: compact ? "0.8rem" : "0.85rem",
+            fontWeight: 600,
+            transition: "all 0.2s",
+          }}
+          title={t("lang.search")}
+        >
+          <Globe size={compact ? 13 : 15} />
+          <span>{currentLang.flag}</span>
+          <span>{currentLang.code.toUpperCase()}</span>
+        </button>
+      )}
 
       {open && (
         <div
@@ -133,12 +240,14 @@ export default function LanguageSelector({ compact = false }) {
             position: "absolute",
             top: "calc(100% + 6px)",
             right: 0,
-            width: "280px",
-            maxHeight: "360px",
-            backgroundColor: "var(--color-surface)",
-            border: "2px solid var(--color-border)",
-            borderRadius: "12px",
-            boxShadow: "0 8px 32px rgba(0,0,0,0.15)",
+            width: prominent ? "320px" : "280px",
+            maxHeight: prominent ? "420px" : "360px",
+            backgroundColor: "var(--color-surface, #FFFFFF)",
+            border: "2px solid var(--color-border, #E2E8F0)",
+            borderRadius: prominent ? "16px" : "12px",
+            boxShadow: prominent
+              ? "0 12px 40px rgba(0,0,0,0.12), 0 0 0 1px rgba(0,0,0,0.04)"
+              : "0 8px 32px rgba(0,0,0,0.15)",
             zIndex: 1000,
             overflow: "hidden",
             display: "flex",
@@ -205,7 +314,7 @@ export default function LanguageSelector({ compact = false }) {
                   fontSize: "0.85rem",
                 }}
               >
-                No languages found
+                {t("lang.noResults", "No languages found")}
               </div>
             )}
             {filtered.map((lang, idx) => {
@@ -219,39 +328,47 @@ export default function LanguageSelector({ compact = false }) {
                   style={{
                     display: "flex",
                     alignItems: "center",
-                    gap: "0.6rem",
+                    gap: prominent ? "12px" : "0.6rem",
                     width: "100%",
-                    padding: "0.55rem 0.7rem",
-                    border: "none",
-                    borderRadius: "8px",
-                    backgroundColor: isHighlighted
-                      ? "var(--color-primary-light)"
-                      : "transparent",
-                    color: "var(--color-text)",
+                    padding: prominent ? "10px 12px" : "0.55rem 0.7rem",
+                    border: isSelected && prominent ? "1.5px solid #F97316" : "1.5px solid transparent",
+                    borderRadius: prominent ? "12px" : "8px",
+                    backgroundColor: isSelected && prominent
+                      ? "#FFF7ED"
+                      : isHighlighted
+                        ? "var(--color-primary-light, #FFF7ED)"
+                        : "transparent",
+                    color: "var(--color-text, #0F172A)",
                     cursor: "pointer",
                     fontFamily: "inherit",
-                    fontSize: "0.88rem",
+                    fontSize: prominent ? "1rem" : "0.88rem",
                     textAlign: "left",
-                    transition: "background-color 0.1s",
+                    transition: "all 0.15s ease",
                   }}
                 >
-                  <span style={{ fontSize: "1.2rem", width: "24px", textAlign: "center" }}>
+                  <span style={{
+                    fontSize: prominent ? "1.5rem" : "1.2rem",
+                    width: prominent ? "36px" : "24px",
+                    textAlign: "center",
+                    flexShrink: 0,
+                  }}>
                     {lang.flag}
                   </span>
-                  <span style={{ flex: 1 }}>
-                    <span style={{ fontWeight: 600 }}>{lang.native}</span>
+                  <span style={{ flex: 1, minWidth: 0 }}>
+                    <span style={{ fontWeight: 700, fontSize: prominent ? "0.95rem" : undefined }}>{lang.native}</span>
                     <span
                       style={{
-                        color: "var(--color-text-muted)",
-                        fontSize: "0.8rem",
+                        color: "var(--color-text-muted, #94A3B8)",
+                        fontSize: prominent ? "0.78rem" : "0.8rem",
                         marginLeft: "0.4rem",
+                        fontWeight: 400,
                       }}
                     >
                       {lang.name}
                     </span>
                   </span>
                   {isSelected && (
-                    <Check size={16} color="var(--color-primary)" strokeWidth={3} />
+                    <Check size={prominent ? 20 : 16} color="#F97316" strokeWidth={3} />
                   )}
                 </button>
               );
@@ -259,6 +376,13 @@ export default function LanguageSelector({ compact = false }) {
           </div>
         </div>
       )}
+
+      <LanguageChangeOverlay
+        open={!!changingLang}
+        targetLanguage={changingLang}
+        apiDone={apiDone}
+        onComplete={() => setChangingLang(null)}
+      />
     </div>
   );
 }

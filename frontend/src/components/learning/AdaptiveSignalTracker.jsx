@@ -86,8 +86,8 @@ export default function AdaptiveSignalTracker({
               <span style={{
                 padding: "0.125rem 0.5rem",
                 borderRadius: "var(--radius-full)",
-                backgroundColor: "rgba(245,158,11,0.1)",
-                color: "#d97706",
+                backgroundColor: "color-mix(in srgb, var(--color-primary) 10%, transparent)",
+                color: "var(--color-primary)",
                 fontSize: "0.625rem",
                 fontWeight: 600,
               }}>
@@ -99,7 +99,7 @@ export default function AdaptiveSignalTracker({
                 padding: "0.125rem 0.5rem",
                 borderRadius: "var(--radius-full)",
                 backgroundColor: "rgba(139,92,246,0.1)",
-                color: "#7c3aed",
+                color: "var(--color-primary)",
                 fontSize: "0.625rem",
               }}>
                 → {adaptationApplied}

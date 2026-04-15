@@ -1,7 +1,9 @@
 import { AnimatePresence, motion } from 'framer-motion';
+import { useTranslation } from 'react-i18next';
 import { useAdaptiveStore } from '../../store/adaptiveStore';
 
 export default function XPBurst() {
+  const { t } = useTranslation();
   const lastXpGain = useAdaptiveStore((s) => s.lastXpGain);
 
   return (
@@ -29,7 +31,7 @@ export default function XPBurst() {
             userSelect: 'none',
           }}
         >
-          +{lastXpGain} XP
+          {t("game.xpGain", { amount: lastXpGain })}
         </motion.div>
       )}
     </AnimatePresence>

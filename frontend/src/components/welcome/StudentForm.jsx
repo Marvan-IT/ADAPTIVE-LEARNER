@@ -114,7 +114,7 @@ export default function StudentForm({ onBack }) {
         style={{
           width: "100%", padding: "0.8rem",
           borderRadius: "12px", border: "none",
-          backgroundColor: name.trim() ? "var(--color-primary)" : "var(--color-border)",
+          backgroundColor: name.trim() ? "var(--color-primary-dark)" : "var(--color-border)",
           color: name.trim() ? "#fff" : "var(--color-text-muted)",
           fontSize: "1.1rem", fontWeight: 700,
           cursor: name.trim() ? "pointer" : "not-allowed",

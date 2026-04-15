@@ -19,7 +19,7 @@
 - **compare_type=True**: set in `context.configure()` so column type changes are detected by autogenerate
 - **Migration runbook**: `cd backend && alembic upgrade head` | rollback: `alembic downgrade -1`
 - **connection.py init_db()**: replaced `create_all` with a connectivity ping (`SELECT 1`) — no DDL in app startup
-- **Migration chain**: 0001 → e3c02cf4c22e → 92b08c7eb40b → 003 → 004 → 005_add_adaptive_history_columns → 006_chunk_architecture → 007_chunk_progress → 008_remove_book_slug_server_default → 009_add_admin_tables (head)
+- **Migration chain**: 0001 → e3c02cf4c22e → 92b08c7eb40b → 003 → 004 → 005_add_adaptive_history_columns → 006_chunk_architecture → 007_chunk_progress → 008_remove_book_slug_server_default → 009_add_admin_tables → … → 013_add_chunk_type_locked → 014_add_performance_indexes → 015_gamification_system (head)
 - **0001 is the baseline**: tables students/teaching_sessions/conversation_messages/student_mastery pre-existed; 0001 uses SELECT 1 no-op + idempotent DO $$ blocks for CHECK constraints
 - See `migrations.md` for detailed migration history
 

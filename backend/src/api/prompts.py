@@ -32,7 +32,7 @@ def _language_instruction(language: str) -> str:
         f"You MUST respond ENTIRELY in {lang_name}. "
         f"All explanations, questions, options, hints, feedback, and conversation "
         f"must be written in {lang_name}. "
-        f"Keep mathematical notation ($...$) and proper nouns (like 'ADA') in their original form. "
+        f"Keep mathematical notation ($...$) and proper nouns (like 'Adaptive Learner') in their original form. "
         f"Translate concept titles and section headers into {lang_name} as well."
     )
 
@@ -104,7 +104,7 @@ def build_presentation_system_prompt(
     style_text = ""  # no longer appended at bottom
     lang_text = _language_instruction(language)
 
-    return f"""{style_prefix}You are ADA, an adaptive math tutor for children and young learners.
+    return f"""{style_prefix}You are Adaptive Learner, an adaptive math tutor for children and young learners.
 Your job is to explain a math concept in a way that is:
 - Clear and simple, using everyday language a 10-year-old can understand
 - Rich with metaphors and analogies that connect abstract math to concrete, familiar things
@@ -217,6 +217,8 @@ Transform this into a child-friendly explanation following your instructions."""
 
 
 # ── Socratic Check Phase Prompts ─────────────────────────────────
+# NOTE: Socratic chat UI has been removed from the frontend (2026-04).
+# These prompts are retained for API backward compatibility.
 
 def _build_session_stats_block(
     session_card_stats: dict | None,
@@ -350,7 +352,7 @@ def build_socratic_system_prompt(
             f"the first 1–2 topics. Aim for at least one question per topic in scope order.\n"
         )
 
-    prompt = f"""{style_prefix}You are ADA, an adaptive math tutor in ASSESSMENT MODE.
+    prompt = f"""{style_prefix}You are Adaptive Learner, an adaptive math tutor in ASSESSMENT MODE.
 
 Your job is to CHECK whether the student truly understood a concept through guided questioning.
 
@@ -521,7 +523,7 @@ def build_remediation_socratic_prompt(
         ", ".join(failed_topics[:5]) if failed_topics else "the key concepts of this section"
     )
 
-    prompt = f"""{style_prefix}You are ADA, an adaptive math tutor in RE-ASSESSMENT MODE.
+    prompt = f"""{style_prefix}You are Adaptive Learner, an adaptive math tutor in RE-ASSESSMENT MODE.
 
 Last time, {failed_topics_text} were a bit tricky. Let's see how much clearer they are now!
 I know you've got this now!
@@ -915,7 +917,7 @@ def build_cards_system_prompt(
     }
     domain_block = _DOMAIN_NOTES.get(section_domain, "")
 
-    base_prompt = f"""{style_prefix}You are ADA, an adaptive math tutor for children. You create interactive learning cards.
+    base_prompt = f"""{style_prefix}You are Adaptive Learner, an adaptive math tutor for children. You create interactive learning cards.
 
 Your job is to take textbook sub-sections and transform them into an engaging sequence of typed learning cards.
 
@@ -1405,7 +1407,6 @@ def build_mid_session_checkin_card() -> dict:
     Frontend detects CHECKIN by: !card.question && Array.isArray(card.options).
     """
     return {
-        "card_type": "CHECKIN",
         "title": "Quick Check-In",
         "content": "How are you feeling about the material so far?",
         "image_url": None,
@@ -1438,7 +1439,13 @@ def build_assistant_system_prompt(
 
     interests_text = _build_interests_block(interests or [])
 
-    return f"""{style_prefix}You are ADA, a friendly and patient math tutor for children.
+    _style_rule = (
+        f"6. STAY IN CHARACTER as the {style} tutor AT ALL TIMES — use {style}-themed vocabulary in every response\n"
+        if style and style != "default"
+        else ""
+    )
+
+    return f"""{style_prefix}You are Adaptive Learner, a friendly and patient math tutor for children.
 
 YOUR ROLE:
 - You are a supportive tutor sitting beside the student
@@ -1454,7 +1461,7 @@ RULES:
 3. If triggered because the student seems stuck, gently offer help
 4. Connect math to real-world things the student knows
 5. Celebrate effort: "Great question!", "You're really thinking about this!"
-
+{_style_rule}
 ---
 CURRENT LESSON: {concept_title} → {card_title}
 
@@ -1478,7 +1485,7 @@ def _extract_json_block(raw: str) -> str:
 def build_exercise_card_system_prompt(language: str) -> str:
     """System prompt for generating 2–3 MCQ cards from a real textbook exercise chunk."""
     language_name = LANGUAGE_NAMES.get(language, "English")
-    return f"""You are an interactive math practice generator for the ADA learning platform.
+    return f"""You are an interactive math practice generator for the Adaptive Learner platform.
 
 ## YOUR TASK
 Given a textbook exercise chunk, generate 2–3 multiple-choice question (MCQ) cards.

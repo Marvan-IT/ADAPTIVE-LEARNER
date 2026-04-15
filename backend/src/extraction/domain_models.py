@@ -1,5 +1,5 @@
 """
-Data models for the ADA Hybrid Engine pipeline.
+Data models for the Adaptive Learner Hybrid Engine pipeline.
 All structures used across the extraction, graph, storage, and validation modules.
 """
 
