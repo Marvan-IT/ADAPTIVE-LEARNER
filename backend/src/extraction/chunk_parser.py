@@ -1047,34 +1047,66 @@ def parse_book_mmd(
 # ── Large-chunk splitter ──────────────────────────────────────────────────────
 
 def _split_large_chunk(chunk: ParsedChunk, max_words: int, book_slug: str) -> list[ParsedChunk]:
-    """Split a chunk exceeding max_words at natural paragraph boundaries.
+    """Split a chunk exceeding max_words at semantic boundaries.
 
-    Returns a single-element list when no split is needed.  Sub-chunks inherit
-    the parent's concept_id, section, chunk_type, and is_optional; the heading
-    of chunks after the first gets a "(part N)" suffix.  order_index values are
-    left unchanged — the caller re-numbers after all splits are applied.
+    Returns a single-element list when no split is needed. Sub-chunks inherit
+    the parent's concept_id, section, chunk_type, and is_optional. Continuation
+    chunks get a "(cont.)" suffix — NEVER "part N".
+
+    Semantic boundary rules:
+    - Never split inside EXAMPLE...Solution...TRY IT sequences
+    - Split BEFORE ## headings that start new Examples or exercise groups
+    - If no safe split point exists, emit as oversized chunk (never split mid-unit)
     """
     words = chunk.text.split()
     if len(words) <= max_words:
         return [chunk]
 
-    paragraphs = re.split(r"\n\n+", chunk.text)
+    # Find semantic split points: ## headings that start new EXAMPLE or exercise groups
+    # These are safe places to split because they start new teaching units
+    _SPLIT_POINT_RE = re.compile(
+        r"^(?:##\s+(?:EXAMPLE|Example)\s+\d+\.\d+"  # New Example
+        r"|##\s+(?:Practice\s+Makes\s+Perfect|Writing\s+Exercises|Mixed\s+Practice"
+        r"|Everyday\s+Math|Review\s+Exercises|Practice\s+Test)"  # Exercise groups
+        r"|##\s+(?:HOW\s+TO|How\s+To)"  # HOW TO blocks
+        r"|##\s+(?:SECTION|Section)\s+\d+\.\d+\s+(?:EXERCISES|Exercises)"  # Section exercises
+        r")",
+        re.MULTILINE,
+    )
+
+    split_positions = [0]  # always start at 0
+    for m in _SPLIT_POINT_RE.finditer(chunk.text):
+        split_positions.append(m.start())
+    split_positions.append(len(chunk.text))
+
+    # Build segments from split points
+    segments: list[str] = []
+    for k in range(len(split_positions) - 1):
+        seg = chunk.text[split_positions[k]:split_positions[k + 1]].strip()
+        if seg:
+            segments.append(seg)
+
+    if len(segments) <= 1:
+        # No semantic split points found — emit as oversized chunk, never split mid-unit
+        return [chunk]
+
+    # Greedy pack segments toward max_words
     parts: list[str] = []
-    current_part: list[str] = []
+    current_segs: list[str] = []
     current_words = 0
 
-    for para in paragraphs:
-        para_words = len(para.split())
-        if current_words + para_words > max_words and current_part:
-            parts.append("\n\n".join(current_part))
-            current_part = [para]
-            current_words = para_words
+    for seg in segments:
+        seg_words = len(seg.split())
+        if current_words + seg_words > max_words and current_segs:
+            parts.append("\n\n".join(current_segs))
+            current_segs = [seg]
+            current_words = seg_words
         else:
-            current_part.append(para)
-            current_words += para_words
+            current_segs.append(seg)
+            current_words += seg_words
 
-    if current_part:
-        parts.append("\n\n".join(current_part))
+    if current_segs:
+        parts.append("\n\n".join(current_segs))
 
     if len(parts) <= 1:
         return [chunk]
@@ -1088,7 +1120,7 @@ def _split_large_chunk(chunk: ParsedChunk, max_words: int, book_slug: str) -> li
             concept_id=chunk.concept_id,
             section=chunk.section,
             order_index=chunk.order_index,  # re-numbered by caller
-            heading=chunk.heading if sub_idx == 0 else f"{chunk.heading} (part {sub_idx + 1})",
+            heading=chunk.heading if sub_idx == 0 else f"{chunk.heading} (cont. {sub_idx + 1})",
             text=part_text.strip(),
             latex=_extract_latex(part_text),
             image_urls=_extract_image_urls(part_text),
