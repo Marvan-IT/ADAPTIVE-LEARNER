@@ -97,18 +97,18 @@ class TestBug1ChapterIntro:
         """
         # EXPECTED TO FAIL: Bug 1
         chunks = _parse("business_statistics_ch2_intro.mmd", "bstats")
-        intros = [c for c in chunks if c.chunk_type == "chapter_intro"]
-        assert len(intros) >= 1, (
-            f"No chapter_intro chunks found. "
-            f"All chunk_types: {sorted({c.chunk_type for c in chunks})}"
+        ch2_intros = [c for c in chunks if c.chunk_type == "chapter_intro" and c.section.startswith("2.0")]
+        assert len(ch2_intros) >= 1, (
+            f"No chapter 2 intro chunks found. "
+            f"All intro sections: {[c.section for c in chunks if c.chunk_type == 'chapter_intro']}"
         )
-        intro = intros[0]
+        intro = ch2_intros[0]
         assert "Once you have collected data" in intro.text, (
             f"chapter_intro chunk does not contain expected opening sentence. "
             f"Text preview: {intro.text[:200]}"
         )
-        assert intro.section.startswith("2.0") or intro.section == "2.0", (
-            f"chapter_intro section should be '2.0', got '{intro.section}'"
+        assert intro.section.startswith("2.0"), (
+            f"chapter_intro section should start with '2.0', got '{intro.section}'"
         )
         # Chapter intro should come BEFORE any section 2.x chunk
         ch2_chunks = [c for c in chunks if c.concept_id.startswith("bstats_2.")]

@@ -651,21 +651,105 @@ def _find_sections(mmd_text: str, book_slug: str, config: dict) -> list[dict]:
     return section_matches
 
 
-def _find_chapter_intros(mmd_text: str) -> dict[int, int]:
+def _find_chapter_intros(mmd_text: str, sections: list[dict] | None = None) -> dict[int, int]:
     """
-    Universal chapter heading detection.
+    Universal chapter heading detection with TOC-driven inference fallback.
 
-    Returns dict mapping chapter_num → char_position of first chapter heading.
-    Handles all heading formats Mathpix produces across all 16 books:
-      Markdown: "## N | TITLE", "## N <br> TITLE", "## N: TITLE", "## N TITLE"
-      LaTeX:    "\\section*{N | TITLE}", "\\section*{N}"
+    Returns dict mapping chapter_num → char_position of chapter intro start.
+
+    Phase 1: detect explicit chapter headings (## N | TITLE, ## N \\ TITLE, etc.)
+    Phase 2: for chapters with no explicit heading, infer from section N.1 position
+             by scanning backward for intro content (Figure N.1, ## Introduction, etc.)
     """
     chapter_intro_pos: dict[int, int] = {}
+
+    # Phase 1: explicit chapter headings
     for _pat in _CHAPTER_HEADING_PATTERNS:
         for _cm in _pat.finditer(mmd_text):
             _ch = int(_cm.group(1))
             if _ch not in chapter_intro_pos:
                 chapter_intro_pos[_ch] = _cm.start()
+
+    # Phase 2: infer from section N.1 anchors for missing chapters
+    if sections:
+        # Find first section of each chapter
+        first_section_per_chapter: dict[int, dict] = {}
+        for sec in sections:
+            ch = sec["chapter"]
+            if ch not in first_section_per_chapter:
+                first_section_per_chapter[ch] = sec
+
+        # Find previous chapter's last known position for each chapter
+        chapter_nums = sorted(first_section_per_chapter.keys())
+
+        for ch_num in chapter_nums:
+            if ch_num in chapter_intro_pos:
+                continue  # already detected explicitly
+
+            sec = first_section_per_chapter[ch_num]
+            sec_start = sec["start"]
+
+            # Scan backward from section N.1 to find intro content
+            # Look for: Figure N.x, ## Introduction, ## Learning Objectives,
+            # ## NOTE, or previous chapter's last content boundary
+            scan_start = max(0, sec_start - 15000)  # max 15K chars backward
+
+            # Find the previous chapter's end (content boundary)
+            prev_end = scan_start
+            ch_idx = chapter_nums.index(ch_num)
+            if ch_idx > 0:
+                prev_ch = chapter_nums[ch_idx - 1]
+                # Previous chapter's last section end
+                for s in reversed(sections):
+                    if s["chapter"] == prev_ch:
+                        prev_end = max(prev_end, s["end"])
+                        break
+
+            # Scan region between previous chapter end and section N.1
+            region = mmd_text[prev_end:sec_start]
+
+            # Look for strong intro markers scanning backward from sec_start
+            intro_pos = None
+
+            # Check for Figure N.1 or Figure N.x
+            fig_pat = re.compile(rf"Figure\s+{ch_num}\.\d+", re.IGNORECASE)
+            fig_match = fig_pat.search(region)
+            if fig_match:
+                # Find the line start before the figure
+                line_start = region.rfind("\n", 0, fig_match.start())
+                intro_pos = prev_end + max(0, line_start)
+
+            # Check for ## Introduction heading
+            intro_heading = re.search(r"^##\s+Introduction", region, re.MULTILINE | re.IGNORECASE)
+            if intro_heading:
+                candidate = prev_end + intro_heading.start()
+                if intro_pos is None or candidate < intro_pos:
+                    intro_pos = candidate
+
+            # Check for ## Learning Objectives heading
+            lo_heading = re.search(r"^##\s+Learning\s+Objectives", region, re.MULTILINE | re.IGNORECASE)
+            if lo_heading:
+                candidate = prev_end + lo_heading.start()
+                if intro_pos is None or candidate < intro_pos:
+                    intro_pos = candidate
+
+            # Fallback: if we found any intro marker, use it
+            if intro_pos is not None:
+                chapter_intro_pos[ch_num] = intro_pos
+                logger.info(
+                    "Chapter %d: no explicit heading — inferred intro at char %d from section %d.1 backward scan",
+                    ch_num, intro_pos, ch_num,
+                )
+            else:
+                # Last resort: use the previous chapter end as intro start
+                # (captures any orphan content between chapters)
+                if prev_end > 0 and prev_end < sec_start - 100:
+                    chapter_intro_pos[ch_num] = prev_end
+                    logger.info(
+                        "Chapter %d: no markers found — using previous chapter end as intro start (char %d)",
+                        ch_num, prev_end,
+                    )
+
     return chapter_intro_pos
 
 
@@ -1036,7 +1120,7 @@ def parse_book_mmd(
 
     config = _build_parse_config(profile, corrected_headings)
     section_matches = _find_sections(mmd_text, book_slug, config)
-    chapter_intros = _find_chapter_intros(mmd_text)
+    chapter_intros = _find_chapter_intros(mmd_text, sections=section_matches)
     raw_chunks, total_body_chars = _build_section_chunks(
         mmd_text, section_matches, chapter_intros, book_slug, config
     )

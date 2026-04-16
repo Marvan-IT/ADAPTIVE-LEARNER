@@ -446,7 +446,8 @@ class TestBug7Validation:
         chunks = parse_book_mmd(INTERALG_MMD, "test_book")
         chunked_sections = {c.concept_id.replace("test_book_", "") for c in chunks}
 
-        phantoms = {s for s in chunked_sections if s not in toc_sections}
+        # N.0 sections are chapter intros — not phantoms
+        phantoms = {s for s in chunked_sections if s not in toc_sections and not s.endswith(".0")}
         # EXPECTED TO FAIL: BUG 7 / BUG 1 — bare-number artefacts like '1.21' and
         # '1.22' will appear as phantoms if they slip through SECTION_PATTERN.
         assert len(phantoms) == 0, (
