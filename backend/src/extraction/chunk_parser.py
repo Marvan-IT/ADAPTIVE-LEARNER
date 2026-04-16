@@ -763,6 +763,16 @@ def _build_section_chunks(
                 continue
             meaningful_subs.append((sh_start, sh_end, heading_text))
 
+        # ── Detect Chapter Review zone within body ────────────────────────────
+        _REVIEW_ZONE_RE = re.compile(
+            r"^##\s+(?:Chapter\s+Review|Key\s+Terms|Key\s+Concepts|Review\s+Exercises)",
+            re.MULTILINE | re.IGNORECASE,
+        )
+        _review_zone_start = None
+        _review_match = _REVIEW_ZONE_RE.search(body)
+        if _review_match:
+            _review_zone_start = _review_match.start()
+
         # ── Exercise zone tagging ─────────────────────────────────────────────
         in_exercises_zone = bool(_SECTION_IS_EXERCISE_PATTERN.search(sec["section_label"]))
         # Also check profile exercise markers against section label
@@ -801,6 +811,11 @@ def _build_section_chunks(
             text = body.strip()
             if text:
                 _ctype, _opt = _classify_chunk(sec["section_label"], in_exercises_zone, sec["section_label"])
+                # Chapter Review zone → override (section label or body content)
+                _sec_lower = sec["section_label"].lower()
+                if _review_zone_start is not None or any(kw in _sec_lower for kw in ("chapter review", "key terms", "key concepts", "review exercises")):
+                    _ctype = "chapter_review"
+                    _opt = True
                 _images = _extract_image_urls(text)
                 _captions = _extract_image_captions(text, len(_images))
                 _latex = _extract_latex(text)
@@ -851,6 +866,15 @@ def _build_section_chunks(
 
             _in_zone = heading_text.endswith(" (Exercises)")
             _ctype, _opt = _classify_chunk(heading_text, _in_zone, sec["section_label"])
+
+            # Chapter Review zone → override to chapter_review type + optional
+            _sec_lower = sec["section_label"].lower()
+            if any(kw in _sec_lower for kw in ("chapter review", "key terms", "key concepts", "review exercises")):
+                _ctype = "chapter_review"
+                _opt = True
+            elif _review_zone_start is not None and sh_start >= _review_zone_start:
+                _ctype = "chapter_review"
+                _opt = True
             _images = _extract_image_urls(chunk_text)
             _captions = _extract_image_captions(chunk_text, len(_images))
             _latex = _extract_latex(chunk_text)
