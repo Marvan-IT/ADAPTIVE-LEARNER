@@ -13,7 +13,7 @@ parser works correctly across all 16 OpenStax books regardless of which heading
 level Mathpix chose for section markers.
 
 Subsection boundaries (chunk splits):
-  Only MEANINGFUL `##` headings cause a split. Noise headings (EXAMPLE, TRY IT,
+  Only MEANINGFUL headings cause a split. Noise headings (EXAMPLE, TRY IT,
   Solution, HOW TO, MANIPULATIVE, BE PREPARED, SECTION N.N EXERCISES, etc.) are
   treated as body content of the containing chunk. This keeps related example/solution
   pairs with their parent subsection rather than fragmenting them.
@@ -22,6 +22,12 @@ Subsection boundaries (chunk splits):
   Mathpix emits each section ~3 times: TOC entry (~0 words), body (500-2000 words),
   chapter review stub (100-400 words). At the CHUNK level we group by
   (concept_id, heading) and keep whichever occurrence has the most words.
+
+Universal architecture (single parse path):
+  Both profile-driven and hardcoded logic flows through the same pipeline:
+    _build_parse_config() → _find_sections() → _find_chapter_intros()
+    → _build_section_chunks() → _postprocess_chunks()
+  A profile object enriches the config dict; absence of a profile uses hardcoded defaults.
 """
 
 import re
@@ -40,7 +46,7 @@ logger = logging.getLogger(__name__)
 # Works on # through #### — whichever level Mathpix happens to use.
 SECTION_PATTERN = re.compile(r"^(#{1,4})\s+(\d+)\.(\d+)\s+(.+)$", re.MULTILINE)
 
-# Matches ## headings specifically (the subsection-split level)
+# Matches ## headings specifically (the default subsection-split level)
 SUBHEADING_PATTERN = re.compile(r"^##\s+(.+)$", re.MULTILINE)
 
 # CDN image URLs produced by Mathpix
@@ -52,14 +58,11 @@ LATEX_IMAGE_PATTERN = re.compile(r"\\includegraphics(?:\[[^\]]*\])?\{([^}]+)\}")
 # Inline ($…$) and block ($$…$$) LaTeX — block must be checked first
 LATEX_PATTERN = re.compile(r"\$\$(.+?)\$\$|\$(.+?)\$", re.DOTALL)
 
-# Section-number figure headings Mathpix emits as fake sections (e.g. "### 1.52", "### 2.11").
-# Across all 16 OpenStax textbooks, real instructional sections stay at most 10 per chapter.
-# Values 11+ are always exercise-set identifiers or figure references, not real sections.
-_MAX_REAL_SECTION_IN_CHAPTER = 99  # Effectively no cap; body-word filter + TOC whitelist catch fakes
-MIN_SECTION_BODY_WORDS = 30  # real sections have ≥30 words of intro; exercise stubs have 5–15
+# Real instructional sections have ≥30 words of intro; exercise stubs have 5–15.
+MIN_SECTION_BODY_WORDS = 30
 
 # ── Noise heading filters ─────────────────────────────────────────────────────
-# These ## headings are NOT pedagogical subsection boundaries.
+# These headings are NOT pedagogical subsection boundaries.
 # They are examples, exercises, solutions, or navigational boilerplate.
 # We keep them as body content of their containing chunk.
 _NOISE_HEADING_PATTERNS: list[re.Pattern] = [
@@ -71,11 +74,11 @@ _NOISE_HEADING_PATTERNS: list[re.Pattern] = [
     re.compile(r"^Self Check\b", re.IGNORECASE),
     re.compile(r"^In the following exercises\b", re.IGNORECASE),
     re.compile(r"^Access for free\b", re.IGNORECASE),
-    re.compile(r"^\([a-z0-9]\)\s+Solution\b", re.IGNORECASE),  # "(a) Solution", "(r) Solution"
-    re.compile(r"^\(\s*[A-Z]\s*\)?\s+Solution\b"),             # "( J Solution", "(A) Solution" — Mathpix OCR artifact ⊙
-    # Headings that are just a single word with no spaces (usually CAPS markers)
+    re.compile(r"^\([a-z0-9]\)\s+Solution\b", re.IGNORECASE),  # "(a) Solution"
+    re.compile(r"^\(\s*[A-Z]\s*\)?\s+Solution\b"),             # "( J Solution" — Mathpix OCR artifact
+    # Headings that are just a single word in CAPS (usually markers)
     re.compile(r"^[A-Z]{2,}$"),
-    # Numbered items that are headings by mistake (e.g. "207. Seventy-five more than...")
+    # Numbered items mistakenly turned into headings
     re.compile(r"^\d+\.\s"),
     # Config-driven exclusions — stays in sync with config.py automatically
     *[re.compile(rf"^{re.escape(m)}\b", re.IGNORECASE) for m in CONTENT_EXCLUDE_MARKERS],
@@ -83,9 +86,7 @@ _NOISE_HEADING_PATTERNS: list[re.Pattern] = [
     re.compile(r"^CHAPTER OUTLINE\b", re.IGNORECASE),
     re.compile(r"^INTRODUCTION\b$", re.IGNORECASE),
     re.compile(r"^LEARNING OBJECTIVES?\b", re.IGNORECASE),
-    # Readiness-quiz preamble found in nursing/allied-health books
     re.compile(r"^Before you get started", re.IGNORECASE),
-    # Common textbook noise headings — keeps content together with parent section
     re.compile(r"^Problem\b", re.IGNORECASE),
     re.compile(r"^COLLABORATIVE EXERCISE\b", re.IGNORECASE),
     re.compile(r"^References\b", re.IGNORECASE),
@@ -93,11 +94,44 @@ _NOISE_HEADING_PATTERNS: list[re.Pattern] = [
     re.compile(r"^Chapter Review\b", re.IGNORECASE),
     re.compile(r"^Practice\b", re.IGNORECASE),
     re.compile(r"^Bringing It Together\b", re.IGNORECASE),
+    re.compile(r"^NOTE\b", re.IGNORECASE),
+    re.compile(r"^Activity\b", re.IGNORECASE),
+    re.compile(r"^Additional Resources\b", re.IGNORECASE),
+    re.compile(r"^Cool Down\b", re.IGNORECASE),
+    re.compile(r"^Warm Up\b", re.IGNORECASE),
+    re.compile(r"^Analysis\b", re.IGNORECASE),
+    re.compile(r"^Checking In\b", re.IGNORECASE),
+    re.compile(r"^MEDIA\b", re.IGNORECASE),
+    re.compile(r"^PATIENT CONVERSATIONS\b", re.IGNORECASE),
+    re.compile(r"^CLINICAL SAFETY\b", re.IGNORECASE),
+    re.compile(r"^Are you ready for more\b", re.IGNORECASE),
+    re.compile(r"^Extending Your Thinking\b", re.IGNORECASE),
+    re.compile(r"^Verbal\b", re.IGNORECASE),
+    re.compile(r"^Algebraic\b", re.IGNORECASE),
+    re.compile(r"^Chapter Outline\b", re.IGNORECASE),
+    re.compile(r"^Key Concepts\b", re.IGNORECASE),
+    re.compile(r"^Formula Review\b", re.IGNORECASE),
+    re.compile(r"^Homework\b", re.IGNORECASE),
+    re.compile(r"^Solutions\b", re.IGNORECASE),
+    re.compile(r"^Writing Exercises\b", re.IGNORECASE),
+    re.compile(r"^Everyday Math\b", re.IGNORECASE),
+    re.compile(r"^Mixed Practice\b", re.IGNORECASE),
+    re.compile(r"^Review Exercises\b", re.IGNORECASE),
+    re.compile(r"^Practice Test\b", re.IGNORECASE),
+    re.compile(r"^BE PREPARED\b", re.IGNORECASE),
+    re.compile(r"^Complete the following questions\b", re.IGNORECASE),
+    re.compile(r"^Chapter\s+\d+$", re.IGNORECASE),   # "Chapter N" bare heading
 ]
+
 
 def _is_noise_heading(heading_text: str) -> bool:
     """Return True if this heading is a noise marker, not a pedagogical subsection."""
     return any(p.match(heading_text) for p in _NOISE_HEADING_PATTERNS)
+
+
+def _is_noise_heading_profile(heading_text: str, compiled_noise: list[re.Pattern]) -> bool:
+    """Return True if heading matches any profile-driven noise pattern."""
+    return any(p.search(heading_text) for p in compiled_noise)
 
 
 def _normalize_heading(heading: str) -> str:
@@ -124,9 +158,9 @@ def _normalize_heading(heading: str) -> str:
     return h
 
 
-# Patterns that mark start of the exercise zone for a section.
-# Once triggered, all subsequent meaningful ## headings within this section
-# are classified as exercise chunks.
+# ── Section exercise zone patterns ───────────────────────────────────────────
+
+# Patterns that mark the start of the exercise zone for a section.
 _EXERCISE_ZONE_PATTERN = re.compile(
     r"^(?:section\s+\d+\.\d+"      # SECTION 1.1 [EXERCISES]
     r"|review exercises?"           # Review Exercises
@@ -157,33 +191,13 @@ _INFO_HEADING_PATTERN = re.compile(
     r"|key terms?"
     r"|key concepts?"
     r"|summary"
-    r"|in this section,?\s+you will"   # college_algebra: "In this section, you will:"
-    r"|by the end of this"             # common variant across books
+    r"|in this section,?\s+you will"
+    r"|by the end of this"
     r")",
     re.IGNORECASE,
 )
 
-
-def _normalize_mmd_format(mmd_text: str) -> str:
-    """
-    Convert LaTeX-style headings to markdown-style headings for uniform parsing.
-
-    Books like elementary_algebra, intermediate_algebra, college_algebra, and algebra_1
-    use LaTeX heading syntax produced by Mathpix:
-      \\subsection*{1.1 Title}     →  ### 1.1 Title   (section boundary, X.Y pattern)
-      \\section*{Subsection Name}  →  ## Subsection Name   (pedagogical subsection)
-
-    Markdown books (prealgebra) already use ### and ## — transformation is a no-op.
-    """
-    # \subsection*{1.1 Title} → ### 1.1 Title
-    text = re.sub(r"^\\subsection\*\{(.+?)\}", r"### \1", mmd_text, flags=re.MULTILINE)
-    # \section*{Title} → ## Title
-    text = re.sub(r"^\\section\*\{(.+?)\}", r"## \1", text, flags=re.MULTILINE)
-    return text
-
-
-# Detects section titles that ARE themselves exercise sections (e.g. college_algebra
-# "1.1 SECTION EXERCISES") — in these cases the entire body is exercise content.
+# Detects section titles that ARE themselves exercise sections
 _SECTION_IS_EXERCISE_PATTERN = re.compile(
     r"section\s+exercises?|chapter\s+review|review\s+exercises?|practice\s+test|chapter\s+test",
     re.IGNORECASE,
@@ -197,7 +211,6 @@ def _classify_chunk(raw_heading: str, in_exercises_zone: bool, section_label: st
     is_opt = bool(re.search(r'\(optional\)', sl, re.IGNORECASE))
     is_lab = bool(re.search(r'\blab\b|\bexperiment\b', sl, re.IGNORECASE))
 
-    # Mark universally obvious metadata as optional
     _OPTIONAL_PATTERNS = [
         r'\bpreface\b', r'\babout the author', r'\bcontributing author',
         r'\breviewers?\b', r'\backnowledgment', r'\bdedication\b',
@@ -268,7 +281,6 @@ def _extract_image_captions(text: str, image_count: int) -> list[str | None]:
         cap = m.group(1).strip()
         if cap and cap not in captions:
             captions.append(cap)
-    # Pad or truncate to match image_count
     result: list[str | None] = []
     for i in range(image_count):
         result.append(captions[i] if i < len(captions) else None)
@@ -293,119 +305,184 @@ def _word_count(text: str) -> int:
     return len(text.split())
 
 
-def _dedup_section_matches(
-    section_matches: list[dict],
-    mmd_text: str,
-) -> list[dict]:
-    """Group by section_number, keep the occurrence with the longest body.
+def _check_coverage(raw_body_chars: int, chunks: list[ParsedChunk]) -> float:
+    """Return fraction of body chars covered by chunks (informational only)."""
+    covered = sum(len(c.text) for c in chunks)
+    ratio = covered / raw_body_chars if raw_body_chars > 0 else 1.0
+    return ratio
 
-    Replaces the old backward-number filter. When Mathpix emits 3 copies
-    of each section (TOC stub, body, review), this keeps the body copy
-    (highest word count) and discards the rest.
 
-    Returns deduped list sorted by document position (reading order).
+def _normalize_mmd_format(mmd_text: str) -> str:
     """
-    seen: dict[str, tuple[dict, int]] = {}  # section_number -> (sec_dict, body_words)
-    for idx, sec in enumerate(section_matches):
-        key = sec["section_number"]
-        body_start = sec["end"]
-        body_end = (
-            section_matches[idx + 1]["start"]
-            if idx + 1 < len(section_matches)
-            else len(mmd_text)
-        )
-        body_words = _word_count(mmd_text[body_start:body_end])
-        prev = seen.get(key)
-        if prev is None or body_words > prev[1]:
-            seen[key] = (sec, body_words)
-    result = [entry[0] for entry in seen.values()]
-    result.sort(key=lambda s: s["start"])
-    logger.info(
-        "Section-level dedup: %d occurrences → %d unique sections",
-        len(section_matches), len(result),
-    )
-    return result
+    Convert LaTeX-style headings to markdown-style headings for uniform parsing.
 
+    Books like elementary_algebra, intermediate_algebra, college_algebra, and algebra_1
+    use LaTeX heading syntax produced by Mathpix:
+      \\subsection*{1.1 Title}     →  ### 1.1 Title   (section boundary, X.Y pattern)
+      \\section*{Subsection Name}  →  ## Subsection Name   (pedagogical subsection)
 
-# ── Public API ────────────────────────────────────────────────────────────────
-
-def parse_book_mmd(
-    mmd_path: Path,
-    book_slug: str,
-    profile=None,
-    corrected_headings: dict | None = None,
-) -> list[ParsedChunk]:
+    Markdown books (prealgebra) already use ### and ## — transformation is a no-op.
+    Uses re.escape() to avoid \\s being misinterpreted as whitespace class.
     """
-    Parse book.mmd into subsection-level chunks with 3-copy deduplication.
+    _SUBSEC = re.compile("^" + re.escape("\\subsection*{") + r"(.+?)" + re.escape("}"), re.MULTILINE)
+    text = _SUBSEC.sub(r"### \1", mmd_text)
+    _SEC = re.compile("^" + re.escape("\\section*{") + r"(.+?)" + re.escape("}"), re.MULTILINE)
+    text = _SEC.sub(r"## \1", text)
+    return text
 
-    When profile=None (default), uses the hardcoded OpenStax math logic exactly
-    as before — zero regression for all 16 existing math books.
 
-    When a BookProfile is supplied, delegates to _parse_book_mmd_with_profile()
-    which uses multi-signal boundary detection driven by the profile object.
+# ── Multi-signal patterns ─────────────────────────────────────────────────────
 
-    Algorithm (profile=None path):
-      1. Locate all X.Y section headings (e.g. "### 1.1 Introduction to Whole Numbers")
-         to determine section content boundaries.
-      2. For each section's body, split on `##` headings that represent MEANINGFUL
-         pedagogical subsections (filtering out noise: EXAMPLE, TRY IT, Solution, etc.).
-      3. Orphan text before the first meaningful ## heading is prepended to the
-         first subsection chunk (not emitted as a separate chunk).
-      4. Sections with zero meaningful ## headings → entire body = one chunk.
-      5. Deduplicate: group by (concept_id, heading), keep highest word-count.
-         This removes the 3 Mathpix copies of each section (TOC stub, body, review stub).
-      6. Re-number order_index in reading order.
+_H1_PATTERN = re.compile(r"^#\s+(.+)$", re.MULTILINE)
+_H2_PATTERN = re.compile(r"^##\s+(.+)$", re.MULTILINE)   # same as SUBHEADING_PATTERN
+_H3_PATTERN = re.compile(r"^###\s+(.+)$", re.MULTILINE)
+_H4_PATTERN = re.compile(r"^####\s+(.+)$", re.MULTILINE)
+_BOLD_LINE_PATTERN = re.compile(r"^\*\*([^*\n]{3,80})\*\*\s*$", re.MULTILINE)
+_CAPS_LINE_PATTERN = re.compile(r"^([A-Z][A-Z\s]{2,79})$", re.MULTILINE)
+_NUMBERED_ITEM_PATTERN = re.compile(r"^([A-Z]\.\s+\S.{0,60})$", re.MULTILINE)  # "A. Title" style
 
-    Args:
-        mmd_path:            Path to the book's book.mmd file.
-        book_slug:           Short identifier for the book (e.g. "prealgebra").
-        profile:             Optional BookProfile for non-math books. When provided the
-                             profile's signals, noise patterns, and exercise markers drive
-                             boundary detection instead of hardcoded patterns.
-        corrected_headings:  Optional dict mapping garbled section title strings (as
-                             Mathpix emitted them) to the corrected titles from the TOC.
-                             Applied only in the hardcoded path (profile=None). When
-                             profile is provided, corrections are stored in the profile
-                             object itself and applied inside _parse_book_mmd_with_profile.
+# Maps signal_type string → compiled pattern
+_SIGNAL_PATTERN_MAP: dict[str, re.Pattern] = {
+    "heading_h2": _H2_PATTERN,
+    "heading_h3": _H3_PATTERN,
+    "heading_h4": _H4_PATTERN,
+    "bold_line":  _BOLD_LINE_PATTERN,
+    "caps_line":  _CAPS_LINE_PATTERN,
+    "numbered":   _NUMBERED_ITEM_PATTERN,
+}
 
-    Returns:
-        List of ParsedChunk objects sorted by original reading order.
-        After dedup the count should be ~300-600 for prealgebra (not 900-1500).
+# Chapter heading patterns — universal, used by _find_chapter_intros()
+_CHAPTER_HEADING_PATTERNS = [
+    re.compile(r"^#{1,4}\s+(\d+)\s*(?:[|:<]|\s+[A-Z])", re.MULTILINE),
+    re.compile(r"^#{1,4}\s+(\d+)\s*$", re.MULTILINE),
+    re.compile("^" + re.escape("\\section*{") + r"(\d+)(?:\s*[|]|\s*\})", re.MULTILINE),
+]
+
+
+# ── Parse config builder ──────────────────────────────────────────────────────
+
+def _build_parse_config(profile, corrected_headings: dict | None) -> dict:
     """
-    mmd_text = mmd_path.read_text(encoding="utf-8")
-    # Normalize LaTeX heading syntax (\subsection*{} / \section*{}) to markdown (### / ##)
-    # This is a no-op for prealgebra (already markdown); required for all other books.
-    mmd_text = _normalize_mmd_format(mmd_text)
-    logger.info("Loaded %s (%d chars)", mmd_path, len(mmd_text))
+    Merge profile settings with hardcoded defaults into one config dict.
 
-    # ── Profile-driven path (non-math books) ─────────────────────────────────
+    When profile is None, all values fall back to the hardcoded defaults
+    that have been used for the 16 OpenStax math books.
+
+    Returns a dict with keys:
+      noise_patterns        — list of compiled re.Pattern for heading noise
+      exercise_markers      — list of (compiled Pattern, behavior_str) tuples
+      min_body_words        — int: minimum body words for a valid section
+      max_chunk_words       — int | None: split threshold for large chunks
+      toc_sections          — list of TOC entry dicts | None
+      corrected_headings    — dict: raw title → corrected title
+      subsection_signals    — list of compiled re.Pattern for chunk split boundaries
+      max_sections_per_chapter — int cap (bypassed when toc_sections present)
+    """
+    base_noise = list(_NOISE_HEADING_PATTERNS)  # copy so we can extend
+    compiled_exercise_markers: list[tuple[re.Pattern, str]] = []
+    subsection_signals: list[re.Pattern] = [_H2_PATTERN]  # default: ## headings only
+    min_body_words = MIN_SECTION_BODY_WORDS
+    max_chunk_words = None
+    toc_sections = None
+    corrections = dict(corrected_headings or {})
+    max_sections_per_chapter = 99  # no effective cap by default
+
     if profile is not None:
-        return _parse_book_mmd_with_profile(mmd_text, book_slug, profile)
+        # Compile profile noise patterns
+        for pat_str in profile.noise_patterns:
+            try:
+                base_noise.append(re.compile(pat_str, re.IGNORECASE))
+            except re.error as exc:
+                logger.warning("Invalid noise_pattern %r in profile: %s", pat_str, exc)
+        for pat_str in profile.feature_box_patterns:
+            try:
+                base_noise.append(re.compile(pat_str, re.IGNORECASE))
+            except re.error as exc:
+                logger.warning("Invalid feature_box_pattern %r in profile: %s", pat_str, exc)
 
-    # ── Step 1: Find all X.Y section headings ────────────────────────────────
-    section_matches: list[dict] = []
+        # Compile exercise markers
+        for marker in profile.exercise_markers:
+            try:
+                compiled_exercise_markers.append(
+                    (re.compile(marker.pattern, re.IGNORECASE), marker.behavior)
+                )
+            except re.error as exc:
+                logger.warning("Invalid exercise_marker pattern %r in profile: %s", marker.pattern, exc)
+
+        # Build boundary signal patterns from profile
+        active: list[re.Pattern] = []
+        for signal in profile.subsection_signals:
+            if not signal.is_boundary:
+                continue
+            pat = _SIGNAL_PATTERN_MAP.get(signal.signal_type)
+            if pat is None:
+                logger.warning("Unknown signal_type %r in profile — skipping", signal.signal_type)
+                continue
+            active.append(pat)
+        if active:
+            subsection_signals = active
+        else:
+            logger.warning("Profile has no is_boundary=True signals — using ## headings as default")
+
+        min_body_words = profile.min_chunk_words
+        max_chunk_words = profile.max_chunk_words
+        toc_sections = profile.toc_sections or None
+        max_sections_per_chapter = profile.max_sections_per_chapter
+
+        # Profile-level heading corrections override caller-supplied corrections
+        profile_corrections = getattr(profile, "corrected_headings", {}) or {}
+        corrections = {**corrections, **profile_corrections}
+
+    return {
+        "noise_patterns": base_noise,
+        "exercise_markers": compiled_exercise_markers,
+        "min_body_words": min_body_words,
+        "max_chunk_words": max_chunk_words,
+        "toc_sections": toc_sections,
+        "corrected_headings": corrections,
+        "subsection_signals": subsection_signals,
+        "max_sections_per_chapter": max_sections_per_chapter,
+    }
+
+
+# ── Section discovery ─────────────────────────────────────────────────────────
+
+def _find_sections(mmd_text: str, book_slug: str, config: dict) -> list[dict]:
+    """
+    Find, dedup, and filter all X.Y section headings in mmd_text.
+
+    Linear-walk dedup: iterate all SECTION_PATTERN matches; for each
+    section_number keep the FIRST occurrence that has body_words >= min_body_words
+    (the body copy always appears before the chapter-review stub in document order).
+    After dedup, apply TOC whitelist, fuzzy recovery, and numeric sort.
+
+    Returns list of section dicts sorted by (chapter, section_in_chapter).
+    """
+    corrections = config["corrected_headings"]
+    min_body_words = config["min_body_words"]
+    toc_sections = config["toc_sections"]
+    max_section_in_chapter = config["max_sections_per_chapter"]
+    has_toc = bool(toc_sections)
+
+    # ── Collect all raw matches ───────────────────────────────────────────────
+    all_matches: list[dict] = []
     for m in SECTION_PATTERN.finditer(mmd_text):
         chapter_num = int(m.group(2))
         section_in_chapter = int(m.group(3))
-        if section_in_chapter > _MAX_REAL_SECTION_IN_CHAPTER:
-            # Mathpix emits figure/equation numbers as headings — skip
-            continue
+        if section_in_chapter > max_section_in_chapter and not has_toc:
+            continue  # heuristic cap — only applies when no TOC whitelist
         section_title_raw = m.group(4).strip()
-        # Apply OCR corrections from caller if provided (Fix 5B).
-        # Allows the pipeline to pass quality_report.corrected_headings so that
-        # garbled Mathpix headings are corrected before chunk labels are set.
-        _corrections = corrected_headings or {}
-        section_title = _corrections.get(section_title_raw, section_title_raw)
+        section_title = corrections.get(section_title_raw, section_title_raw)
         if section_title != section_title_raw:
             logger.info(
-                "[correction] Hardcoded path %s %s: '%s' → '%s'",
-                book_slug, f"{chapter_num}.{section_in_chapter}",
+                "[correction] %s %d.%d: '%s' → '%s'",
+                book_slug, chapter_num, section_in_chapter,
                 section_title_raw, section_title,
             )
         section_number = f"{chapter_num}.{section_in_chapter}"
         section_label = f"{section_number} {section_title}"
         concept_id = f"{book_slug}_{section_number}"
-        section_matches.append({
+        all_matches.append({
             "start": m.start(),
             "end": m.end(),
             "chapter": chapter_num,
@@ -415,130 +492,253 @@ def parse_book_mmd(
             "concept_id": concept_id,
         })
 
-    logger.info("Found %d section heading occurrences (before section-level dedup)", len(section_matches))
+    logger.info("Found %d section heading occurrences (before dedup)", len(all_matches))
 
-    # ── Quick TOC whitelist (hardcoded path only) ─────────────────────────
-    # When no profile is supplied, do a lightweight TOC parse to filter
-    # fake sections. This makes --parse-only correct for any book.
-    from extraction.ocr_validator import parse_toc as _parse_toc
-    _toc_entries = _parse_toc(mmd_text)
-    if _toc_entries:
-        _toc_set = {e.section_number for e in _toc_entries}
-        _pre = len(section_matches)
-        section_matches = [s for s in section_matches if s["section_number"] in _toc_set]
-        _dropped = _pre - len(section_matches)
-        if _dropped > 0:
-            logger.info("[hardcoded] TOC whitelist: dropped %d fake sections (kept %d)", _dropped, len(section_matches))
-
-    # ── Section-level dedup (replaces old backward-number filter) ─────────────
-    # Group by section_number, keep the occurrence with the longest body.
-    # This correctly handles Mathpix 3-copy duplication (TOC, body, review)
-    # by always selecting the body copy (most words).
-    section_matches = _dedup_section_matches(section_matches, mmd_text)
-
-    # ── Filter fake sections (exercise numbers with tiny bodies) ─────────────
-    filtered_matches: list[dict] = []
-    for i, sec in enumerate(section_matches):
+    # ── Linear-walk dedup: first valid occurrence per section_number ──────────
+    # Walk linearly; compute body words for each match (from its end to the next
+    # match's start). Take the first match per section_number that meets the
+    # min_body_words threshold, discarding TOC stubs and review copies.
+    seen: dict[str, dict] = {}
+    for idx, sec in enumerate(all_matches):
+        key = sec["section_number"]
         body_start = sec["end"]
-        body_end = section_matches[i + 1]["start"] if i + 1 < len(section_matches) else len(mmd_text)
+        body_end = all_matches[idx + 1]["start"] if idx + 1 < len(all_matches) else len(mmd_text)
         body_words = _word_count(mmd_text[body_start:body_end])
-        if body_words >= MIN_SECTION_BODY_WORDS:
-            filtered_matches.append(sec)
-        else:
-            logger.info(
-                "Skipping short fake section %s.%s (%d words) — likely exercise number",
-                sec["chapter"], sec["section_in_chapter"], body_words,
-            )
-    section_matches = filtered_matches
-    logger.info("Section candidates after exercise-number filter: %d", len(section_matches))
+        if key not in seen:
+            if body_words >= min_body_words:
+                seen[key] = sec
+            else:
+                logger.info(
+                    "Skipping short section %s (%d words) — likely TOC stub or exercise number",
+                    key, body_words,
+                )
+        # If we already have a valid entry, skip duplicates (review stubs)
 
-    # ── Step 1c: Detect chapter intro boundaries ─────────────────────────────
-    # Chapters have intro content (title, images, objectives) BEFORE section X.1.
-    # Detect chapter headings in ALL formats Mathpix produces:
-    #   Markdown: "## N | TITLE", "## N <br> TITLE", "## N: TITLE", "## N TITLE"
-    #   LaTeX:    "\section*{N | TITLE}", "\section*{N}", "\section*{N TITLE}"
-    _CHAPTER_HEADING_PATTERNS = [
-        re.compile(r"^#{1,4}\s+(\d+)\s*(?:[|:<]|\s+[A-Z])", re.MULTILINE),  # ## N | Title, ## N <br>, ## N Title
-        re.compile(r"^#{1,4}\s+(\d+)\s*$", re.MULTILINE),                   # ## N (bare number, end of line)
-        re.compile(r"^\\\\section\*\{(\d+)(?:\s*[|]|\s*\})", re.MULTILINE),  # \section*{N} or \section*{N | Title}
-    ]
-    _chapter_intro_pos: dict[int, int] = {}  # chapter_num → start position of chapter heading
+    section_matches = list(seen.values())
+    logger.info(
+        "Section-level dedup: %d occurrences → %d unique sections",
+        len(all_matches), len(section_matches),
+    )
+
+    # ── Quick TOC whitelist (hardcoded path: parse TOC from body) ─────────────
+    if not has_toc:
+        from extraction.ocr_validator import parse_toc as _parse_toc
+        _toc_entries = _parse_toc(mmd_text)
+        if _toc_entries:
+            _toc_set = {e.section_number for e in _toc_entries}
+            _pre = len(section_matches)
+            section_matches = [s for s in section_matches if s["section_number"] in _toc_set]
+            _dropped = _pre - len(section_matches)
+            if _dropped > 0:
+                logger.info(
+                    "TOC whitelist: dropped %d fake sections (kept %d)",
+                    _dropped, len(section_matches),
+                )
+
+    # ── Profile TOC whitelist ─────────────────────────────────────────────────
+    if has_toc:
+        toc_set: set[str] = {
+            str(entry.get("section_number", ""))
+            for entry in toc_sections
+        }
+        pre = len(section_matches)
+        section_matches = [s for s in section_matches if s["section_number"] in toc_set]
+        dropped = pre - len(section_matches)
+        if dropped > 0:
+            logger.info(
+                "[whitelist] %s: dropped %d sections not in TOC (kept %d)",
+                book_slug, dropped, len(section_matches),
+            )
+
+        # ── Fuzzy recovery for missing TOC sections ───────────────────────────
+        found_numbers = {sec["section_number"] for sec in section_matches}
+        chapter_boundaries: dict[int, int] = {}
+        for sec in section_matches:
+            ch = sec["chapter"]
+            if ch not in chapter_boundaries:
+                chapter_boundaries[ch] = sec["start"]
+
+        body_start_offset = (
+            min(s["start"] for s in section_matches)
+            if section_matches
+            else len(mmd_text) // 10
+        )
+
+        recovered_count = 0
+        for toc_entry in toc_sections:
+            sn = toc_entry.get("section_number", "")
+            title = toc_entry.get("title", "")
+            if not sn or sn in found_numbers or not title:
+                continue
+            result = _fuzzy_recover_section(
+                sn, title, mmd_text, chapter_boundaries,
+                body_start_offset=body_start_offset,
+            )
+            if result is not None:
+                ch = int(sn.split(".")[0])
+                sec_in_ch = int(sn.split(".")[1])
+                section_matches.append({
+                    "start": result["start"],
+                    "end": result["end"],
+                    "chapter": ch,
+                    "section_in_chapter": sec_in_ch,
+                    "section_number": sn,
+                    "section_label": f"{sn} {result['section_title']}",
+                    "concept_id": f"{book_slug}_{sn}",
+                })
+                found_numbers.add(sn)
+                recovered_count += 1
+
+        if recovered_count > 0:
+            section_matches.sort(key=lambda s: s["start"])
+
+        logger.info(
+            "[coverage] %s: TOC has %d sections; regex found %d; recovered %d; total %d",
+            book_slug,
+            len(toc_sections),
+            len(found_numbers) - recovered_count,
+            recovered_count,
+            len(section_matches),
+        )
+        missed = len(toc_sections) - len(section_matches)
+        if missed > 0:
+            logger.warning(
+                "[coverage] %s: %d TOC sections still unrecoverable after fuzzy search",
+                book_slug, missed,
+            )
+
+    # ── Sort by numeric position (chapter, section_in_chapter) ───────────────
+    section_matches.sort(key=lambda s: (s["chapter"], s["section_in_chapter"]))
+    logger.info("Section candidates after all filters: %d", len(section_matches))
+    return section_matches
+
+
+def _find_chapter_intros(mmd_text: str) -> dict[int, int]:
+    """
+    Universal chapter heading detection.
+
+    Returns dict mapping chapter_num → char_position of first chapter heading.
+    Handles all heading formats Mathpix produces across all 16 books:
+      Markdown: "## N | TITLE", "## N <br> TITLE", "## N: TITLE", "## N TITLE"
+      LaTeX:    "\\section*{N | TITLE}", "\\section*{N}"
+    """
+    chapter_intro_pos: dict[int, int] = {}
     for _pat in _CHAPTER_HEADING_PATTERNS:
         for _cm in _pat.finditer(mmd_text):
             _ch = int(_cm.group(1))
-            if _ch not in _chapter_intro_pos:
-                _chapter_intro_pos[_ch] = _cm.start()
+            if _ch not in chapter_intro_pos:
+                chapter_intro_pos[_ch] = _cm.start()
+    return chapter_intro_pos
 
-    _first_section_idx: dict[int, int] = {}  # chapter_num → index in section_matches
-    for _si, _sec in enumerate(section_matches):
-        if _sec["chapter"] not in _first_section_idx:
-            _first_section_idx[_sec["chapter"]] = _si
 
-    # ── Step 2: Split each section's body into subsection chunks ─────────────
+# ── Section body → chunks ─────────────────────────────────────────────────────
+
+def _build_section_chunks(
+    mmd_text: str,
+    sections: list[dict],
+    chapter_intros: dict[int, int],
+    book_slug: str,
+    config: dict,
+) -> tuple[list[ParsedChunk], int]:
+    """
+    For each section in sections, extract its body text and split it into
+    subsection chunks using the boundary signals in config.
+
+    Returns (raw_chunks, total_body_chars).
+    """
+    subsection_signals: list[re.Pattern] = config["subsection_signals"]
+    noise_patterns: list[re.Pattern] = config["noise_patterns"]
+    exercise_markers: list[tuple[re.Pattern, str]] = config["exercise_markers"]
+    corrections: dict = config["corrected_headings"]
+
+    # First section index per chapter (for backward extension to chapter intro)
+    first_section_idx: dict[int, int] = {}
+    for si, sec in enumerate(sections):
+        if sec["chapter"] not in first_section_idx:
+            first_section_idx[sec["chapter"]] = si
+
     raw_chunks: list[ParsedChunk] = []
-    global_order = 0  # monotone counter; reset after dedup
-    total_body_chars = 0  # coverage tracking
+    global_order = 0
+    total_body_chars = 0
 
-    for i, sec in enumerate(section_matches):
-        # Body spans from end of section heading to start of next section heading
+    for i, sec in enumerate(sections):
         body_start = sec["end"]
-        body_end = section_matches[i + 1]["start"] if i + 1 < len(section_matches) else len(mmd_text)
+        body_end = sections[i + 1]["start"] if i + 1 < len(sections) else len(mmd_text)
 
         # First section of chapter → extend backward to include chapter intro
-        if _first_section_idx.get(sec["chapter"]) == i:
-            ch_intro = _chapter_intro_pos.get(sec["chapter"])
+        if first_section_idx.get(sec["chapter"]) == i:
+            ch_intro = chapter_intros.get(sec["chapter"])
             if ch_intro is not None and ch_intro < sec["start"]:
                 body_start = ch_intro
 
-        # Last section before chapter change → trim at next chapter heading
-        if i + 1 < len(section_matches):
-            next_ch = section_matches[i + 1]["chapter"]
-            if next_ch != sec["chapter"] and next_ch in _chapter_intro_pos:
-                body_end = min(body_end, _chapter_intro_pos[next_ch])
-
-        total_body_chars += len(mmd_text[body_start:body_end])
+        # Last section before a chapter change → trim at next chapter heading
+        if i + 1 < len(sections):
+            next_ch = sections[i + 1]["chapter"]
+            if next_ch != sec["chapter"] and next_ch in chapter_intros:
+                body_end = min(body_end, chapter_intros[next_ch])
 
         body = mmd_text[body_start:body_end]
+        total_body_chars += len(body)
 
-        # Find MEANINGFUL ## subsection headings within the body
-        # (noise headings are skipped — they become body content of the surrounding chunk)
-        meaningful_subs: list[tuple[int, int, str]] = []  # (match_start, match_end, heading_text)
-        for hm in SUBHEADING_PATTERN.finditer(body):
-            heading_text = hm.group(1).strip()
-            # Skip if this is a section-level heading (X.Y) — shouldn't appear in body
+        # ── Collect candidates from all active boundary signal patterns ───────
+        all_candidates: list[tuple[int, int, str]] = []
+        for pat in subsection_signals:
+            for hm in pat.finditer(body):
+                heading_text = hm.group(1).strip()
+                all_candidates.append((hm.start(), hm.end(), heading_text))
+
+        # Sort by position (different patterns may interleave)
+        all_candidates.sort(key=lambda t: t[0])
+
+        # ── Noise filtering ───────────────────────────────────────────────────
+        meaningful_subs: list[tuple[int, int, str]] = []
+        for (sh_start, sh_end, heading_text) in all_candidates:
             if re.match(r"^\d+\.\d+\s", heading_text):
-                continue
-            # Skip noise headings
+                continue  # section headings leaked into body — skip
             if _is_noise_heading(heading_text):
                 continue
-            meaningful_subs.append((hm.start(), hm.end(), heading_text))
+            if noise_patterns and _is_noise_heading_profile(heading_text, noise_patterns):
+                continue
+            meaningful_subs.append((sh_start, sh_end, heading_text))
 
-        # Tag headings inside the exercises zone with "(Exercises)" suffix.
-        # Zone trigger headings (e.g. "SECTION 1.1 EXERCISES", "Chapter Review") set
-        # the flag but are NOT added to tagged_subs — they create no chunk because
-        # they contain zero instructional content (pure organizational dividers).
-        #
-        # Some books (e.g. college_algebra) place exercises as a separate top-level
-        # section titled "1.1 SECTION EXERCISES" — seed the zone from the section title.
+        # ── Exercise zone tagging ─────────────────────────────────────────────
         in_exercises_zone = bool(_SECTION_IS_EXERCISE_PATTERN.search(sec["section_label"]))
+        # Also check profile exercise markers against section label
+        if exercise_markers:
+            _norm_label = _normalize_heading(sec["section_label"])
+            beh = _match_exercise_marker(_norm_label, exercise_markers)
+            if beh in ("zone_section_end", "zone_chapter_end"):
+                in_exercises_zone = True
+
         tagged_subs: list[tuple[int, int, str]] = []
         for (sh_start, sh_end, heading_text) in meaningful_subs:
             _norm = _normalize_heading(heading_text)
+
+            if exercise_markers:
+                ex_behavior = _match_exercise_marker(_norm, exercise_markers)
+                if ex_behavior in ("zone_section_end", "zone_chapter_end"):
+                    in_exercises_zone = True
+                    continue  # organizational divider — no chunk
+                elif ex_behavior == "inline_single":
+                    tagged_subs.append((sh_start, sh_end, heading_text + " (Exercises)"))
+                    continue
+            # Fallback: hardcoded exercise zone pattern
             if _EXERCISE_ZONE_PATTERN.match(_norm):
-                # Set zone flag; do NOT create a chunk for this organizational marker
                 in_exercises_zone = True
-            elif in_exercises_zone:
+                continue  # organizational divider — no chunk
+
+            if in_exercises_zone:
                 tagged_subs.append((sh_start, sh_end, heading_text + " (Exercises)"))
             else:
                 tagged_subs.append((sh_start, sh_end, heading_text))
+
         meaningful_subs = tagged_subs
 
         if not meaningful_subs:
-            # Case 3: no meaningful sub-headings → whole body is one chunk
+            # No meaningful sub-headings → whole body is one chunk
             text = body.strip()
             if text:
                 _ctype, _opt = _classify_chunk(sec["section_label"], in_exercises_zone, sec["section_label"])
-                # Extract images and latex BEFORE cleaning so no refs are lost
                 _images = _extract_image_urls(text)
                 _captions = _extract_image_captions(text, len(_images))
                 _latex = _extract_latex(text)
@@ -558,31 +758,37 @@ def parse_book_mmd(
                 global_order += 1
             continue
 
-        # Capture orphan text (section intro before first subheading) — will be prepended to first chunk
+        # ── Orphan intro text before first boundary ───────────────────────────
         first_sub_start = meaningful_subs[0][0]
         orphan_text = body[:first_sub_start].strip()
 
-        # Case 1: each meaningful sub-heading → one chunk
-        # The chunk text spans from the ## heading line through all body content until
-        # the next meaningful ## heading (or end of section). Noise headings inside
-        # are naturally included in the text because we skip them as boundaries.
         for j, (sh_start, sh_end, heading_text) in enumerate(meaningful_subs):
             content_end = meaningful_subs[j + 1][0] if j + 1 < len(meaningful_subs) else len(body)
             chunk_text = body[sh_start:content_end].strip()
-            # Prepend section intro to the first subsection chunk
+
+            # Prepend section intro to first subsection chunk
             if j == 0 and orphan_text:
                 chunk_text = orphan_text + "\n\n" + chunk_text
                 logger.info(
                     "Prepending %d chars of section intro to first subsection '%s'",
                     len(orphan_text), heading_text[:40],
                 )
+
             if not chunk_text:
                 continue
-            # Determine if this heading is in the exercise zone
-            # (exercise headings were tagged with " (Exercises)" in the loop above)
+
+            # Apply OCR correction to subsection heading
+            _exercises_suffix = ""
+            if heading_text.endswith(" (Exercises)"):
+                _exercises_suffix = " (Exercises)"
+                _bare_heading = heading_text[: -len(" (Exercises)")]
+            else:
+                _bare_heading = heading_text
+            _corrected_bare = corrections.get(_bare_heading, _bare_heading)
+            heading_text = _corrected_bare + _exercises_suffix
+
             _in_zone = heading_text.endswith(" (Exercises)")
             _ctype, _opt = _classify_chunk(heading_text, _in_zone, sec["section_label"])
-            # Extract images and latex BEFORE cleaning so no refs are lost
             _images = _extract_image_urls(chunk_text)
             _captions = _extract_image_captions(chunk_text, len(_images))
             _latex = _extract_latex(chunk_text)
@@ -602,10 +808,27 @@ def parse_book_mmd(
             global_order += 1
 
     logger.info("Raw chunks before dedup: %d", len(raw_chunks))
+    return raw_chunks, total_body_chars
 
-    # ── Step 3: 3-copy deduplication ─────────────────────────────────────────
-    # Key = (concept_id, heading); keep the occurrence with the most words.
-    # This mirrors the strategy in mmd_parser.py (seen dict, max-words wins).
+
+# ── Post-processing ───────────────────────────────────────────────────────────
+
+def _postprocess_chunks(
+    raw_chunks: list[ParsedChunk],
+    config: dict,
+    total_body_chars: int,
+    book_slug: str,
+) -> list[ParsedChunk]:
+    """
+    1. Chunk-level dedup: group by (concept_id, heading), keep max words.
+    2. Merge tiny chunks (<50 words): forward merge, backward fallback.
+    3. Split large chunks at paragraph boundaries if max_chunk_words set.
+    4. Re-sort by order_index, re-number.
+    5. Coverage check: warn if <95%.
+    """
+    max_chunk_words = config["max_chunk_words"]
+
+    # ── Step 1: 3-copy deduplication ─────────────────────────────────────────
     seen: dict[tuple[str, str], ParsedChunk] = {}
     for chunk in raw_chunks:
         key = (chunk.concept_id, chunk.heading)
@@ -615,9 +838,7 @@ def parse_book_mmd(
 
     deduped = list(seen.values())
 
-    # ── Step 3b: Merge tiny chunks into adjacent chunks ──────────────────────
-    # Chunks with < 20 words (e.g. "Introduction", "Chapter Objectives") have
-    # no teaching value on their own. Merge them into the next chunk in the same section.
+    # ── Step 2: Merge tiny chunks ─────────────────────────────────────────────
     _merged: list[ParsedChunk] = []
     for _mi, _chunk in enumerate(deduped):
         _word_ct = len(_chunk.text.split())
@@ -644,14 +865,20 @@ def parse_book_mmd(
                 _chunk.heading[:40], _word_ct, len(_chunk.image_urls),
             )
         else:
-            # Keep as standalone — NEVER drop content
             _merged.append(_chunk)
     deduped = _merged
 
-    # ── Step 4: Re-sort by original reading order and re-number ──────────────
-    # The winner of each dedup group retains its order_index from the body-copy
-    # (which has the most words — the canonical body occurrence).
+    # ── Step 3: Re-sort by original reading order ─────────────────────────────
     deduped.sort(key=lambda c: c.order_index)
+
+    # ── Step 4: Split large chunks (profile-driven) ───────────────────────────
+    if max_chunk_words:
+        split_result: list[ParsedChunk] = []
+        for chunk in deduped:
+            split_result.extend(_split_large_chunk(chunk, max_chunk_words, book_slug))
+        deduped = split_result
+
+    # ── Step 5: Re-number in reading order ───────────────────────────────────
     for new_idx, chunk in enumerate(deduped):
         chunk.order_index = new_idx
 
@@ -660,7 +887,7 @@ def parse_book_mmd(
         len(deduped), len(raw_chunks) - len(deduped),
     )
 
-    # ── Coverage check (same as profile-driven path) ─────────────────────────
+    # ── Step 6: Coverage check ────────────────────────────────────────────────
     if total_body_chars > 0:
         coverage = _check_coverage(total_body_chars, deduped)
         logger.info("Coverage check: %.1f%% of body chars assigned to chunks", coverage * 100)
@@ -670,43 +897,68 @@ def parse_book_mmd(
                 book_slug, coverage * 100,
             )
 
+    # ── Step 7: TOC section coverage check (profile only) ────────────────────
+    toc_sections = config.get("toc_sections")
+    if toc_sections:
+        chunked_concepts = {c.concept_id for c in deduped}
+        expected_concepts = {f"{book_slug}_{s['section_number']}" for s in toc_sections}
+        missing = expected_concepts - chunked_concepts
+        if missing:
+            logger.warning(
+                "[profile] %d TOC sections produced no chunks: %s",
+                len(missing), sorted(missing)[:10],
+            )
+        else:
+            logger.info(
+                "[profile] TOC coverage: 100%% — all %d sections have chunks",
+                len(expected_concepts),
+            )
+
     return deduped
 
 
-# ── Multi-signal patterns (profile-driven path only) ─────────────────────────
-# These are only referenced by _parse_book_mmd_with_profile; the existing
-# hardcoded path above uses SUBHEADING_PATTERN exclusively.
+# ── Public API ────────────────────────────────────────────────────────────────
 
-_H1_PATTERN = re.compile(r"^#\s+(.+)$", re.MULTILINE)
-_H2_PATTERN = re.compile(r"^##\s+(.+)$", re.MULTILINE)   # same as SUBHEADING_PATTERN
-_H3_PATTERN = re.compile(r"^###\s+(.+)$", re.MULTILINE)
-_H4_PATTERN = re.compile(r"^####\s+(.+)$", re.MULTILINE)
-_BOLD_LINE_PATTERN = re.compile(r"^\*\*([^*\n]{3,80})\*\*\s*$", re.MULTILINE)
-_CAPS_LINE_PATTERN = re.compile(r"^([A-Z][A-Z\s]{2,79})$", re.MULTILINE)
-_NUMBERED_ITEM_PATTERN = re.compile(r"^([A-Z]\.\s+\S.{0,60})$", re.MULTILINE)  # "A. Title" style
+def parse_book_mmd(
+    mmd_path: Path,
+    book_slug: str,
+    profile=None,
+    corrected_headings: dict | None = None,
+) -> list[ParsedChunk]:
+    """
+    Parse book.mmd into subsection-level chunks with 3-copy deduplication.
 
-# Maps signal_type string → compiled pattern
-_SIGNAL_PATTERN_MAP: dict[str, re.Pattern] = {
-    "heading_h2": _H2_PATTERN,
-    "heading_h3": _H3_PATTERN,
-    "heading_h4": _H4_PATTERN,
-    "bold_line":  _BOLD_LINE_PATTERN,
-    "caps_line":  _CAPS_LINE_PATTERN,
-    "numbered":   _NUMBERED_ITEM_PATTERN,
-}
+    Single universal parse path — profile=None uses hardcoded OpenStax math
+    defaults; a BookProfile enriches the config for non-math books. Both cases
+    flow through the same pipeline:
+      _build_parse_config → _find_sections → _find_chapter_intros
+      → _build_section_chunks → _postprocess_chunks
+
+    Args:
+        mmd_path:            Path to the book's book.mmd file.
+        book_slug:           Short identifier for the book (e.g. "prealgebra").
+        profile:             Optional BookProfile for non-math books.
+        corrected_headings:  Optional dict mapping garbled section title strings
+                             to corrected titles from the TOC.
+
+    Returns:
+        List of ParsedChunk objects sorted by original reading order.
+    """
+    mmd_text = mmd_path.read_text(encoding="utf-8")
+    mmd_text = _normalize_mmd_format(mmd_text)
+    logger.info("Loaded %s (%d chars)", mmd_path, len(mmd_text))
+
+    config = _build_parse_config(profile, corrected_headings)
+    section_matches = _find_sections(mmd_text, book_slug, config)
+    chapter_intros = _find_chapter_intros(mmd_text)
+    raw_chunks, total_body_chars = _build_section_chunks(
+        mmd_text, section_matches, chapter_intros, book_slug, config
+    )
+    chunks = _postprocess_chunks(raw_chunks, config, total_body_chars, book_slug)
+    return chunks
 
 
-def _is_noise_heading_profile(heading_text: str, compiled_noise: list[re.Pattern]) -> bool:
-    """Return True if heading matches any profile-driven noise pattern."""
-    return any(p.search(heading_text) for p in compiled_noise)
-
-
-def _check_coverage(raw_body_chars: int, chunks: list[ParsedChunk]) -> float:
-    """Return fraction of body chars covered by chunks (informational only)."""
-    covered = sum(len(c.text) for c in chunks)
-    ratio = covered / raw_body_chars if raw_body_chars > 0 else 1.0
-    return ratio
-
+# ── Large-chunk splitter ──────────────────────────────────────────────────────
 
 def _split_large_chunk(chunk: ParsedChunk, max_words: int, book_slug: str) -> list[ParsedChunk]:
     """Split a chunk exceeding max_words at natural paragraph boundaries.
@@ -720,7 +972,6 @@ def _split_large_chunk(chunk: ParsedChunk, max_words: int, book_slug: str) -> li
     if len(words) <= max_words:
         return [chunk]
 
-    # Split at double-newline paragraph boundaries
     paragraphs = re.split(r"\n\n+", chunk.text)
     parts: list[str] = []
     current_part: list[str] = []
@@ -762,13 +1013,10 @@ def _split_large_chunk(chunk: ParsedChunk, max_words: int, book_slug: str) -> li
     return result
 
 
-# ── Fuzzy section recovery (profile-driven path only) ────────────────────────
+# ── Fuzzy section recovery ────────────────────────────────────────────────────
 
-# Minimum SequenceMatcher ratio for a fuzzy title match to be accepted.
 _FUZZY_TITLE_THRESHOLD = 0.75
 
-# Matches a bare "X.Y" section number anywhere on a line (no # prefix required).
-# Used by Strategy 1 of _fuzzy_recover_section().
 _BARE_SECTION_NUMBER_RE = re.compile(r"(?:^|\s)(\d+)\.(\d+)(?:\s|$)", re.MULTILINE)
 
 
@@ -801,9 +1049,7 @@ def _fuzzy_recover_section(
         expected_title:     Title from the TOC (authoritative).
         mmd_text:           Full normalized MMD text.
         chapter_boundaries: Dict of chapter_num → char offset of first known section.
-        body_start_offset:  Minimum character offset for a valid match. Any candidate
-                            found before this offset is in front matter (TOC listings,
-                            preface, etc.) and should be skipped.
+        body_start_offset:  Minimum character offset for a valid match.
 
     Returns:
         dict with keys {start, end, section_number, section_title, recovered_by}
@@ -833,7 +1079,7 @@ def _fuzzy_recover_section(
                 "start": line_start,
                 "end": line_end,
                 "section_number": section_number,
-                "section_title": expected_title,  # use TOC title (authoritative)
+                "section_title": expected_title,
                 "recovered_by": "bare_number",
             }
 
@@ -891,476 +1137,6 @@ def _fuzzy_recover_section(
     return None
 
 
-def _parse_book_mmd_with_profile(mmd_text: str, book_slug: str, profile) -> list[ParsedChunk]:
-    """
-    Profile-driven parser for non-math books.
-
-    Behaviour differences from the hardcoded path:
-    - Boundary signals: driven by profile.subsection_signals (may include h3/h4/bold/caps)
-    - Noise filtering: driven by profile.noise_patterns + profile.feature_box_patterns
-    - Exercise detection: driven by profile.exercise_markers
-    - max_sections_per_chapter: from profile.max_sections_per_chapter
-    - min body words threshold: from profile.min_chunk_words
-    - Post-processing: large chunks split at profile.max_chunk_words
-    - Coverage check: warns if < 95% of instructional body text is assigned
-    """
-    # ── Compile profile noise patterns once ──────────────────────────────────
-    # noise_patterns: headings to skip entirely
-    # feature_box_patterns: recurring box headings — keep inline, never split
-    compiled_noise: list[re.Pattern] = []
-    for pat_str in profile.noise_patterns:
-        try:
-            compiled_noise.append(re.compile(pat_str, re.IGNORECASE))
-        except re.error as exc:
-            logger.warning("Invalid noise_pattern %r in profile %s: %s", pat_str, book_slug, exc)
-    for pat_str in profile.feature_box_patterns:
-        try:
-            compiled_noise.append(re.compile(pat_str, re.IGNORECASE))
-        except re.error as exc:
-            logger.warning("Invalid feature_box_pattern %r in profile %s: %s", pat_str, book_slug, exc)
-
-    # ── Compile exercise markers ──────────────────────────────────────────────
-    compiled_exercise_markers: list[tuple[re.Pattern, str]] = []
-    for marker in profile.exercise_markers:
-        try:
-            compiled_exercise_markers.append(
-                (re.compile(marker.pattern, re.IGNORECASE), marker.behavior)
-            )
-        except re.error as exc:
-            logger.warning(
-                "Invalid exercise_marker pattern %r in profile %s: %s",
-                marker.pattern, book_slug, exc,
-            )
-
-    # ── Build active boundary patterns from profile signals ───────────────────
-    # Only signals with is_boundary=True are treated as chunk split points.
-    active_signal_patterns: list[re.Pattern] = []
-    for signal in profile.subsection_signals:
-        if not signal.is_boundary:
-            continue
-        pat = _SIGNAL_PATTERN_MAP.get(signal.signal_type)
-        if pat is None:
-            logger.warning(
-                "Unknown signal_type %r in profile %s — skipping",
-                signal.signal_type, book_slug,
-            )
-            continue
-        active_signal_patterns.append(pat)
-
-    # If the profile declares no boundary signals, fall back to ## headings.
-    if not active_signal_patterns:
-        logger.warning(
-            "Profile %s has no is_boundary=True signals — using ## headings as default",
-            book_slug,
-        )
-        active_signal_patterns = [_H2_PATTERN]
-
-    max_section_in_chapter: int = profile.max_sections_per_chapter
-    min_body_words: int = profile.min_chunk_words
-    max_chunk_words: int = profile.max_chunk_words
-
-    # ── Step 1: Find all X.Y section headings ────────────────────────────────
-    section_matches: list[dict] = []
-    corrected_headings = getattr(profile, "corrected_headings", {}) or {}
-    # When a TOC whitelist is available, the TOC is the authority for which
-    # sections are real — the arbitrary max_sections_per_chapter cap must not
-    # drop legitimate high-numbered sections (e.g. section 1.12 in nursing books).
-    has_toc = bool(profile.toc_sections)
-
-    for m in SECTION_PATTERN.finditer(mmd_text):
-        chapter_num = int(m.group(2))
-        section_in_chapter = int(m.group(3))
-        if section_in_chapter > max_section_in_chapter:
-            if has_toc:
-                # TOC whitelist is the authority — bypass the arbitrary cap.
-                # Fix 2 will reject any section not present in the TOC.
-                logger.debug(
-                    "[profile] TOC whitelist active — skipping max_section_in_chapter cap for %d.%d",
-                    chapter_num, section_in_chapter,
-                )
-            else:
-                # No TOC: apply the heuristic cap to reject fake sections.
-                continue
-        section_title_raw = m.group(4).strip()
-        # Apply OCR heading correction if profile provides corrections
-        section_title = corrected_headings.get(section_title_raw, section_title_raw)
-        if section_title != section_title_raw:
-            logger.info(
-                "[correction] Section %s.%s: '%s' → '%s'",
-                chapter_num, section_in_chapter, section_title_raw, section_title,
-            )
-        section_number = f"{chapter_num}.{section_in_chapter}"
-        section_label = f"{section_number} {section_title}"
-        concept_id = f"{book_slug}_{section_number}"
-        section_matches.append({
-            "start": m.start(),
-            "end": m.end(),
-            "chapter": chapter_num,
-            "section_in_chapter": section_in_chapter,
-            "section_number": section_number,
-            "section_label": section_label,
-            "concept_id": concept_id,
-        })
-
-    logger.info(
-        "[profile] Found %d section heading occurrences (before dedup)", len(section_matches)
-    )
-
-    # ── Section-level dedup (replaces old backward-number filter) ─────────────
-    section_matches = _dedup_section_matches(section_matches, mmd_text)
-
-    # ── Filter fake sections (exercise numbers with tiny bodies) ─────────────
-    filtered_matches: list[dict] = []
-    for i, sec in enumerate(section_matches):
-        body_start = sec["end"]
-        body_end = (
-            section_matches[i + 1]["start"] if i + 1 < len(section_matches) else len(mmd_text)
-        )
-        body_words = _word_count(mmd_text[body_start:body_end])
-        if body_words >= min_body_words:
-            filtered_matches.append(sec)
-        else:
-            logger.debug(
-                "[profile] Skipping short fake section %s.%s (%d words)",
-                sec["chapter"], sec["section_in_chapter"], body_words,
-            )
-    section_matches = filtered_matches
-    logger.info("[profile] Section candidates after filters: %d", len(section_matches))
-
-    # ── TOC Whitelist: drop regex matches not in TOC ──────────────────────────
-    # When the TOC is available, it is the sole authority for which section
-    # numbers are real instructional sections. Any section_number produced by
-    # the regex that does not appear in the TOC is noise (exercise numbers,
-    # figure references, etc.) and must be rejected before recovery.
-    if profile.toc_sections:
-        toc_set: set[str] = {
-            str(entry.get("section_number", ""))
-            for entry in profile.toc_sections
-        }
-        pre_whitelist_count = len(section_matches)
-        section_matches = [
-            sec for sec in section_matches
-            if sec["section_number"] in toc_set
-        ]
-        dropped = pre_whitelist_count - len(section_matches)
-        if dropped > 0:
-            logger.info(
-                "[whitelist] %s: dropped %d fake sections not in TOC (kept %d)",
-                book_slug, dropped, len(section_matches),
-            )
-
-    # ── Step 1b: Recover missing sections via TOC fuzzy search ───────────────
-    # For each TOC section absent from the regex scan, try three fallback strategies
-    # to locate the section's position in the MMD body.
-    if profile.toc_sections:
-        found_numbers = {sec["section_number"] for sec in section_matches}
-
-        # Build chapter_boundaries from found sections as a position proxy.
-        # Maps chapter_num → char offset of first known section in that chapter.
-        chapter_boundaries: dict[int, int] = {}
-        for sec in section_matches:
-            ch = sec["chapter"]
-            if ch not in chapter_boundaries:
-                chapter_boundaries[ch] = sec["start"]
-
-        # Compute body_start_offset to prevent recovery from matching front matter
-        # (TOC page listings, preface, dedication, etc. that precede the body).
-        # Use the earliest confirmed section heading position. If no confirmed
-        # sections exist yet, fall back to a conservative fraction of the document.
-        if section_matches:
-            body_start_offset = min(s["start"] for s in section_matches)
-        else:
-            body_start_offset = len(mmd_text) // 10
-            logger.warning(
-                "[recovery] %s: no confirmed sections for body_start_offset; "
-                "defaulting to %d chars",
-                book_slug, body_start_offset,
-            )
-
-        recovered_count = 0
-        for toc_entry in profile.toc_sections:
-            sn = toc_entry.get("section_number", "")
-            title = toc_entry.get("title", "")
-            if not sn or sn in found_numbers:
-                continue
-            if not title:
-                continue
-
-            result = _fuzzy_recover_section(
-                sn, title, mmd_text, chapter_boundaries,
-                body_start_offset=body_start_offset,
-            )
-            if result is not None:
-                ch = int(sn.split(".")[0])
-                sec_in_ch = int(sn.split(".")[1])
-                section_matches.append({
-                    "start": result["start"],
-                    "end": result["end"],
-                    "chapter": ch,
-                    "section_in_chapter": sec_in_ch,
-                    "section_number": sn,
-                    "section_label": f"{sn} {result['section_title']}",
-                    "concept_id": f"{book_slug}_{sn}",
-                })
-                found_numbers.add(sn)
-                recovered_count += 1
-
-        # Re-sort by document position after inserting recovered sections
-        if recovered_count > 0:
-            section_matches.sort(key=lambda s: s["start"])
-
-        logger.info(
-            "[coverage] %s: TOC has %d sections; regex found %d; recovered %d; total %d",
-            book_slug,
-            len(profile.toc_sections),
-            len(found_numbers) - recovered_count,
-            recovered_count,
-            len(section_matches),
-        )
-        missed = len(profile.toc_sections) - len(section_matches)
-        if missed > 0:
-            logger.warning(
-                "[coverage] %s: %d TOC sections still unrecoverable after fuzzy search",
-                book_slug, missed,
-            )
-
-    # ── Detect chapter intro positions ───────────────────────────────────────
-    # Universal detection: Markdown + LaTeX chapter heading formats
-    _CHAPTER_HEADING_PATTERNS = [
-        re.compile(r"^#{1,4}\s+(\d+)\s*(?:[|:<]|\s+[A-Z])", re.MULTILINE),
-        re.compile(r"^#{1,4}\s+(\d+)\s*$", re.MULTILINE),
-        re.compile(r"^\\\\section\*\{(\d+)(?:\s*[|]|\s*\})", re.MULTILINE),
-    ]
-    _chapter_intro_pos: dict[int, int] = {}
-    for _pat in _CHAPTER_HEADING_PATTERNS:
-        for _cm in _pat.finditer(mmd_text):
-            _ch = int(_cm.group(1))
-            if _ch not in _chapter_intro_pos:
-                _chapter_intro_pos[_ch] = _cm.start()
-
-    _first_section_idx: dict[int, int] = {}
-    for _si, _sec in enumerate(section_matches):
-        if _sec["chapter"] not in _first_section_idx:
-            _first_section_idx[_sec["chapter"]] = _si
-
-    # Track total instructional body chars for coverage check
-    total_body_chars = 0
-
-    # ── Step 2: Split each section's body into subsection chunks ─────────────
-    raw_chunks: list[ParsedChunk] = []
-    global_order = 0
-
-    for i, sec in enumerate(section_matches):
-        body_start = sec["end"]
-        body_end = (
-            section_matches[i + 1]["start"] if i + 1 < len(section_matches) else len(mmd_text)
-        )
-
-        # Extend backward to include chapter intro for the first section
-        if _first_section_idx.get(sec["chapter"]) == i:
-            ch_intro = _chapter_intro_pos.get(sec["chapter"])
-            if ch_intro is not None and ch_intro < sec["start"]:
-                body_start = ch_intro
-
-        # Trim at next chapter heading when chapter changes
-        if i + 1 < len(section_matches):
-            next_ch = section_matches[i + 1]["chapter"]
-            if next_ch != sec["chapter"] and next_ch in _chapter_intro_pos:
-                body_end = min(body_end, _chapter_intro_pos[next_ch])
-
-        body = mmd_text[body_start:body_end]
-        total_body_chars += len(body)
-
-        # ── Multi-signal boundary collection ─────────────────────────────────
-        # Gather ALL matches from all active signal patterns, tagged with position.
-        # Each entry: (match_start_in_body, match_end_in_body, heading_text)
-        all_candidates: list[tuple[int, int, str]] = []
-        for pat in active_signal_patterns:
-            for hm in pat.finditer(body):
-                # group(1) is the captured heading text for all patterns
-                heading_text = hm.group(1).strip()
-                all_candidates.append((hm.start(), hm.end(), heading_text))
-
-        # Sort by position so splits happen in reading order
-        all_candidates.sort(key=lambda t: t[0])
-
-        # ── Noise filtering ───────────────────────────────────────────────────
-        meaningful_subs: list[tuple[int, int, str]] = []
-        for (sh_start, sh_end, heading_text) in all_candidates:
-            # Skip X.Y section headings that leaked into the body
-            if re.match(r"^\d+\.\d+\s", heading_text):
-                continue
-            # Skip profile-defined noise / feature-box headings AND universal noise patterns
-            if _is_noise_heading_profile(heading_text, compiled_noise) or _is_noise_heading(heading_text):
-                continue
-            meaningful_subs.append((sh_start, sh_end, heading_text))
-
-        # ── Exercise zone tagging (profile-driven) ────────────────────────────
-        # Seed from the section label itself (same as hardcoded path)
-        in_exercises_zone = _check_is_exercise_section_profile(
-            sec["section_label"], compiled_exercise_markers
-        )
-        tagged_subs: list[tuple[int, int, str]] = []
-        for (sh_start, sh_end, heading_text) in meaningful_subs:
-            _norm = _normalize_heading(heading_text)
-            ex_behavior = _match_exercise_marker(_norm, compiled_exercise_markers)
-            if ex_behavior in ("zone_section_end", "zone_chapter_end"):
-                # Organizational divider — set zone flag, no chunk
-                in_exercises_zone = True
-            elif ex_behavior == "inline_single":
-                # Single exercise heading — becomes exercise chunk, does not set zone
-                tagged_subs.append((sh_start, sh_end, heading_text + " (Exercises)"))
-            elif in_exercises_zone:
-                tagged_subs.append((sh_start, sh_end, heading_text + " (Exercises)"))
-            else:
-                tagged_subs.append((sh_start, sh_end, heading_text))
-        meaningful_subs = tagged_subs
-
-        if not meaningful_subs:
-            # No meaningful sub-headings → whole body is one chunk
-            text = body.strip()
-            if text:
-                _ctype, _opt = _classify_chunk(
-                    sec["section_label"], in_exercises_zone, sec["section_label"]
-                )
-                _images = _extract_image_urls(text)
-                _latex = _extract_latex(text)
-                raw_chunks.append(
-                    ParsedChunk(
-                        book_slug=book_slug,
-                        concept_id=sec["concept_id"],
-                        section=sec["section_label"],
-                        order_index=global_order,
-                        heading=sec["section_label"],
-                        text=_clean_chunk_text(text),
-                        latex=_latex,
-                        image_urls=_images,
-                        chunk_type=_ctype,
-                        is_optional=_opt,
-                    )
-                )
-                global_order += 1
-            continue
-
-        # Capture orphan intro text before the first boundary
-        first_sub_start = meaningful_subs[0][0]
-        orphan_text = body[:first_sub_start].strip()
-
-        for j, (sh_start, sh_end, heading_text) in enumerate(meaningful_subs):
-            content_end = (
-                meaningful_subs[j + 1][0] if j + 1 < len(meaningful_subs) else len(body)
-            )
-            chunk_text = body[sh_start:content_end].strip()
-            if j == 0 and orphan_text:
-                chunk_text = orphan_text + "\n\n" + chunk_text
-            if not chunk_text:
-                continue
-            # Apply OCR correction to subsection heading if available
-            _exercises_suffix = ""
-            if heading_text.endswith(" (Exercises)"):
-                _exercises_suffix = " (Exercises)"
-                _bare_heading = heading_text[: -len(" (Exercises)")]
-            else:
-                _bare_heading = heading_text
-            _corrected_bare = corrected_headings.get(_bare_heading, _bare_heading)
-            heading_text = _corrected_bare + _exercises_suffix
-            _in_zone = heading_text.endswith(" (Exercises)")
-            _ctype, _opt = _classify_chunk(heading_text, _in_zone, sec["section_label"])
-            _images = _extract_image_urls(chunk_text)
-            _latex = _extract_latex(chunk_text)
-            raw_chunks.append(
-                ParsedChunk(
-                    book_slug=book_slug,
-                    concept_id=sec["concept_id"],
-                    section=sec["section_label"],
-                    order_index=global_order,
-                    heading=heading_text,
-                    text=_clean_chunk_text(chunk_text),
-                    latex=_latex,
-                    image_urls=_images,
-                    chunk_type=_ctype,
-                    is_optional=_opt,
-                )
-            )
-            global_order += 1
-
-    logger.info("[profile] Raw chunks before dedup: %d", len(raw_chunks))
-
-    # ── Step 3: 3-copy deduplication ─────────────────────────────────────────
-    seen: dict[tuple[str, str], ParsedChunk] = {}
-    for chunk in raw_chunks:
-        key = (chunk.concept_id, chunk.heading)
-        existing = seen.get(key)
-        if existing is None or _word_count(chunk.text) > _word_count(existing.text):
-            seen[key] = chunk
-
-    deduped = list(seen.values())
-
-    # ── Step 3b: Merge tiny chunks ────────────────────────────────────────────
-    _merged: list[ParsedChunk] = []
-    for _mi, _chunk in enumerate(deduped):
-        if (
-            len(_chunk.text.split()) < 50
-            and _mi + 1 < len(deduped)
-            and deduped[_mi + 1].concept_id == _chunk.concept_id
-        ):
-            deduped[_mi + 1].text = _chunk.text + "\n\n" + deduped[_mi + 1].text
-            logger.debug("[profile] Merged tiny chunk '%s' into next chunk", _chunk.heading[:40])
-        else:
-            _merged.append(_chunk)
-    deduped = _merged
-
-    # ── Step 4: Re-sort by reading order ─────────────────────────────────────
-    deduped.sort(key=lambda c: c.order_index)
-
-    # ── Step 5: Split large chunks (profile-driven) ───────────────────────────
-    # Any chunk exceeding profile.max_chunk_words is split at paragraph boundaries.
-    split_result: list[ParsedChunk] = []
-    for chunk in deduped:
-        split_result.extend(_split_large_chunk(chunk, max_chunk_words, book_slug))
-
-    # Re-number after potential splits
-    for new_idx, chunk in enumerate(split_result):
-        chunk.order_index = new_idx
-
-    logger.info(
-        "[profile] Chunks after dedup + split: %d (removed %d duplicates, split %d large)",
-        len(split_result),
-        len(raw_chunks) - len(seen),
-        len(split_result) - len(deduped),
-    )
-
-    # ── Step 6: Coverage check ────────────────────────────────────────────────
-    coverage = _check_coverage(total_body_chars, split_result)
-    logger.info(
-        "[profile] Coverage check: %.1f%% of body chars assigned to chunks",
-        coverage * 100,
-    )
-    if coverage < 0.95:
-        logger.warning(
-            "[profile] Coverage below 95%% for book %s (%.1f%%) — some body text may be unassigned",
-            book_slug, coverage * 100,
-        )
-
-    # ── TOC section coverage check ────────────────────────────────────────────
-    if profile.toc_sections:
-        chunked_concepts = {c.concept_id for c in split_result}
-        expected_concepts = {f"{book_slug}_{s['section_number']}" for s in profile.toc_sections}
-        missing = expected_concepts - chunked_concepts
-        if missing:
-            logger.warning(
-                "[profile] %d TOC sections produced no chunks: %s",
-                len(missing), sorted(missing)[:10],
-            )
-        else:
-            logger.info(
-                "[profile] TOC coverage: 100%% — all %d sections have chunks",
-                len(expected_concepts),
-            )
-
-    return split_result
-
-
 # ── Profile exercise-detection helpers ───────────────────────────────────────
 
 def _match_exercise_marker(
@@ -1410,7 +1186,6 @@ if __name__ == "__main__":
     for c in chunks[:5]:
         print(f"  [{c.order_index:03d}] {c.concept_id:20s}  '{c.heading[:50]}'  ({_word_count(c.text)} words)")
 
-    # Find first chunk with an image URL
     image_chunk = next((c for c in chunks if c.image_urls), None)
     if image_chunk:
         print("\nSample chunk with image:")
@@ -1421,12 +1196,10 @@ if __name__ == "__main__":
     else:
         print("\nNo chunks with image URLs found.")
 
-    # Concept coverage
     unique_concepts = len({c.concept_id for c in chunks})
     print(f"\nUnique concept_ids: {unique_concepts}")
     print(f"Average chunks per concept: {len(chunks) / unique_concepts:.1f}")
 
-    # Sample 10 chunks from chapter 1 to verify quality
     ch1_chunks = [c for c in chunks if c.concept_id.startswith("prealgebra_1.")]
     print(f"\nChapter 1 chunks ({len(ch1_chunks)} total):")
     for c in ch1_chunks[:15]:
