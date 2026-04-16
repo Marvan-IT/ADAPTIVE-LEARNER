@@ -494,25 +494,35 @@ def _find_sections(mmd_text: str, book_slug: str, config: dict) -> list[dict]:
 
     logger.info("Found %d section heading occurrences (before dedup)", len(all_matches))
 
-    # ── Linear-walk dedup: first valid occurrence per section_number ──────────
-    # Walk linearly; compute body words for each match (from its end to the next
-    # match's start). Take the first match per section_number that meets the
-    # min_body_words threshold, discarding TOC stubs and review copies.
+    # ── Detect TOC region end ────────────────────────────────────────────────
+    # The Table of Contents lists sections as "X.Y Title ..... PageNum".
+    # Everything before the TOC end is TOC stubs — skip them.
+    _toc_end = 0
+    for _tm in re.finditer(r"^\d+\.\d+\s+.+?\.{3,}\s*\d+\s*$", mmd_text, re.MULTILINE):
+        _toc_end = max(_toc_end, _tm.end())
+    if _toc_end > 0:
+        logger.info("TOC region detected, ends at char %d (%.1f%%)", _toc_end, _toc_end / len(mmd_text) * 100)
+
+    # ── TOC-first dedup: for each section, find FIRST match AFTER the TOC ────
+    # The body content always appears after the TOC. By starting from _toc_end,
+    # we skip TOC stubs entirely and find the real teaching body for each section.
     seen: dict[str, dict] = {}
     for idx, sec in enumerate(all_matches):
         key = sec["section_number"]
+        if key in seen:
+            continue  # already found the first body occurrence
+        if sec["start"] < _toc_end:
+            continue  # skip TOC region matches
         body_start = sec["end"]
         body_end = all_matches[idx + 1]["start"] if idx + 1 < len(all_matches) else len(mmd_text)
         body_words = _word_count(mmd_text[body_start:body_end])
-        if key not in seen:
-            if body_words >= min_body_words:
-                seen[key] = sec
-            else:
-                logger.info(
-                    "Skipping short section %s (%d words) — likely TOC stub or exercise number",
-                    key, body_words,
-                )
-        # If we already have a valid entry, skip duplicates (review stubs)
+        if body_words >= min_body_words:
+            seen[key] = sec
+        else:
+            logger.info(
+                "Skipping short section %s (%d words) — likely exercise stub",
+                key, body_words,
+            )
 
     section_matches = list(seen.values())
     logger.info(
