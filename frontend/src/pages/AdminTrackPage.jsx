@@ -6,13 +6,12 @@ import { getBookStatus } from "../api/admin";
 
 function getStages(t) {
   return [
-    { num: 1, label: t("admin.pipeline.stage1Label", "Font calibration"),          estimate: t("admin.pipeline.stage1Est", "~1 min"),     desc: t("admin.pipeline.stage1Desc", "Detect heading fonts and register book") },
+    { num: 1, label: t("admin.pipeline.stage1Label", "Register book"),             estimate: t("admin.pipeline.stage1Est", "~5 sec"),     desc: t("admin.pipeline.stage1Desc", "Register book metadata and prepare output directory") },
     { num: 2, label: t("admin.pipeline.stage2Label", "Mathpix PDF extraction"),    estimate: t("admin.pipeline.stage2Est", "~20-45 min"), desc: t("admin.pipeline.stage2Desc", "Convert PDF to structured Markdown (MMD) with LaTeX and images") },
-    { num: 3, label: t("admin.pipeline.stage3Label", "Structure analysis"),        estimate: t("admin.pipeline.stage3Est", "~30 sec"),    desc: t("admin.pipeline.stage3Desc", "Parse TOC, detect boundary signals and heading frequencies") },
-    { num: 4, label: t("admin.pipeline.stage4Label", "Book profiling (AI)"),       estimate: t("admin.pipeline.stage4Est", "~30 sec"),    desc: t("admin.pipeline.stage4Desc", "AI determines subsection grammar, exercise patterns and noise rules for this book") },
-    { num: 5, label: t("admin.pipeline.stage5Label", "Build chunks & embeddings"), estimate: t("admin.pipeline.stage5Est", "~2-5 min"),   desc: t("admin.pipeline.stage5Desc", "Split content into teaching chunks, generate embeddings, save to database") },
-    { num: 6, label: t("admin.pipeline.stage6Label", "Build dependency graph"),    estimate: t("admin.pipeline.stage6Est", "~1 min"),     desc: t("admin.pipeline.stage6Desc", "Build prerequisite graph linking sections in reading order") },
-    { num: 7, label: t("admin.pipeline.stage7Label", "Ready for review"),          estimate: null,                                         desc: t("admin.pipeline.stage7Desc", "Pipeline complete -- book is ready for admin review") },
+    { num: 3, label: t("admin.pipeline.stage3Label", "Build chunks & embeddings"), estimate: t("admin.pipeline.stage3Est", "~2-5 min"),   desc: t("admin.pipeline.stage3Desc", "Split content into teaching chunks, generate embeddings, save to database") },
+    { num: 4, label: t("admin.pipeline.stage4Label", "Validate chunks"),           estimate: t("admin.pipeline.stage4Est", "~10 sec"),    desc: t("admin.pipeline.stage4Desc", "Check TOC coverage, section ordering, chunk quality") },
+    { num: 5, label: t("admin.pipeline.stage5Label", "Build dependency graph"),    estimate: t("admin.pipeline.stage5Est", "~1 min"),     desc: t("admin.pipeline.stage5Desc", "Build prerequisite graph linking sections in reading order") },
+    { num: 6, label: t("admin.pipeline.stage6Label", "Ready for review"),          estimate: null,                                         desc: t("admin.pipeline.stage6Desc", "Pipeline complete — book is ready for admin review") },
   ];
 }
 

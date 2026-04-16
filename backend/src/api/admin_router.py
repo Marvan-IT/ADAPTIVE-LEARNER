@@ -334,35 +334,31 @@ async def get_book_status(
             elif "Pipeline started" in line and stage_number < 1:
                 stage_number, stage_label = -1, "Pipeline started"
 
-            # Stage 1–7 markers
-            if "Stage 1/7" in line and "Calibrating" in line:
-                stage_number, stage_label = 1, "Font calibration"
-            elif "Stage 1/7" in line and "Done" in line:
-                stage_number, stage_label = 1, "Font calibration \u2713"
-            elif "Stage 2/7" in line and "Done" not in line:
+            # Stage 1–6 markers (6-stage pipeline)
+            if "Stage 1/6" in line and "Done" not in line:
+                stage_number, stage_label = 1, "Registering book metadata"
+            elif "Stage 1/6" in line and "Done" in line:
+                stage_number, stage_label = 1, "Book registered \u2713"
+            elif "Stage 2/6" in line and "Done" not in line:
                 stage_number, stage_label = 2, "Mathpix PDF extraction"
-            elif "Stage 2/7" in line and "Done" in line:
+            elif "Stage 2/6" in line and "Done" in line:
                 stage_number, stage_label = 2, "Mathpix extraction \u2713"
-            elif "Stage 3/7" in line and "Done" not in line:
-                stage_number, stage_label = 3, "Analyzing book structure"
-            elif "Stage 3/7" in line and "Done" in line:
-                stage_number, stage_label = 3, "Structure analysis \u2713"
-            elif "Stage 4/7" in line and "Done" not in line:
-                stage_number, stage_label = 4, "Profiling book (LLM)"
-            elif "Stage 4/7" in line and "Done" in line:
-                stage_number, stage_label = 4, "Book profile \u2713"
-            elif "Stage 5/7" in line and "Done" not in line:
-                stage_number, stage_label = 5, "Building chunks & embeddings"
-            elif "Stage 5/7" in line and "Done" in line:
-                stage_number, stage_label = 5, "Chunks built \u2713"
-            elif "Stage 6/7" in line and "Done" not in line:
-                stage_number, stage_label = 6, "Building dependency graph"
-            elif "Stage 6/7" in line and "Done" in line:
-                stage_number, stage_label = 6, "Graph built \u2713"
-            elif "Stage 7/7" in line and "Done" not in line:
-                stage_number, stage_label = 7, "Hot-loading into server"
+            elif "Stage 3/6" in line and "Done" not in line:
+                stage_number, stage_label = 3, "Building chunks & embeddings"
+            elif "Stage 3/6" in line and "Done" in line:
+                stage_number, stage_label = 3, "Chunks built \u2713"
+            elif "Stage 4/6" in line and "Validat" in line and "FAILED" not in line and "passed" not in line:
+                stage_number, stage_label = 4, "Validating parsed chunks"
+            elif "Stage 4/6" in line and "passed" in line:
+                stage_number, stage_label = 4, "Validation passed \u2713"
+            elif "Stage 5/6" in line and "Done" not in line:
+                stage_number, stage_label = 5, "Building dependency graph"
+            elif "Stage 5/6" in line and "Done" in line:
+                stage_number, stage_label = 5, "Graph built \u2713"
+            elif "Stage 6/6" in line and "Done" not in line:
+                stage_number, stage_label = 6, "Hot-loading into server"
             elif "Pipeline complete" in line:
-                stage_number, stage_label = 7, "Ready for review"
+                stage_number, stage_label = 6, "Ready for review"
                 # Update DB status when pipeline completes
                 book = (await db.execute(
                     select(Book).where(Book.book_slug == slug)
@@ -374,7 +370,7 @@ async def get_book_status(
     # Filtered stage-marker lines for clear progression view
     stage_lines = [
         line for line in lines
-        if ("Stage " in line and "/7" in line)
+        if ("Stage " in line and "/6" in line)
         or "Pipeline started" in line
         or "Pipeline complete" in line
         or "Pipeline FAILED" in line
