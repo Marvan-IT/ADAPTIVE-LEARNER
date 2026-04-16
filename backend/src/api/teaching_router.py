@@ -1403,8 +1403,20 @@ async def evaluate_chunk_answers(
     chunk_progress_update: dict = {}
     all_study_complete = False
     next_mode = "NORMAL"
+    chunk_badges: list = []
 
     if passed:
+        # Evaluate chunk_complete badges (e.g. perfect_chunk)
+        score_pct_for_badges = round(score_frac * 100)
+        try:
+            from gamification.badge_engine import evaluate_badges
+            chunk_badges = await evaluate_badges(
+                db, session.student_id, "chunk_complete",
+                {"chunk_perfect": score_pct_for_badges >= 100},
+            )
+        except Exception:
+            logger.exception("[evaluate-chunk] chunk_complete badge evaluation failed")
+
         # Part 1 — Mode computation using MCQ behavioral signals
         try:
             history = await load_student_history(str(session.student_id), session.concept_id, db)
@@ -1490,12 +1502,13 @@ async def evaluate_chunk_answers(
             # Award mastery XP (flush so the mastery row is visible to badge queries)
             await db.flush()
             from gamification.xp_engine import award_mastery_xp
-            await award_mastery_xp(
+            mastery_xp_result = await award_mastery_xp(
                 db=db,
                 student_id=session.student_id,
                 session_id=session.id,
                 score=int(round(score_frac * 100)) if score_frac is not None else None,
             )
+            chunk_badges = chunk_badges + mastery_xp_result.get("new_badges", [])
 
         await db.commit()
 
@@ -1506,6 +1519,7 @@ async def evaluate_chunk_answers(
         chunk_progress=chunk_progress_update,
         feedback=feedback,
         next_mode=next_mode,
+        new_badges=chunk_badges,
     )
 
 
@@ -2033,8 +2047,22 @@ async def get_student_badges(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Get all badges earned by a student, ordered newest first."""
+    """Get all badges earned by a student, ordered newest first.
+
+    Runs a catch-up evaluation for all badge triggers so that any
+    badges the student qualified for but were missed are awarded retroactively.
+    """
     await _validate_student_ownership(user, student_id, db)
+
+    # Retroactive catch-up: evaluate all triggers to award any missed badges
+    try:
+        from gamification.badge_engine import sync_student_badges
+        await sync_student_badges(db, student_id)
+        await db.commit()
+    except Exception:
+        logger.exception("[badges-catchup] failed for student %s", student_id)
+        await db.rollback()
+
     from db.models import StudentBadge
     result = await db.execute(
         select(StudentBadge)

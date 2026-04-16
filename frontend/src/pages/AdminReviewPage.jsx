@@ -219,9 +219,10 @@ export default function AdminReviewPage() {
       getBookGraph(slug).catch(() => ({ data: null })),
       getAdminBooks().catch(() => ({ data: [] })),
     ]).then(([secRes, graphRes, booksRes]) => {
-      setSections(secRes.data);
+      const chaptersArr = secRes.data?.chapters || secRes.data || [];
+      setSections(chaptersArr);
       const concepts = [];
-      secRes.data.forEach((ch) =>
+      chaptersArr.forEach((ch) =>
         ch.sections.forEach((s) =>
           concepts.push({
             concept_id: s.concept_id,
@@ -260,9 +261,10 @@ export default function AdminReviewPage() {
             getBookSections(slug),
             getBookGraph(slug).catch(() => ({ data: null })),
           ]).then(([secRes, graphRes]) => {
-            setSections(secRes.data);
+            const chaptersArr = secRes.data?.chapters || secRes.data || [];
+            setSections(chaptersArr);
             const concepts = [];
-            secRes.data.forEach((ch) =>
+            chaptersArr.forEach((ch) =>
               ch.sections.forEach((s) =>
                 concepts.push({
                   concept_id: s.concept_id,
@@ -343,7 +345,7 @@ export default function AdminReviewPage() {
       setEditingChunk(null);
       loadChunks(selectedConcept);
       // Also refresh sections so left panel shows updated heading
-      getBookSections(slug).then((r) => setSections(r.data)).catch(() => {});
+      getBookSections(slug).then((r) => setSections(r.data?.chapters || r.data || [])).catch(() => {});
     } catch (e) {
       toast({ variant: "danger", title: "Error", description: e.response?.data?.detail || "Failed to save" });
     }
@@ -355,7 +357,7 @@ export default function AdminReviewPage() {
     try {
       await updateChunk(chunk.id, { heading: newHeading.trim() });
       loadChunks(selectedConcept);
-      getBookSections(slug).then((r) => setSections(r.data)).catch(() => {});
+      getBookSections(slug).then((r) => setSections(r.data?.chapters || r.data || [])).catch(() => {});
     } catch (e) {
       toast({ variant: "danger", title: "Error", description: e.response?.data?.detail || "Failed to rename heading" });
     }
@@ -439,9 +441,10 @@ export default function AdminReviewPage() {
         getBookSections(slug),
         getBookGraph(slug).catch(() => ({ data: null })),
       ]);
-      setSections(secRes.data);
+      const chaptersArr = secRes.data?.chapters || secRes.data || [];
+      setSections(chaptersArr);
       const concepts = [];
-      secRes.data.forEach((ch) =>
+      chaptersArr.forEach((ch) =>
         ch.sections.forEach((s) =>
           concepts.push({
             concept_id: s.concept_id,
@@ -468,7 +471,7 @@ export default function AdminReviewPage() {
     try {
       await renameSection(sec.concept_id, slug, newName.trim());
       const secRes = await getBookSections(slug);
-      setSections(secRes.data);
+      setSections(secRes.data?.chapters || secRes.data || []);
       // Refresh chunks too so left panel sub-items update
       if (selectedConcept) loadChunks(selectedConcept);
     } catch (e) {
@@ -479,7 +482,7 @@ export default function AdminReviewPage() {
   const handleToggleSectionOptional = async (sec) => {
     try {
       await toggleSectionOptional(sec.concept_id, slug, !sec.is_optional);
-      getBookSections(slug).then((r) => setSections(r.data)).catch(console.error);
+      getBookSections(slug).then((r) => setSections(r.data?.chapters || r.data || [])).catch(console.error);
     } catch (e) {
       toast({ variant: "danger", title: "Error", description: e.response?.data?.detail || e.message || "Failed to toggle optional" });
     }
@@ -488,7 +491,7 @@ export default function AdminReviewPage() {
   const handleToggleSectionExamGate = async (sec) => {
     try {
       await toggleSectionExamGate(sec.concept_id, slug, !sec.exam_disabled);
-      getBookSections(slug).then((r) => setSections(r.data)).catch(console.error);
+      getBookSections(slug).then((r) => setSections(r.data?.chapters || r.data || [])).catch(console.error);
     } catch (e) {
       toast({ variant: "danger", title: "Error", description: e.response?.data?.detail || e.message || "Failed to toggle exam gate" });
     }
@@ -497,7 +500,7 @@ export default function AdminReviewPage() {
   const handleToggleSectionVisibility = async (sec) => {
     try {
       await toggleSectionVisibility(sec.concept_id, slug, !sec.is_hidden);
-      getBookSections(slug).then((r) => setSections(r.data)).catch(console.error);
+      getBookSections(slug).then((r) => setSections(r.data?.chapters || r.data || [])).catch(console.error);
     } catch (e) {
       toast({ variant: "danger", title: "Error", description: e.response?.data?.detail || e.message || "Failed to toggle section visibility" });
     }

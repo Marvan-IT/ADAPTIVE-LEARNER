@@ -1737,11 +1737,40 @@ class TeachingService:
                 logger.exception("[complete_card] recovery card generation failed")
                 recovery_card = None
 
+        # 4. Award XP for correct answers (correct = no wrong attempts)
+        is_correct = req.wrong_attempts == 0
+        xp_result: dict = {"base_xp": 0, "multiplier": 1.0, "final_xp": 0, "new_badges": []}
+        if is_correct:
+            try:
+                from gamification.xp_engine import compute_and_award_xp
+                xp_result = await compute_and_award_xp(
+                    db=db,
+                    student_id=student.id,
+                    session_id=session.id,
+                    interaction_id=interaction.id,
+                    difficulty=3,  # default difficulty for per-card adaptive cards
+                    wrong_attempts=req.wrong_attempts,
+                    hints_used=req.hints_used,
+                    is_correct=True,
+                    time_on_card_sec=req.time_on_card_sec,
+                    answer_streak=0,
+                )
+            except Exception:
+                logger.exception("[complete_card] XP award failed")
+
+        await db.commit()
+
         return {
             "recovery_card": recovery_card,
             "learning_profile_summary": learning_profile_summary,
             "motivational_note": None,
             "adaptation_applied": "recovery" if recovery_card else None,
+            "new_badges": xp_result.get("new_badges", []),
+            "xp_awarded": {
+                "base_xp": xp_result["base_xp"],
+                "multiplier": xp_result["multiplier"],
+                "final_xp": xp_result["final_xp"],
+            },
         }
 
     async def _generate_cards_single(

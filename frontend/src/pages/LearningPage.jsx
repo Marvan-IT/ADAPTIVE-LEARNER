@@ -10,8 +10,9 @@ import CardLearningView from "../components/learning/CardLearningView";
 import CompletionView from "../components/learning/CompletionView";
 import { trackEvent } from "../utils/analytics";
 import { AlertCircle, LogOut } from "lucide-react";
-import { checkConceptReadiness } from "../api/concepts";
+import { checkConceptReadiness, getAvailableBooks } from "../api/concepts";
 import { getSession, getChunkList } from "../api/sessions";
+import { formatConceptTitle } from "../utils/formatConceptTitle";
 import { ProgressRing } from "../components/ui";
 
 export default function LearningPage() {
@@ -31,6 +32,7 @@ export default function LearningPage() {
   const { student } = useStudent();
   const { style: globalStyle } = useTheme();
 
+  const [resolvedBookTitle, setResolvedBookTitle] = useState("");
   const [prereqWarning, setPrereqWarning] = useState(null);
   const [prereqChecked, setPrereqChecked] = useState(false);
   const [chunkAnswers, setChunkAnswers] = useState({});
@@ -40,6 +42,18 @@ export default function LearningPage() {
   const [chunkStyle, setChunkStyle] = useState(globalStyle || "default");
   const [chunkInterests, setChunkInterests] = useState([]);
   const [chunkInterestInput, setChunkInterestInput] = useState("");
+
+  // Fetch book title from books API so we don't show raw slug
+  useEffect(() => {
+    if (bookSlug) {
+      getAvailableBooks()
+        .then((res) => {
+          const match = (res.data || []).find((b) => b.slug === bookSlug);
+          if (match?.title) setResolvedBookTitle(match.title);
+        })
+        .catch(() => {});
+    }
+  }, [bookSlug]);
 
   useEffect(() => {
     if (conceptId && phase === "IDLE" && !prereqChecked) {
@@ -288,10 +302,10 @@ export default function LearningPage() {
               borderRadius: "20px", border: "1px solid rgba(249,115,22,0.12)",
             }}>
               <h1 style={{ margin: 0, fontSize: "24px", fontWeight: 800, color: "#0f172a", fontFamily: "'Outfit', sans-serif", lineHeight: 1.3 }}>
-                {conceptTitle || decodedId.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())}
+                {conceptTitle || (secNum ? `${t("learning.sectionLabel", { num: secNum })}` : formatConceptTitle(decodedId))}
               </h1>
               <p style={{ margin: "6px 0 0", fontSize: "13px", color: "#78716c", fontWeight: 500 }}>
-                {chNum && t("learning.chapterLabel", { num: chNum })}{secNum && ` · ${t("learning.sectionLabel", { num: secNum })}`}{(bookTitle || bookSlug) && ` · ${bookTitle || bookSlug.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase())}`}
+                {(bookTitle || resolvedBookTitle) && `${bookTitle || resolvedBookTitle}`}{chNum && ` · ${t("learning.chapterLabel", { num: chNum })}`}{secNum && ` · ${t("learning.sectionLabel", { num: secNum })}`}
               </p>
               <span style={{
                 display: "inline-block", marginTop: "12px", padding: "5px 14px",

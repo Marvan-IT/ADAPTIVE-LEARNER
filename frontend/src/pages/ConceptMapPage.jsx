@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { trackEvent } from "../utils/analytics";
 import { useConceptMap } from "../hooks/useConceptMap";
@@ -14,7 +14,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { staggerContainer, staggerItem } from "../theme/themes";
 import {
   Loader, Play, CheckCircle, Lock, BookOpen, Trophy, Target,
-  AlertTriangle, RefreshCw, ChevronRight, GraduationCap, Library,
+  AlertTriangle, RefreshCw, ChevronRight, ArrowLeft, GraduationCap, Library,
   Heart, Atom, FlaskConical, Leaf,
 } from "lucide-react";
 
@@ -84,6 +84,7 @@ function Shimmer({ w, h = 10, r = 6, style: extra }) {
 export default function ConceptMapPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { student, masteredConcepts } = useStudent();
 
   /* ── View state ── */
@@ -104,6 +105,21 @@ export default function ConceptMapPage() {
   const { nodes, edges, nodeStatuses, loading: graphLoading, error: graphError } = useConceptMap(activeBook);
   const [selectedNode, setSelectedNode] = useState(null);
   const [reviewDueConcepts, setReviewDueConcepts] = useState(new Set());
+
+  /* ── Deep-link: ?book=<slug> opens directly to that book's graph ── */
+  const deepLinkedRef = useRef(false);
+  useEffect(() => {
+    if (!booksLoaded || deepLinkedRef.current) return;
+    const bookParam = searchParams.get("book");
+    if (!bookParam) return;
+    const match = availableBooks.find((b) => b.slug === bookParam);
+    if (match) {
+      deepLinkedRef.current = true;
+      setSelectedSubject(match.subject || null);
+      setSelectedBook(match.slug);
+      setViewLevel("graph");
+    }
+  }, [booksLoaded, availableBooks, searchParams]);
 
   /* ── Fetch books ── */
   useEffect(() => {
@@ -232,11 +248,14 @@ export default function ConceptMapPage() {
   const bookTitle = selectedBook ? (availableBooks.find((b) => b.slug === selectedBook)?.title || selectedBook) : "";
 
   const breadcrumbItems = useMemo(() => {
-    const items = [{ label: t("map.explore", "Explore"), onClick: viewLevel !== "subjects" ? goToSubjects : undefined }];
+    const items = [
+      { label: t("nav.dashboard", "Dashboard"), onClick: () => navigate("/dashboard") },
+      { label: t("map.explore", "Explore"), onClick: viewLevel !== "subjects" ? goToSubjects : undefined },
+    ];
     if (viewLevel === "books" || viewLevel === "graph") items.push({ label: subjectLabel, onClick: viewLevel === "graph" ? () => goToBooks(selectedSubject) : undefined });
     if (viewLevel === "graph") items.push({ label: bookTitle });
     return items;
-  }, [viewLevel, subjectLabel, bookTitle, goToSubjects, goToBooks, selectedSubject, t]);
+  }, [viewLevel, subjectLabel, bookTitle, goToSubjects, goToBooks, selectedSubject, navigate, t]);
 
   /* ── Loading ── */
   if (!booksLoaded) return <CenterMsg icon={<Loader size={32} className="text-[var(--color-primary)] animate-spin" />} text={t("common.loading", "Loading...")} />;
@@ -247,11 +266,28 @@ export default function ConceptMapPage() {
       {/* ── Shimmer keyframes (injected once) ── */}
       <style>{`@keyframes shimmer{0%{background-position:200% 0}to{background-position:-200% 0}}`}</style>
 
-      {/* ── Breadcrumb ── */}
+      {/* ── Back button + Breadcrumb ── */}
       <div style={{
         padding: "14px 28px", borderBottom: "1px solid var(--color-border)",
         background: "var(--color-surface)", flexShrink: 0,
+        display: "flex", alignItems: "center", gap: "12px",
       }}>
+        <button
+          onClick={() => {
+            if (viewLevel === "graph") goToBooks(selectedSubject);
+            else if (viewLevel === "books") goToSubjects();
+            else navigate("/dashboard");
+          }}
+          style={{
+            display: "flex", alignItems: "center", gap: "4px",
+            background: "none", border: "none", cursor: "pointer",
+            color: "var(--color-text-muted)", fontSize: "13px", fontWeight: 500,
+            padding: "4px 8px", borderRadius: "8px",
+            transition: "background-color 0.15s", flexShrink: 0,
+          }}
+        >
+          <ArrowLeft size={16} />
+        </button>
         <Breadcrumb items={breadcrumbItems} />
       </div>
 

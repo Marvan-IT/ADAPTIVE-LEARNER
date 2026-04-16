@@ -13,6 +13,7 @@ import {
   renameSection, toggleSectionOptional, toggleSectionExamGate, toggleSectionVisibility,
   getGraphEdges, modifyGraphEdge,
   regenerateChunkEmbedding, regenerateConceptEmbeddings,
+  promoteToSection,
 } from "../api/admin";
 import { resolveImageUrl } from "../api/client";
 import useDraftMode from "../hooks/useDraftMode";
@@ -194,6 +195,7 @@ export default function AdminBookContentPage() {
   const [allConcepts, setAllConcepts] = useState([]);
   const [graphEdges, setGraphEdges] = useState([]);
   const [splittingChunk, setSplittingChunk] = useState(null);
+  const [bookTitle, setBookTitle] = useState(null);
 
   // Loading flags
   const [loading, setLoading] = useState(true);
@@ -231,9 +233,12 @@ export default function AdminBookContentPage() {
       getBookSections(slug),
       getBookGraph(slug).catch(() => ({ data: null })),
     ]).then(([secRes, graphRes]) => {
-      setSections(secRes.data || []);
+      const secData = secRes.data;
+      const chaptersArr = secData?.chapters || secData || [];
+      setSections(chaptersArr);
+      setBookTitle(secData?.title || null);
       const concepts = [];
-      (secRes.data || []).forEach((ch) =>
+      chaptersArr.forEach((ch) =>
         ch.sections.forEach((s) =>
           concepts.push({
             concept_id: s.concept_id,
@@ -362,12 +367,14 @@ export default function AdminBookContentPage() {
   // ── Section handlers (always immediate) ───────────────────────────────
 
   const handleRenameSection = async (sec) => {
-    const newName = window.prompt("New section name:", sec.heading || sec.section || "");
+    const newName = window.prompt("New section name:", sec.display_name || sec.section || "");
     if (!newName || newName.trim() === "") return;
     try {
       await renameSection(sec.concept_id, slug, newName.trim());
       const secRes = await getBookSections(slug);
-      setSections(secRes.data || []);
+      const secData = secRes.data;
+      setSections(secData?.chapters || secData || []);
+      if (secData?.title) setBookTitle(secData.title);
       if (selectedConcept) loadChunks(selectedConcept);
     } catch (e) {
       toast({ variant: "danger", title: "Error", description: e.response?.data?.detail || "Failed to rename" });
@@ -377,7 +384,9 @@ export default function AdminBookContentPage() {
   const handleToggleSectionOptional = async (sec) => {
     try {
       await toggleSectionOptional(sec.concept_id, slug, !sec.is_optional);
-      getBookSections(slug).then((r) => setSections(r.data || [])).catch(console.error);
+      const r = await getBookSections(slug);
+      setSections(r.data?.chapters || r.data || []);
+      if (r.data?.title) setBookTitle(r.data.title);
     } catch (e) {
       toast({ variant: "danger", title: "Error", description: e.response?.data?.detail || e.message || "Failed to toggle optional" });
     }
@@ -386,7 +395,9 @@ export default function AdminBookContentPage() {
   const handleToggleSectionExamGate = async (sec) => {
     try {
       await toggleSectionExamGate(sec.concept_id, slug, !sec.exam_disabled);
-      getBookSections(slug).then((r) => setSections(r.data || [])).catch(console.error);
+      const r = await getBookSections(slug);
+      setSections(r.data?.chapters || r.data || []);
+      if (r.data?.title) setBookTitle(r.data.title);
     } catch (e) {
       toast({ variant: "danger", title: "Error", description: e.response?.data?.detail || e.message || "Failed to toggle exam gate" });
     }
@@ -395,7 +406,9 @@ export default function AdminBookContentPage() {
   const handleToggleSectionVisibility = async (sec) => {
     try {
       await toggleSectionVisibility(sec.concept_id, slug, !sec.is_hidden);
-      getBookSections(slug).then((r) => setSections(r.data || [])).catch(console.error);
+      const r = await getBookSections(slug);
+      setSections(r.data?.chapters || r.data || []);
+      if (r.data?.title) setBookTitle(r.data.title);
     } catch (e) {
       toast({ variant: "danger", title: "Error", description: e.response?.data?.detail || e.message || "Failed to toggle section visibility" });
     }
@@ -452,7 +465,7 @@ export default function AdminBookContentPage() {
       {/* Header */}
       <div style={{ padding: "12px 20px", borderBottom: "1px solid #E2E8F0", display: "flex", alignItems: "center", gap: "16px", flexShrink: 0, backgroundColor: "#FFFFFF" }}>
         <h2 style={{ fontSize: "18px", fontWeight: 600, color: "#0F172A", textTransform: "capitalize" }}>
-          {slug.replace(/_/g, " ")} — Content Editor
+          {bookTitle || slug.replace(/_/g, " ")} — Content Editor
         </h2>
         <span style={{ fontSize: "12px", color: "#22C55E", backgroundColor: "#F0FDF4", padding: "2px 10px", borderRadius: "9999px", fontWeight: 500 }}>Published</span>
         {isDirty && (
@@ -477,7 +490,9 @@ export default function AdminBookContentPage() {
                 </div>
                 {chapter.sections.map((sec) => {
                   const sectionNum = sec.section || "";
-                  const heading = sec.heading || sec.concept_id || "";
+                  const heading = (sec.display_name && sec.display_name !== sec.section)
+                    ? sec.display_name
+                    : (sec.heading || sec.concept_id || "");
                   const title = sectionNum && heading && heading !== sectionNum
                     ? `${sectionNum} | ${heading}`
                     : sectionNum || heading;
@@ -686,6 +701,32 @@ export default function AdminBookContentPage() {
                     >
                       Split
                     </button>
+                    {i > 0 && !isTempChunk && (
+                      <button
+                        onClick={async () => {
+                          const label = window.prompt("New section label (optional):");
+                          if (label === null) return;
+                          try {
+                            await promoteToSection(selectedConcept, slug, chunk.id, label || undefined);
+                            const secRes = await getBookSections(slug);
+                            const secData = secRes.data;
+                            setSections(secData?.chapters || secData || []);
+                            if (secData?.title) setBookTitle(secData.title);
+                            loadChunks(selectedConcept);
+                            toast({ variant: "success", title: "Promoted", description: "Chunk promoted to new section" });
+                          } catch (e) {
+                            toast({ variant: "danger", title: "Error", description: e.response?.data?.detail || "Failed to promote" });
+                          }
+                        }}
+                        title="Promote this chunk (and all after it) to a new section"
+                        style={{
+                          padding: "4px 10px", fontSize: "12px", borderRadius: "6px", cursor: "pointer",
+                          border: "1px solid #C4B5FD", backgroundColor: "#EDE9FE", color: "#5B21B6", fontWeight: 500,
+                        }}
+                      >
+                        Promote
+                      </button>
+                    )}
                     {!chunk.has_embedding && !isTempChunk && (
                       <button
                         onClick={() => handleRegenEmbedding(chunk.id)}

@@ -1,9 +1,7 @@
 import { useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { Sun, Moon, ArrowLeft } from "lucide-react";
-import { useTheme } from "../../context/ThemeContext";
-import { useStudent } from "../../context/StudentContext";
-import { Breadcrumb, Avatar } from "../ui";
+import { ArrowLeft } from "lucide-react";
+import { Breadcrumb } from "../ui";
 
 function getBreadcrumbs(pathname, t) {
   const base = { label: t("app.title", "Adaptive Learner"), href: "/map" };
@@ -21,19 +19,26 @@ export default function StudentTopBar() {
   const { t } = useTranslation();
   const location = useLocation();
   const navigate = useNavigate();
-  const { isDark, toggleTheme } = useTheme();
-  const { student } = useStudent();
-
   const isDashboard = location.pathname === "/dashboard";
 
-  /* Sequential back button: each page goes to its logical parent */
+  const isMap = location.pathname === "/map";
+
+  /* Sequential back button: each page goes to its logical parent.
+     /map has its own in-page back button + breadcrumb, so skip here. */
   const getBackTarget = () => {
     const p = location.pathname;
-    if (p.startsWith("/learn/")) return { label: t("nav.backToMap", "Back to Concept Map"), path: "/map" };
+    if (p.startsWith("/learn/")) {
+      const params = new URLSearchParams(location.search);
+      const bookSlug = params.get("book_slug");
+      return {
+        label: t("nav.back", "Back"),
+        path: bookSlug ? `/map?book=${encodeURIComponent(bookSlug)}` : "/map",
+      };
+    }
     return { label: t("nav.backToDashboard", "Back to Dashboard"), path: "/dashboard" };
   };
 
-  const back = isDashboard ? null : getBackTarget();
+  const back = (isDashboard || isMap) ? null : getBackTarget();
 
   return (
     <header style={{
@@ -41,10 +46,9 @@ export default function StudentTopBar() {
       justifyContent: "space-between", padding: "0 24px",
       background: "#fff", borderBottom: "1px solid #e2e8f0",
     }}>
-      {/* Left: Sequential back button or Breadcrumb on dashboard */}
-      {isDashboard ? (
-        <Breadcrumb items={getBreadcrumbs(location.pathname, t)} />
-      ) : (
+      {/* Left: Back button, or breadcrumb on dashboard.
+           /map has its own in-page breadcrumb so we show nothing here. */}
+      {back ? (
         <button
           onClick={() => navigate(back.path)}
           style={{
@@ -59,30 +63,10 @@ export default function StudentTopBar() {
           <ArrowLeft size={16} />
           {back.label}
         </button>
-      )}
+      ) : isDashboard ? (
+        <Breadcrumb items={getBreadcrumbs(location.pathname, t)} />
+      ) : null}
 
-      {/* Right: Controls */}
-      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-        <button
-          onClick={toggleTheme}
-          style={{
-            width: 36, height: 36, borderRadius: "10px", border: "none",
-            background: "transparent", cursor: "pointer", display: "flex",
-            alignItems: "center", justifyContent: "center", color: "#64748b",
-          }}
-          className="hover:bg-slate-50"
-          title={isDark ? t("nav.lightMode") : t("nav.darkMode")}
-        >
-          {isDark ? <Sun size={18} /> : <Moon size={18} />}
-        </button>
-
-        <div style={{ display: "flex", alignItems: "center", gap: "8px", padding: "4px 8px", borderRadius: "10px", cursor: "default" }}>
-          <Avatar name={student?.display_name || "S"} size="sm" />
-          <span className="hidden lg:inline" style={{ fontSize: "13px", fontWeight: 500, color: "#0f172a", maxWidth: "100px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-            {student?.display_name}
-          </span>
-        </div>
-      </div>
     </header>
   );
 }

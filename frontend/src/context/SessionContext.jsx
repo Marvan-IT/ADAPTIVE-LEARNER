@@ -259,6 +259,7 @@ function sessionReducer(state, action) {
         chunkList: action.payload.chunks,
         chunkIndex: action.payload.current_chunk_index,
         chunkProgress: { ...state.chunkProgress, ..._restored },
+        conceptTitle: action.payload.section_title || state.conceptTitle,
         phase: "SELECTING_CHUNK",
         loading: false,
       };
@@ -583,8 +584,8 @@ export function SessionProvider({ children }) {
           useAdaptiveStore.getState().setDailyStreak(xpData.streak_info);
         }
         // Handle new badges
-        const newBadges = res?.data?.new_badges;
-        if (newBadges?.length) {
+        const newBadges = res?.data?.new_badges || [];
+        if (newBadges.length) {
           newBadges.forEach((b) => useAdaptiveStore.getState().addBadge(b));
         }
       } catch (err) {
@@ -732,6 +733,11 @@ export function SessionProvider({ children }) {
         mcq_total: _mcqTotal,
       });
       dispatch({ type: "CHUNK_EVAL_RESULT", payload: res.data });
+      // Handle new badges from chunk evaluation
+      const evalBadges = res?.data?.new_badges || [];
+      if (evalBadges.length) {
+        evalBadges.forEach((b) => useAdaptiveStore.getState().addBadge(b));
+      }
       if (res.data.passed) {
         refreshMastery();
         // Sync Zustand so AdaptiveModeIndicator reflects backend mode

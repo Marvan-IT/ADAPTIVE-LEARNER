@@ -376,14 +376,22 @@ async def get_book_status(
 
 
 def _section_sort_key(section_str: str):
-    """Parse 'X.Y.Z' into a numeric tuple for correct section ordering."""
+    """Parse 'X.Y.Z' into a numeric tuple for correct section ordering.
+    Handles letter suffixes: '1.1b' sorts between '1.1' and '1.2'.
+    """
     parts = []
     for p in (section_str or "").split("."):
         try:
-            parts.append(int(p))
+            parts.extend([int(p), 0])
+            continue
         except (ValueError, AttributeError):
-            parts.append(float("inf"))
-    return tuple(parts) if parts else (float("inf"),)
+            pass
+        m = re.match(r'^(\d+)([a-z])$', p or '')
+        if m:
+            parts.extend([int(m.group(1)), ord(m.group(2)) - ord('a') + 1])
+            continue
+        parts.extend([float("inf"), 0])
+    return tuple(parts) if parts else (float("inf"), 0)
 
 
 @router.get("/api/admin/books/{slug}/sections")
@@ -393,6 +401,9 @@ async def get_book_sections(
     db: AsyncSession = Depends(get_db),
 ):
     from sqlalchemy.orm import aliased
+
+    book = (await db.execute(select(Book).where(Book.book_slug == slug))).scalar_one_or_none()
+    book_title = book.title if book else slug.replace("_", " ")
 
     _cc2 = aliased(ConceptChunk, flat=True)
     first_heading_sq = (
@@ -414,35 +425,15 @@ async def get_book_sections(
             # Aggregate booleans: section is optional/exam-disabled if ALL chunks are
             func.bool_and(ConceptChunk.is_optional),
             func.bool_and(ConceptChunk.exam_disabled),
+            func.bool_and(ConceptChunk.is_hidden),
         )
         .where(ConceptChunk.book_slug == slug)
         .group_by(ConceptChunk.concept_id, ConceptChunk.book_slug)
         .order_by(func.min(ConceptChunk.section))
     )).all()
 
-    # Auto-hide supplementary sections (non-numbered concepts like Chapter Review,
-    # Practice Test, etc.). Only affects chunks that have not been manually locked
-    # by an admin (chunk_type_locked=False) and are not already hidden.
-    numbered_pattern = re.compile(r"^\d+\.\d+")
-    non_numbered_cids = [
-        cid for cid, section, *_ in rows
-        if not numbered_pattern.match(section or "")
-    ]
-    if non_numbered_cids:
-        await db.execute(
-            update(ConceptChunk)
-            .where(
-                ConceptChunk.book_slug == slug,
-                ConceptChunk.is_hidden == False,  # noqa: E712
-                ConceptChunk.chunk_type_locked == False,  # noqa: E712
-                ConceptChunk.concept_id.in_(non_numbered_cids),
-            )
-            .values(is_hidden=True)
-        )
-        await db.commit()
-
     chapters: dict = {}
-    for concept_id, section, heading, admin_name, is_optional, exam_disabled in rows:
+    for concept_id, section, heading, admin_name, is_optional, exam_disabled, is_hidden in rows:
         # Count chunks for this concept
         chunk_count = (await db.execute(
             select(func.count()).select_from(ConceptChunk)
@@ -454,12 +445,18 @@ async def get_book_sections(
             .join(ConceptChunk, ChunkImage.chunk_id == ConceptChunk.id)
             .where(ConceptChunk.book_slug == slug, ConceptChunk.concept_id == concept_id)
         )).scalar() or 0
-        # Parse chapter from section string like "1.2"
+        # Parse chapter from section string like "1.2"; fall back to concept_id
+        # for promoted sections whose section is a text name (e.g. "Key Concepts")
         try:
             chapter = int(section.split(".")[0])
         except (ValueError, AttributeError):
-            _m = re.search(r'(\d+)', section or "")
-            chapter = int(_m.group(1)) if _m else 9999  # unknown → sort to end
+            # Try deriving chapter from concept_id (e.g. "prealgebra_1.6" → 1)
+            _cid_suffix = concept_id[len(slug) + 1:] if concept_id.startswith(slug + "_") else ""
+            try:
+                chapter = int(_cid_suffix.split(".")[0])
+            except (ValueError, AttributeError):
+                _m = re.search(r'(\d+)', section or "")
+                chapter = int(_m.group(1)) if _m else 9999
         if chapter not in chapters:
             chapters[chapter] = []
         chapters[chapter].append({
@@ -471,13 +468,23 @@ async def get_book_sections(
             "image_count": image_count,
             "is_optional": bool(is_optional),
             "exam_disabled": bool(exam_disabled),
+            "is_hidden": bool(is_hidden),
         })
 
-    # Sort sections within each chapter numerically (e.g. 1.2 before 1.10)
-    for ch_secs in chapters.values():
-        ch_secs.sort(key=lambda s: _section_sort_key(s["section"]))
+    # Sort sections within each chapter numerically (e.g. 1.2 before 1.10).
+    # For promoted sections with text names, fall back to concept_id for ordering.
+    def _sort_key_with_fallback(s):
+        section = s["section"] or ""
+        if re.match(r"^\d+\.\d+", section):
+            return _section_sort_key(section)
+        cid = s.get("concept_id", "")
+        cid_suffix = cid[len(slug) + 1:] if cid.startswith(slug + "_") else ""
+        return _section_sort_key(cid_suffix)
 
-    return [{"chapter": ch, "sections": secs} for ch, secs in sorted(chapters.items())]
+    for ch_secs in chapters.values():
+        ch_secs.sort(key=_sort_key_with_fallback)
+
+    return {"title": book_title, "chapters": [{"chapter": ch, "sections": secs} for ch, secs in sorted(chapters.items())]}
 
 
 @router.get("/api/admin/books/{slug}/chunks/{concept_id:path}")
@@ -2245,7 +2252,7 @@ async def toggle_section_visibility(
 
     result = await db.execute(
         text(
-            "UPDATE concept_chunks SET is_hidden = :val "
+            "UPDATE concept_chunks SET is_hidden = :val, chunk_type_locked = true "
             "WHERE concept_id = :cid AND book_slug = :slug"
         ),
         {"val": bool(is_hidden), "cid": concept_id, "slug": book_slug},
@@ -2340,7 +2347,7 @@ async def promote_subsection_to_section(
     # ── 3. Determine the new concept_id ──────────────────────────────────────
     # Parse the numeric section suffix from the current concept_id.
     # Format: "{book_slug}_{chapter}.{section}"  e.g. "prealgebra_11.3"
-    after_slug_part = concept_id.split("_", 1)[-1]   # e.g. "11.3"
+    after_slug_part = concept_id[len(book_slug) + 1:] if concept_id.startswith(book_slug + "_") else concept_id.split("_", 1)[-1]  # e.g. "11.3"
     dot_pos = after_slug_part.rfind(".")
     if dot_pos == -1:
         raise HTTPException(
@@ -2358,13 +2365,13 @@ async def promote_subsection_to_section(
     new_concept_id: str | None = None
     if section_part.isdigit():
         section_num = int(section_part)
-        # Try single-digit increments first (up to +9), then letter suffixes
+        # Letter suffixes FIRST to keep adjacent ordering: 1.1 -> 1.1b
         candidates: list[str] = [
-            f"{slug_prefix}{chapter_part}.{section_num + i}"
-            for i in range(1, 10)
-        ] + [
             f"{slug_prefix}{chapter_part}.{section_part}{letter}"
             for letter in "bcdefghij"
+        ] + [
+            f"{slug_prefix}{chapter_part}.{section_num + i}"
+            for i in range(1, 10)
         ]
     else:
         # Section already has a letter suffix (e.g. "3b") — append further letters

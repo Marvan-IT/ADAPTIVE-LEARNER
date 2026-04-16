@@ -132,3 +132,68 @@ async def evaluate_badges(
         await db.flush()
 
     return new_badges
+
+
+async def sync_student_badges(
+    db: AsyncSession,
+    student_id: UUID,
+) -> list[dict]:
+    """Evaluate ALL badge triggers for a student, awarding any missing badges.
+
+    This is the general catch-up mechanism: it runs every trigger type so
+    that badges are never missed regardless of when criteria were met.
+    Called by the GET badges endpoint to ensure the student always sees
+    an up-to-date badge list.
+
+    Returns a combined list of all newly awarded badge dicts.
+    """
+    from gamification.xp_engine import _get_config
+    badges_enabled = await _get_config(db, "BADGES_ENABLED")
+    if badges_enabled == "false":
+        return []
+
+    # Fetch already-earned badge keys once — shared across all triggers
+    result = await db.execute(
+        select(StudentBadge.badge_key).where(StudentBadge.student_id == student_id)
+    )
+    earned_keys: set[str] = set(result.scalars().all())
+
+    # Collect all unique triggers from the registry
+    all_triggers = {bd.trigger for bd in BADGE_REGISTRY}
+
+    # Build contexts for ALL triggers and evaluate every badge
+    new_badges: list[dict] = []
+    for trigger in all_triggers:
+        context = await _build_badge_context(db, student_id, trigger, {})
+        for badge_def in BADGE_REGISTRY:
+            if badge_def.key in earned_keys:
+                continue
+            if badge_def.trigger != trigger:
+                continue
+            try:
+                if badge_def.check(context):
+                    badge = StudentBadge(
+                        student_id=student_id,
+                        badge_key=badge_def.key,
+                        metadata_={"trigger": trigger, "source": "sync"},
+                    )
+                    db.add(badge)
+                    new_badges.append({
+                        "badge_key": badge_def.key,
+                        "name_key": badge_def.name_i18n_key,
+                    })
+                    earned_keys.add(badge_def.key)
+                    logger.info(
+                        "[badge-sync] student_id=%s badge=%s trigger=%s",
+                        student_id, badge_def.key, trigger,
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "[badge-sync-error] badge=%s trigger=%s error=%s",
+                    badge_def.key, trigger, exc,
+                )
+
+    if new_badges:
+        await db.flush()
+
+    return new_badges

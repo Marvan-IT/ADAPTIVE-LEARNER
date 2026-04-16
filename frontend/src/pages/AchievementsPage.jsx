@@ -69,8 +69,8 @@ export default function AchievementsPage() {
   }, [student?.id]);
 
   const earnedSet = new Set([
-    ...(storeBadges || []).map((b) => b.badge_type || b.type || b),
-    ...apiBadges.map((b) => b.badge_type || b.type || b),
+    ...(storeBadges || []).map((b) => b.badge_key || b.badge_type || b),
+    ...apiBadges.map((b) => b.badge_key || b.badge_type || b),
   ]);
 
   const allBadgeIds = BADGE_CATEGORIES.flatMap((c) => c.badges);

@@ -205,6 +205,8 @@ class CompleteCardResponse(BaseModel):
     learning_profile_summary: dict | None = None
     motivational_note: str | None = None
     adaptation_applied: str | None = None
+    new_badges: list = Field(default_factory=list)
+    xp_awarded: dict | None = None
 
 
 class AssistRequest(BaseModel):
@@ -356,6 +358,7 @@ class ChunkEvaluateResponse(BaseModel):
     chunk_progress: dict
     feedback: list[ChunkEvaluateFeedback]
     next_mode: str = "NORMAL"
+    new_badges: list = Field(default_factory=list)
 
 
 class CompleteChunkRequest(BaseModel):

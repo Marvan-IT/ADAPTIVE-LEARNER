@@ -10,6 +10,7 @@ import { getAvailableBooks, getGraphFull } from "../api/concepts";
 import { ProgressBar, Card, Button } from "../components/ui";
 import LanguageSelector from "../components/LanguageSelector";
 import { staggerContainer, staggerItem } from "../theme/themes";
+import { formatConceptTitle } from "../utils/formatConceptTitle";
 
 
 const SUBJECT_COLORS = [
@@ -44,6 +45,12 @@ export default function DashboardPage() {
   const [recentSessions, setRecentSessions] = useState([]);
   const [subjects, setSubjects] = useState([]);
   const [studyTimeSec, setStudyTimeSec] = useState(0);
+  const [bookMap, setBookMap] = useState({});
+
+  function displayBookTitle(bookSlug) {
+    if (!bookSlug) return "";
+    return bookMap[bookSlug]?.title || bookSlug;
+  }
 
   function formatStudyTime(sec) {
     if (sec <= 0) return "0m";
@@ -92,6 +99,8 @@ export default function DashboardPage() {
           if (!bySubject[subj]) bySubject[subj] = [];
           bySubject[subj].push(book);
         });
+
+        setBookMap(slugToBook);
 
         const subjectData = [];
         for (const [subj, bookList] of Object.entries(bySubject)) {
@@ -172,10 +181,10 @@ export default function DashboardPage() {
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <p style={{ fontSize: "14px", fontWeight: 600, color: "#0F172A", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {resumeSession.concept_id || t("dashboard.continueLearning", "Continue Learning")}
+                {formatConceptTitle(resumeSession.concept_id) || t("dashboard.continueLearning", "Continue Learning")}
               </p>
               <p style={{ fontSize: "12px", color: "#94A3B8" }}>
-                {resumeSession.book_slug || t("subjects.mathematics")} &middot; {resumeSession.phase}
+                {displayBookTitle(resumeSession.book_slug) || t("subjects.mathematics")} &middot; {resumeSession.phase}
               </p>
             </div>
             <button
@@ -263,7 +272,7 @@ export default function DashboardPage() {
                       <p style={{ fontSize: "12px", color: "#64748B", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         {subj.lastBookTitle && <span style={{ fontWeight: 600 }}>{subj.lastBookTitle}</span>}
                         {subj.lastBookTitle && " · "}
-                        {ls.concept_id}
+                        {formatConceptTitle(ls.concept_id)}
                       </p>
                       <p style={{ fontSize: "11px", color: "#94A3B8", marginTop: "2px" }}>
                         {ls.phase === "COMPLETED"
@@ -342,11 +351,11 @@ export default function DashboardPage() {
               )}
               <div style={{ flex: 1, minWidth: 0 }}>
                 <p style={{ fontSize: "14px", fontWeight: 500, color: "#0F172A", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {session.concept_id || t("dashboard.studySession", "Study session")}
+                  {formatConceptTitle(session.concept_id) || t("dashboard.studySession", "Study session")}
                 </p>
                 <p style={{ fontSize: "11px", color: "#94A3B8" }}>
                   {session.phase === "COMPLETED" ? t("dashboard.completed", "Completed") : t("dashboard.inProgress", "In progress")}
-                  {session.book_slug && ` · ${session.book_slug}`}
+                  {session.book_slug && ` · ${displayBookTitle(session.book_slug)}`}
                 </p>
               </div>
               <ChevronRight size={16} style={{ color: "#94A3B8", opacity: 0.5, flexShrink: 0 }} />

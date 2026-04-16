@@ -20,11 +20,14 @@ class BadgeDefinition:
 
 
 def _check_first_correct(ctx: dict) -> bool:
-    return ctx.get("total_correct", 0) == 1
+    # >= 1 instead of == 1: idempotency guard in badge_engine prevents duplicates,
+    # and >= 1 ensures the badge is awarded even if evaluation was missed on the
+    # exact first correct answer.
+    return ctx.get("total_correct", 0) >= 1
 
 
 def _check_first_mastery(ctx: dict) -> bool:
-    return ctx.get("mastered_count", 0) == 1
+    return ctx.get("mastered_count", 0) >= 1
 
 
 def _check_mastery_n(n: int):
@@ -39,9 +42,10 @@ def _check_streak_n(n: int):
     return check
 
 
-def _check_answer_streak_n(n: int):
+def _check_total_correct_n(n: int):
+    """Check total correct answers (card interactions with zero wrong attempts)."""
     def check(ctx: dict) -> bool:
-        return ctx.get("answer_streak", 0) >= n
+        return ctx.get("total_correct", 0) >= n
     return check
 
 
@@ -63,8 +67,8 @@ BADGE_REGISTRY: list[BadgeDefinition] = [
     BadgeDefinition("streak_7", "badge.weekWarrior", "daily_streak", _check_streak_n(7)),
     BadgeDefinition("streak_14", "badge.fortnightForce", "daily_streak", _check_streak_n(14)),
     BadgeDefinition("streak_30", "badge.monthlyMaster", "daily_streak", _check_streak_n(30)),
-    BadgeDefinition("correct_10", "badge.tenInARow", "answer_streak", _check_answer_streak_n(10)),
-    BadgeDefinition("correct_25", "badge.unstoppable", "answer_streak", _check_answer_streak_n(25)),
+    BadgeDefinition("correct_10", "badge.tenInARow", "card_correct", _check_total_correct_n(10)),
+    BadgeDefinition("correct_25", "badge.unstoppable", "card_correct", _check_total_correct_n(25)),
     BadgeDefinition("perfect_chunk", "badge.flawless", "chunk_complete", _check_perfect_chunk),
     BadgeDefinition("speed_demon", "badge.speedDemon", "card_correct", _check_speed_demon),
 ]
