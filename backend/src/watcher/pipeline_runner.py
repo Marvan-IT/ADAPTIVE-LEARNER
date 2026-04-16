@@ -19,7 +19,7 @@ import requests
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from src.config import OUTPUT_DIR, BACKEND_DIR
-from src.extraction.calibrate import calibrate_book, derive_slug, derive_code
+from src.extraction.calibrate import derive_slug, derive_code
 
 logger = logging.getLogger(__name__)
 
@@ -88,9 +88,15 @@ async def run_pipeline(pdf_path: Path, subject: str) -> None:
     logger.info("[%s] Pipeline started", slug)
 
     try:
-        # Stage 1 — Calibrate + register in books.yaml
-        logger.info("[%s] Stage 1/7: Calibrating fonts...", slug)
-        entry = calibrate_book(pdf_path, slug, subject)
+        # Stage 1 — Register book metadata in books.yaml + BOOK_REGISTRY
+        logger.info("[%s] Stage 1/5: Registering book metadata...", slug)
+        entry = {
+            "book_code": code,
+            "book_slug": slug,
+            "pdf_filename": f"{subject}/{pdf_path.name}",
+            "title": slug.replace("_", " ").title(),
+            "subject": subject,
+        }
         _append_to_books_yaml(entry)
         # Resolve authoritative book_code from books.yaml (derive_code can collide)
         import yaml as _yaml
@@ -110,53 +116,31 @@ async def run_pipeline(pdf_path: Path, subject: str) -> None:
                 if hasattr(_mod, "BOOK_CODE_MAP"):
                     _mod.BOOK_CODE_MAP[slug] = code
                 logger.info("[%s] Hot-registered '%s' into %s.BOOK_REGISTRY", slug, code, _mod_name)
-        logger.info("[%s] Stage 1/7: Done", slug)
+        logger.info("[%s] Stage 1/5: Done", slug)
 
         # Stage 2 — Mathpix whole-PDF extraction (sync → thread so we don't block)
-        logger.info("[%s] Stage 2/7: Mathpix PDF extraction (30–60 min)...", slug)
+        logger.info("[%s] Stage 2/5: Mathpix PDF extraction (30–60 min)...", slug)
         await asyncio.to_thread(run_whole_pdf_pipeline, code)
-        logger.info("[%s] Stage 2/7: Done", slug)
+        logger.info("[%s] Stage 2/5: Done", slug)
 
-        # Stage 3 — Structure analysis (TOC parsing, boundary candidates, frequencies)
-        logger.info("[%s] Stage 3/7: Analyzing book structure...", slug)
+        # Stage 3 — Chunk pipeline (universal parser + embed + persist + image validation)
+        logger.info("[%s] Stage 3/5: Building chunks & embeddings...", slug)
         mmd_path = OUTPUT_DIR / slug / "book.mmd"
-        mmd_text = mmd_path.read_text(encoding="utf-8")
-        from src.extraction.ocr_validator import validate_and_analyze
-        quality_report = validate_and_analyze(mmd_text, slug)
-        logger.info(
-            "[%s] Stage 3/7: Done. quality=%.3f toc_entries=%d signal_types=%d",
-            slug, quality_report.quality_score, len(quality_report.toc_entries), len(quality_report.signal_stats),
-        )
-
-        # Stage 4 — Book Profiler (LLM, one-time, cached — ~$0.003 first run, $0 thereafter)
-        logger.info("[%s] Stage 4/7: Profiling book structure (LLM)...", slug)
-        from src.extraction.book_profiler import load_or_create_profile
-        profile = await load_or_create_profile(mmd_text, slug, quality_report)
-        logger.info(
-            "[%s] Stage 4/7: Done. subject=%s boundary_signals=%d exercise_markers=%d noise_patterns=%d",
-            slug, profile.subject,
-            sum(1 for s in profile.subsection_signals if s.is_boundary),
-            len(profile.exercise_markers),
-            len(profile.noise_patterns),
-        )
-
-        # Stage 5 — Chunk pipeline (parse with profile + embed + persist + image validation)
-        logger.info("[%s] Stage 5/7: Building chunks & embeddings...", slug)
         async with async_session_factory() as db:
-            await build_chunks(slug, mmd_path, db, rebuild=False, profile=profile)
+            await build_chunks(slug, mmd_path, db, rebuild=False)
             removed = await validate_and_clean_images(slug, db)
-        logger.info("[%s] Stage 5/7: Done. Removed %d orphan image rows.", slug, removed)
+        logger.info("[%s] Stage 3/5: Done. Removed %d orphan image rows.", slug, removed)
 
-        # Stage 6 — Dependency graph
-        logger.info("[%s] Stage 6/7: Building dependency graph...", slug)
+        # Stage 4 — Dependency graph
+        logger.info("[%s] Stage 4/5: Building dependency graph...", slug)
         graph_path = OUTPUT_DIR / slug / "graph.json"
         from src.extraction.graph_builder import build_graph
         async with async_session_factory() as db:
             await build_graph(db, slug, graph_path)
-        logger.info("[%s] Stage 6/7: Done", slug)
+        logger.info("[%s] Stage 4/5: Done", slug)
 
-        # Stage 7 — Hot-load into running server
-        logger.info("[%s] Stage 7/7: Hot-loading into server...", slug)
+        # Stage 5 — Hot-load into running server
+        logger.info("[%s] Stage 5/5: Hot-loading into server...", slug)
         api_base = os.getenv("API_BASE_URL", "http://localhost:8889")
         api_key = os.getenv("API_SECRET_KEY", "")
         try:
