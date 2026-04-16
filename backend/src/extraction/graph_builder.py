@@ -127,6 +127,114 @@ Example: {{"1": [], "2": [], "3": ["1"], "4": ["2", "3"], "5": []}}"""
         return {}
 
 
+async def _get_llm_section_prerequisites(
+    chapter_sections: dict[str, list[str]],
+    chapter_deps: dict[str, list[str]],
+    book_slug: str,
+) -> list[tuple[str, str]]:
+    """Ask GPT-4o for section-level cross-chapter prerequisites.
+
+    For each chapter with dependencies, asks which specific sections from
+    prerequisite chapters are needed by each section in the dependent chapter.
+
+    Returns list of (source_concept_id, target_concept_id) edges.
+    """
+    try:
+        from openai import AsyncOpenAI
+        from config import OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL
+    except ImportError:
+        logger.warning("[graph] OpenAI not available — skipping section-level analysis")
+        return []
+
+    if not OPENAI_API_KEY:
+        return []
+
+    chapters_to_analyze = {ch: deps for ch, deps in chapter_deps.items() if deps}
+    if not chapters_to_analyze:
+        return []
+
+    all_edges: list[tuple[str, str]] = []
+    client = AsyncOpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
+
+    # Build section_number → concept_id mapping
+    sec_to_cid: dict[str, str] = {}
+    for ch, secs in chapter_sections.items():
+        for sec_title in secs:
+            sec_num_match = re.match(r"(\d+\.\d+)", sec_title)
+            if sec_num_match:
+                sec_to_cid[sec_num_match.group(1)] = f"{book_slug}_{sec_num_match.group(1)}"
+
+    # Process in batches of 3 chapters per LLM call
+    dep_items = list(chapters_to_analyze.items())
+    for batch_start in range(0, len(dep_items), 3):
+        batch = dep_items[batch_start:batch_start + 3]
+
+        prompt_parts = [
+            "You are a curriculum designer analyzing section-level prerequisites.\n\n"
+            "For each TARGET section below, determine which specific sections from the "
+            "PREREQUISITE chapters a student MUST complete first to understand the target.\n\n"
+            "RULES:\n"
+            "- Only list DIRECT cross-chapter prerequisites.\n"
+            "- Within-chapter sequential dependencies (3.1→3.2→3.3) are already handled — skip those.\n"
+            "- Be specific — list exact section numbers, not whole chapters.\n"
+            "- A section may have 0 cross-chapter prerequisites — omit it from output.\n"
+            "- Think about what mathematical/conceptual knowledge is REQUIRED.\n\n"
+        ]
+
+        for dep_ch, prereq_chs in batch:
+            target_secs = chapter_sections.get(dep_ch, [])
+            prompt_parts.append(f"TARGET — Chapter {dep_ch}:")
+            for s in target_secs[:12]:
+                prompt_parts.append(f"  {s}")
+            prompt_parts.append("")
+
+            prompt_parts.append("PREREQUISITE CHAPTERS:")
+            for prereq_ch in prereq_chs:
+                prereq_secs = chapter_sections.get(prereq_ch, [])
+                prompt_parts.append(f"  Chapter {prereq_ch}:")
+                for s in prereq_secs[:12]:
+                    prompt_parts.append(f"    {s}")
+            prompt_parts.append("")
+
+        prompt_parts.append(
+            'Return JSON mapping target section numbers to lists of prerequisite section numbers.\n'
+            'Only include sections with cross-chapter prerequisites.\n'
+            'Example: {"3.1": ["1.1"], "3.2": ["1.1", "1.3"], "5.1": ["3.2"]}'
+        )
+
+        try:
+            response = await client.chat.completions.create(
+                model=OPENAI_MODEL,
+                messages=[{"role": "user", "content": "\n".join(prompt_parts)}],
+                response_format={"type": "json_object"},
+                temperature=0.1,
+                timeout=60.0,
+            )
+            result = json.loads(response.choices[0].message.content.strip())
+
+            batch_edges = 0
+            for target_sec, prereq_secs in result.items():
+                target_cid = sec_to_cid.get(str(target_sec))
+                if not target_cid or not isinstance(prereq_secs, list):
+                    continue
+                for prereq_sec in prereq_secs:
+                    prereq_cid = sec_to_cid.get(str(prereq_sec))
+                    if prereq_cid and prereq_cid != target_cid:
+                        src_ch = str(prereq_sec).split(".")[0]
+                        tgt_ch = str(target_sec).split(".")[0]
+                        if src_ch != tgt_ch:
+                            all_edges.append((prereq_cid, target_cid))
+                            batch_edges += 1
+
+            logger.info("[graph] Section-level batch %d: %d edges", batch_start // 3 + 1, batch_edges)
+
+        except Exception as exc:
+            logger.warning("[graph] Section-level LLM call failed (batch %d): %s", batch_start // 3 + 1, exc)
+
+    logger.info("[graph] Section-level prerequisites total: %d edges for %s", len(all_edges), book_slug)
+    return all_edges
+
+
 def _chapter_num(concept_id: str) -> str:
     """
     Extract chapter number string from a concept_id.
@@ -268,6 +376,23 @@ async def build_graph(db: AsyncSession, book_slug: str, graph_path: Path) -> Non
     logger.info(
         "LLM cross-chapter edges for %s: %d added, %d skipped (cycle prevention)",
         book_slug, llm_edge_count, llm_skipped_cycle,
+    )
+
+    # ── Section-level cross-chapter prerequisites (GPT-4o) ────────────
+    section_edges = await _get_llm_section_prerequisites(_ch_titles, llm_deps, book_slug)
+    section_edge_count = 0
+    section_skipped = 0
+    for src, tgt in section_edges:
+        if src in G.nodes and tgt in G.nodes:
+            if not G.has_edge(src, tgt):
+                if not nx.has_path(G, tgt, src):  # cycle prevention
+                    G.add_edge(src, tgt)
+                    section_edge_count += 1
+                else:
+                    section_skipped += 1
+    logger.info(
+        "Section-level edges for %s: %d added, %d skipped (cycle prevention)",
+        book_slug, section_edge_count, section_skipped,
     )
 
     # Merge expert/keyword edges from dependency_graph.json (if available)
