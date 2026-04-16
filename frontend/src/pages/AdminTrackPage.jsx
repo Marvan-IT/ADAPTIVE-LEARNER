@@ -45,12 +45,12 @@ export default function AdminTrackPage() {
           setElapsed(0);
         }
 
-        if (data.status === "READY_FOR_REVIEW" || data.stage_number >= 7) {
+        if (data.status === "READY_FOR_REVIEW" || data.stage_number >= 6) {
           clearInterval(pollRef.current);
           clearInterval(timerRef.current);
           setTimeout(() => navigate(`/admin/books/${slug}/review`), 1500);
         }
-        if (data.status === "FAILED") {
+        if (data.status === "FAILED" || data.status === "VALIDATION_FAILED") {
           clearInterval(pollRef.current);
           clearInterval(timerRef.current);
         }
