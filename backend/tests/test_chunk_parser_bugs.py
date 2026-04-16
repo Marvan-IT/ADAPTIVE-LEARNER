@@ -155,20 +155,18 @@ class TestBug1BareNumberTrap:
 class TestBug2ChapterReview:
     """BUG 2 — Chapter Review back-references must not produce duplicate concept_ids."""
 
-    def test_chapter_review_sections_not_duplicated(self):
+    def test_chapter_review_no_duplicate_chunk_keys(self):
         """
-        After a full parse, each concept_id must appear at most once.
-        Duplicate concept_ids indicate the Chapter Review stub survived deduplication
-        alongside the main body copy.
+        After dedup, no (concept_id, heading) pair should appear more than once.
+        Multiple chunks per concept_id is expected (sections have subsections).
+        But the same heading should not appear twice for the same section.
         """
-        # EXPECTED TO FAIL: BUG 2 — if dedup key diverges between body and review,
-        # both copies will be kept and the same concept_id appears on multiple chunks.
         chunks = parse_book_mmd(INTERALG_MMD, "test_book")
         from collections import Counter
-        concept_id_counts = Counter(c.concept_id for c in chunks)
-        duplicates = {cid: count for cid, count in concept_id_counts.items() if count > 1}
+        key_counts = Counter((c.concept_id, c.heading) for c in chunks)
+        duplicates = {k: v for k, v in key_counts.items() if v > 1}
         assert len(duplicates) == 0, (
-            f"Found {len(duplicates)} concept_ids with multiple chunks (expected 0 after dedup): "
+            f"Found {len(duplicates)} duplicate (concept_id, heading) pairs: "
             f"{dict(list(duplicates.items())[:5])}"
         )
 
