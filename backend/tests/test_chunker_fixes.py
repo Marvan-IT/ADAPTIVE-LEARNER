@@ -110,10 +110,14 @@ class TestBug1ChapterIntro:
         assert intro.section.startswith("2.0") or intro.section == "2.0", (
             f"chapter_intro section should be '2.0', got '{intro.section}'"
         )
-        assert intro.order_index == 0, (
-            f"chapter_intro should be the first chunk (order_index=0), "
-            f"got order_index={intro.order_index}"
-        )
+        # Chapter intro should come BEFORE any section 2.x chunk
+        ch2_chunks = [c for c in chunks if c.concept_id.startswith("bstats_2.")]
+        if ch2_chunks:
+            first_ch2 = min(c.order_index for c in ch2_chunks)
+            assert intro.order_index <= first_ch2, (
+                f"chapter_intro (order_index={intro.order_index}) should come "
+                f"before first ch2 chunk (order_index={first_ch2})"
+            )
 
     def test_chapter_intro_not_in_previous_chapter(self):
         """

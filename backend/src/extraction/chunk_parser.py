@@ -381,9 +381,9 @@ _SIGNAL_PATTERN_MAP: dict[str, re.Pattern] = {
 
 # Chapter heading patterns — universal, used by _find_chapter_intros()
 _CHAPTER_HEADING_PATTERNS = [
-    re.compile(r"^#{1,4}\s+(\d+)\s*(?:[|:<]|\s+[A-Z])", re.MULTILINE),
-    re.compile(r"^#{1,4}\s+(\d+)\s*$", re.MULTILINE),
-    re.compile("^" + re.escape("\\section*{") + r"(\d+)(?:\s*[|]|\s*\})", re.MULTILINE),
+    re.compile(r"^#{1,4}\s+(\d+)\s*(?:[|:<]|\s+[A-Z]|\s+\\)", re.MULTILINE),  # ## N | TITLE, ## N <br>, ## N TITLE, ## N \\ TITLE
+    re.compile(r"^#{1,4}\s+(\d+)\s*$", re.MULTILINE),                          # ## N (bare number)
+    re.compile("^" + re.escape("\\section*{") + r"(\d+)(?:\s*[|]|\s*\})", re.MULTILINE),  # \section*{N}
 ]
 
 
@@ -703,11 +703,35 @@ def _build_section_chunks(
         body_start = sec["end"]
         body_end = sections[i + 1]["start"] if i + 1 < len(sections) else len(mmd_text)
 
-        # First section of chapter → extend backward to include chapter intro
+        # First section of chapter → emit chapter intro as its own chunk
         if first_section_idx.get(sec["chapter"]) == i:
             ch_intro = chapter_intros.get(sec["chapter"])
             if ch_intro is not None and ch_intro < sec["start"]:
-                body_start = ch_intro
+                intro_text = mmd_text[ch_intro:sec["start"]].strip()
+                if intro_text and len(intro_text.split()) >= 20:
+                    _intro_images = _extract_image_urls(intro_text)
+                    _intro_captions = _extract_image_captions(intro_text, len(_intro_images))
+                    _intro_latex = _extract_latex(intro_text)
+                    ch_num = sec["chapter"]
+                    raw_chunks.append(ParsedChunk(
+                        book_slug=book_slug,
+                        concept_id=f"{book_slug}_{ch_num}.0",
+                        section=f"{ch_num}.0 Chapter {ch_num} Introduction",
+                        order_index=global_order,
+                        heading=f"Chapter {ch_num} Introduction",
+                        text=_clean_chunk_text(intro_text),
+                        latex=_intro_latex,
+                        image_urls=_intro_images,
+                        image_captions=_intro_captions,
+                        chunk_type="chapter_intro",
+                        is_optional=False,
+                    ))
+                    global_order += 1
+                    logger.info(
+                        "Emitted chapter %d intro as separate chunk (%d words)",
+                        ch_num, len(intro_text.split()),
+                    )
+                # Do NOT extend body_start backward — intro already emitted
 
         # Last section before a chapter change → trim at next chapter heading
         if i + 1 < len(sections):
