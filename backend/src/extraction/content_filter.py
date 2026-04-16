@@ -11,6 +11,7 @@ Removes:
   - Exercise blocks (Practice Makes Perfect, Everyday Math, Writing Exercises)
 """
 
+import logging
 import re
 
 import sys
@@ -18,6 +19,8 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from extraction.domain_models import SectionBoundary
 from config import EXERCISE_SECTION_MARKERS
+
+logger = logging.getLogger(__name__)
 
 
 def filter_section_content(
@@ -203,13 +206,45 @@ def _remove_be_prepared(text: str) -> str:
     lines = text.split("\n")
     filtered = []
     skip = False
+    skip_count = 0
+    consecutive_blanks = 0
     for line in lines:
         stripped = line.strip()
         if "BE PREPARED" in stripped.upper():
             skip = True
+            skip_count = 0
+            consecutive_blanks = 0
             continue
         if skip:
-            # End of BE PREPARED block: next meaningful content heading
+            skip_count += 1
+            # Track consecutive blank lines
+            if not stripped:
+                consecutive_blanks += 1
+            else:
+                consecutive_blanks = 0
+
+            # Safety cap: force-stop after 15 lines to prevent runaway skipping
+            if skip_count > 15:
+                logger.warning(
+                    "BE PREPARED skip exceeded 15 lines — force-stopping to prevent content loss"
+                )
+                skip = False
+                filtered.append(line)
+                continue
+
+            # Two consecutive blank lines = block boundary
+            if consecutive_blanks >= 2:
+                skip = False
+                filtered.append(line)
+                continue
+
+            # Markdown heading = unconditional block terminator
+            if re.match(r"^#{1,4}\s", stripped):
+                skip = False
+                filtered.append(line)
+                continue
+
+            # Original terminators (unchanged)
             if stripped and (
                 re.match(r"^(EXAMPLE|HOW TO)\s", stripped) or
                 re.match(r"^(Use |Find |Add |Subtract |Multiply |Divide |Simplify |Evaluate |Solve |Translate |Model |Identify |Round |Name |Locate |Convert |Determine |Apply )", stripped) or
@@ -220,6 +255,11 @@ def _remove_be_prepared(text: str) -> str:
             # Stay in skip mode
             continue
         filtered.append(line)
+
+    if len(filtered) < len(lines):
+        logger.info(
+            "BE PREPARED filter removed %d lines", len(lines) - len(filtered),
+        )
     text = "\n".join(filtered)
 
     return text
@@ -229,6 +269,8 @@ def _trim_at_exercises(text: str, section: SectionBoundary) -> str:
     """
     Remove everything from the exercise markers onward.
     """
+    original_text = text
+
     # Pattern: "Section X.Y Exercises" (case-insensitive)
     exercise_pattern = re.compile(
         r"Section\s+" + re.escape(section.section_number) + r"\s+Exercises",
@@ -237,12 +279,17 @@ def _trim_at_exercises(text: str, section: SectionBoundary) -> str:
     match = exercise_pattern.search(text)
     if match:
         text = text[:match.start()]
+        logger.info("Trimmed %d chars at exercise marker", len(original_text) - len(text))
 
     # Also trim at generic exercise markers
     for marker in EXERCISE_SECTION_MARKERS:
-        pattern = re.compile(re.escape(marker), re.IGNORECASE)
+        pattern = re.compile(
+            r"(?:^|\n)\s*(?:#{1,4}\s+)?" + re.escape(marker),
+            re.IGNORECASE,
+        )
         match = pattern.search(text)
         if match:
+            logger.info("Trimmed %d chars at exercise marker", len(original_text) - len(text[:match.start()]))
             text = text[:match.start()]
 
     return text
@@ -272,7 +319,9 @@ def _remove_self_check(text: str) -> str:
     pattern = re.compile(r"Self Check\s*\n.*", re.DOTALL | re.IGNORECASE)
     match = pattern.search(text)
     if match:
+        text_before = text
         text = text[:match.start()]
+        logger.info("Removed Self Check block (%d chars)", len(text_before) - len(text))
     return text
 
 

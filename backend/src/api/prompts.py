@@ -850,7 +850,6 @@ def build_cards_system_prompt(
         useful = [
             img for img in images
             if img.get("is_educational") is not False
-            and img.get("description")
             and not any(
                 kw in (img.get("description") or "").lower()
                 for kw in _CHECKLIST_KEYWORDS
@@ -1282,7 +1281,6 @@ def build_cards_user_prompt(
         diagrams = [
             img for img in images
             if img.get("is_educational") is not False
-            and img.get("description")
             and not any(
                 kw in (img.get("description") or "").lower()
                 for kw in _CHECKLIST_KEYWORDS

@@ -608,6 +608,9 @@ export function SessionProvider({ children }) {
       state.cards.length,
       state.currentCardIndex,
       state.adaptiveCallInFlight,
+      state.chunkList,
+      state.currentChunkId,
+      state.currentChunkMode,
     ]
   );
 
@@ -662,6 +665,10 @@ export function SessionProvider({ children }) {
     try {
       if (signals) {
         const res = await recordCardInteraction(state.session.id, signals).catch((err) => console.error("[SessionContext] card interaction failed:", err));
+          if (!res) {
+            console.error("[SessionContext] card interaction response missing — skipping XP/badge processing");
+            return;
+          }
           // Award XP from backend response
           const xpData = res?.data?.xp_awarded;
           if (xpData?.final_xp) {

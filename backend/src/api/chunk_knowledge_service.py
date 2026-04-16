@@ -5,6 +5,7 @@ Provides chunk retrieval from PostgreSQL concept_chunks and chunk_images tables.
 No initialization needed — queries DB on demand via AsyncSession.
 """
 
+import asyncio
 import json
 import logging
 import re
@@ -41,7 +42,8 @@ def _normalize_image_url(url: str) -> str:
 
 
 _graph_cache: dict[str, nx.DiGraph] = {}
-_graph_lock = threading.Lock()
+_graph_lock = threading.Lock()         # guards sync _load_graph / preload_graph (thread-pool)
+_graph_async_lock = asyncio.Lock()     # guards reload_graph_with_overrides (event-loop)
 
 
 def _load_graph(book_slug: str) -> nx.DiGraph:
@@ -113,8 +115,8 @@ async def reload_graph_with_overrides(book_slug: str, db) -> nx.DiGraph:
     if overrides:
         G = _apply_overrides(G, overrides)
 
-    # Atomically update cache
-    with _graph_lock:
+    # Atomically update cache (async lock so we don't block the event loop)
+    async with _graph_async_lock:
         _graph_cache[book_slug] = G
 
     logger.info("[chunk-ksvc] Graph reloaded with %d overrides for '%s'", len(overrides), book_slug)

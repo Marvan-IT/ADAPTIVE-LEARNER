@@ -48,6 +48,7 @@ backend/translation_cache.json
 node_modules/
 frontend/dist/
 frontend/.vite/
+frontend/nginx.conf
 .eslintcache
 
 # ── OS artifacts ───────────────────────────────────────────────────

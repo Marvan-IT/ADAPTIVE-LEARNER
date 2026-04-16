@@ -45,9 +45,10 @@ if [ ! -f "$APP_DIR/backend/.env" ]; then
     exit 1
 fi
 
-# ── 3. Patch nginx.conf with actual domain ──────────────────────────────────
-echo "==> Setting domain in nginx.conf to ${DOMAIN}"
-sed -i "s/DOMAIN/${DOMAIN}/g" "$APP_DIR/frontend/nginx.conf"
+# ── 3. Generate nginx.conf from template with actual domain ─────────────────
+echo "==> Generating frontend/nginx.conf for domain ${DOMAIN}"
+export DOMAIN
+envsubst '${DOMAIN}' < "$APP_DIR/frontend/nginx.conf.template" > "$APP_DIR/frontend/nginx.conf"
 
 # ── 4. Create certbot directories ───────────────────────────────────────────
 mkdir -p "$APP_DIR/certbot/conf" "$APP_DIR/certbot/www"

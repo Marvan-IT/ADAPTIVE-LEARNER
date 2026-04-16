@@ -168,7 +168,7 @@ def _image_to_data_url(image_url: str, book_slug: str) -> str | None:
         b64 = base64.b64encode(data).decode("utf-8")
         return f"data:{mime};base64,{b64}"
     except Exception as _e:
-        logger.debug("[vision] failed to encode image %s: %s", image_url, _e)
+        logger.warning("[vision] failed to encode image %s: %s", image_url, _e)
         return None
 
 
@@ -936,11 +936,11 @@ class TeachingService:
             (i, img) for i, img in enumerate(cached_images) if i not in already_assigned
         ]
         available_images = [img for _, img in available_images_with_idx]
-        content_piece_images = available_images[:3]   # cap at 3 images per card
+        content_piece_images = available_images[:8]   # cap at 8 images per card
         # Map: position in content_piece_images → original index in cached_images
         _cp_to_cached_idx = {
             pos: orig_idx
-            for pos, (orig_idx, _) in enumerate(available_images_with_idx[:3])
+            for pos, (orig_idx, _) in enumerate(available_images_with_idx[:8])
         }
 
         # ── Step 8: Build generation profile ─────────────────────────────────────
@@ -995,7 +995,7 @@ class TeachingService:
         # Vision parts for per-card — same pattern as generate_per_chunk
         _pc_book_slug = getattr(session, "book_slug", None) or "prealgebra"
         _pc_vision_parts = []
-        for _img in (content_piece_images or [])[:2]:   # cap at 2 per card for speed
+        for _img in (content_piece_images or [])[:6]:   # cap at 6 images for Vision API
             _img_url = _img.get("image_url") or _img.get("url", "")
             _data_url = _image_to_data_url(_img_url, _pc_book_slug)
             if _data_url:
@@ -1199,7 +1199,7 @@ class TeachingService:
                     db, chunk.get("concept_id", ""), chunk.get("book_slug", "")
                 )
                 if concept_detail_for_images and concept_detail_for_images.get("images"):
-                    images = concept_detail_for_images["images"][:3]
+                    images = concept_detail_for_images["images"][:8]
             except Exception as _cd_err:
                 logger.warning("[per-chunk] failed to load concept images fallback for chunk %s: %s", chunk_id, _cd_err)
 
@@ -1266,7 +1266,7 @@ class TeachingService:
         _book_slug_for_img = chunk.get("book_slug", "prealgebra")
         _vision_parts = []
         _visible_images = []  # only images successfully base64-encoded
-        for _img in (images or [])[:4]:  # Cap at 4 images per call
+        for _img in (images or [])[:8]:  # Cap at 8 images per call
             _data_url = _image_to_data_url(_img.get("image_url", ""), _book_slug_for_img)
             if _data_url:
                 _vision_parts.append({

@@ -85,6 +85,14 @@ _NOISE_HEADING_PATTERNS: list[re.Pattern] = [
     re.compile(r"^LEARNING OBJECTIVES?\b", re.IGNORECASE),
     # Readiness-quiz preamble found in nursing/allied-health books
     re.compile(r"^Before you get started", re.IGNORECASE),
+    # Common textbook noise headings — keeps content together with parent section
+    re.compile(r"^Problem\b", re.IGNORECASE),
+    re.compile(r"^COLLABORATIVE EXERCISE\b", re.IGNORECASE),
+    re.compile(r"^References\b", re.IGNORECASE),
+    re.compile(r"^Key Terms\b", re.IGNORECASE),
+    re.compile(r"^Chapter Review\b", re.IGNORECASE),
+    re.compile(r"^Practice\b", re.IGNORECASE),
+    re.compile(r"^Bringing It Together\b", re.IGNORECASE),
 ]
 
 def _is_noise_heading(heading_text: str) -> bool:
@@ -218,6 +226,7 @@ class ParsedChunk:
     text: str              # full markdown text including image tags and LaTeX
     latex: list[str] = field(default_factory=list)
     image_urls: list[str] = field(default_factory=list)
+    image_captions: list[str | None] = field(default_factory=list)
     chunk_type:  str  = "teaching"
     is_optional: bool = False
 
@@ -239,35 +248,43 @@ def _extract_image_urls(text: str) -> list[str]:
     return IMAGE_URL_PATTERN.findall(text) + LOCAL_IMAGE_PATTERN.findall(text) + LATEX_IMAGE_PATTERN.findall(text)
 
 
-def _clean_chunk_text(text: str) -> str:
-    """Strip LaTeX figure/table markup from chunk text.
+# Caption patterns — LaTeX \caption{text} and markdown "Figure X.Y: description"
+_LATEX_CAPTION_PATTERN = re.compile(r"\\caption\{([^}]*)\}")
+_FIGURE_CAPTION_PATTERN = re.compile(r"Figure\s+\d+\.\d+[:\s]+(.+?)(?:\n|$)")
 
-    Images are already extracted to chunk_images via _extract_image_urls().
-    The raw LaTeX (\\begin{figure}, \\includegraphics, etc.) is noise — strip it
-    so chunks contain clean, readable content for LLM card generation and display.
+
+def _extract_image_captions(text: str, image_count: int) -> list[str | None]:
+    """Extract captions from LaTeX \\caption{} and Figure X.Y: patterns.
+
+    Returns a list parallel to image_urls (same length), with None for
+    images where no caption was found.
     """
-    # Remove \begin{figure}...\end{figure} blocks (images already extracted)
-    text = re.sub(r"\\begin\{figure\}.*?\\end\{figure\}", "", text, flags=re.DOTALL)
-    # Remove standalone \includegraphics (outside figure env)
-    text = re.sub(r"\\includegraphics(?:\[[^\]]*\])?\{[^}]+\}", "", text)
-    # Remove \captionsetup{...}
-    text = re.sub(r"\\captionsetup\{[^}]*\}", "", text)
-    # \caption{text} → keep the caption text, strip the command
-    text = re.sub(r"\\caption\{([^}]*)\}", r"\1", text)
-    # Remove table/tabular wrappers but keep content
-    text = re.sub(r"\\begin\{table\}", "", text)
-    text = re.sub(r"\\end\{table\}", "", text)
-    text = re.sub(r"\\begin\{tabular\}\{[^}]*\}", "", text)
-    text = re.sub(r"\\end\{tabular\}", "", text)
-    # Remove \hline
-    text = re.sub(r"\\hline\b", "", text)
-    # Remove external URLs (no learning value for card generation)
-    text = re.sub(r"https?://\S+", "", text)
-    # Remove credit/attribution lines
-    text = re.sub(r"\(credit:.*?\)", "", text, flags=re.IGNORECASE)
-    # Remove standalone "Figure X.Y" reference lines
-    text = re.sub(r"^Figure\s+\d+\.\d+\s*$", "", text, flags=re.MULTILINE)
-    # Collapse excessive blank lines
+    captions: list[str] = []
+    for m in _LATEX_CAPTION_PATTERN.finditer(text):
+        cap = m.group(1).strip()
+        if cap:
+            captions.append(cap)
+    for m in _FIGURE_CAPTION_PATTERN.finditer(text):
+        cap = m.group(1).strip()
+        if cap and cap not in captions:
+            captions.append(cap)
+    # Pad or truncate to match image_count
+    result: list[str | None] = []
+    for i in range(image_count):
+        result.append(captions[i] if i < len(captions) else None)
+    return result
+
+
+def _clean_chunk_text(text: str) -> str:
+    """Minimal cleanup — preserve all content for LLM card generation.
+
+    Images are already extracted to image_urls via _extract_image_urls().
+    Captions extracted via _extract_image_captions().
+    LaTeX extracted via _extract_latex().
+    We keep ALL readable content (URLs, Figure refs, credits, LaTeX markup)
+    so the LLM sees full context when generating cards.
+    """
+    # Only collapse excessive blank lines — keep everything else
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
 
@@ -428,7 +445,7 @@ def parse_book_mmd(
         if body_words >= MIN_SECTION_BODY_WORDS:
             filtered_matches.append(sec)
         else:
-            logger.debug(
+            logger.info(
                 "Skipping short fake section %s.%s (%d words) — likely exercise number",
                 sec["chapter"], sec["section_in_chapter"], body_words,
             )
@@ -453,6 +470,7 @@ def parse_book_mmd(
     # ── Step 2: Split each section's body into subsection chunks ─────────────
     raw_chunks: list[ParsedChunk] = []
     global_order = 0  # monotone counter; reset after dedup
+    total_body_chars = 0  # coverage tracking
 
     for i, sec in enumerate(section_matches):
         # Body spans from end of section heading to start of next section heading
@@ -470,6 +488,8 @@ def parse_book_mmd(
             next_ch = section_matches[i + 1]["chapter"]
             if next_ch != sec["chapter"] and next_ch in _chapter_intro_pos:
                 body_end = min(body_end, _chapter_intro_pos[next_ch])
+
+        total_body_chars += len(mmd_text[body_start:body_end])
 
         body = mmd_text[body_start:body_end]
 
@@ -513,6 +533,7 @@ def parse_book_mmd(
                 _ctype, _opt = _classify_chunk(sec["section_label"], in_exercises_zone, sec["section_label"])
                 # Extract images and latex BEFORE cleaning so no refs are lost
                 _images = _extract_image_urls(text)
+                _captions = _extract_image_captions(text, len(_images))
                 _latex = _extract_latex(text)
                 raw_chunks.append(ParsedChunk(
                     book_slug=book_slug,
@@ -523,6 +544,7 @@ def parse_book_mmd(
                     text=_clean_chunk_text(text),
                     latex=_latex,
                     image_urls=_images,
+                    image_captions=_captions,
                     chunk_type=_ctype,
                     is_optional=_opt,
                 ))
@@ -543,6 +565,10 @@ def parse_book_mmd(
             # Prepend section intro to the first subsection chunk
             if j == 0 and orphan_text:
                 chunk_text = orphan_text + "\n\n" + chunk_text
+                logger.info(
+                    "Prepending %d chars of section intro to first subsection '%s'",
+                    len(orphan_text), heading_text[:40],
+                )
             if not chunk_text:
                 continue
             # Determine if this heading is in the exercise zone
@@ -551,6 +577,7 @@ def parse_book_mmd(
             _ctype, _opt = _classify_chunk(heading_text, _in_zone, sec["section_label"])
             # Extract images and latex BEFORE cleaning so no refs are lost
             _images = _extract_image_urls(chunk_text)
+            _captions = _extract_image_captions(chunk_text, len(_images))
             _latex = _extract_latex(chunk_text)
             raw_chunks.append(ParsedChunk(
                 book_slug=book_slug,
@@ -561,6 +588,7 @@ def parse_book_mmd(
                 text=_clean_chunk_text(chunk_text),
                 latex=_latex,
                 image_urls=_images,
+                image_captions=_captions,
                 chunk_type=_ctype,
                 is_optional=_opt,
             ))
@@ -585,12 +613,31 @@ def parse_book_mmd(
     # no teaching value on their own. Merge them into the next chunk in the same section.
     _merged: list[ParsedChunk] = []
     for _mi, _chunk in enumerate(deduped):
-        if (len(_chunk.text.split()) < 50
+        _word_ct = len(_chunk.text.split())
+        if (_word_ct < 50
                 and _mi + 1 < len(deduped)
                 and deduped[_mi + 1].concept_id == _chunk.concept_id):
+            # Forward merge into next subsection within same section
             deduped[_mi + 1].text = _chunk.text + "\n\n" + deduped[_mi + 1].text
-            logger.debug("Merged tiny chunk '%s' into next chunk", _chunk.heading[:40])
+            deduped[_mi + 1].image_urls = _chunk.image_urls + deduped[_mi + 1].image_urls
+            deduped[_mi + 1].latex = _chunk.latex + deduped[_mi + 1].latex
+            logger.info(
+                "Merged tiny chunk '%s' (%d words, %d images) forward into next subsection",
+                _chunk.heading[:40], _word_ct, len(_chunk.image_urls),
+            )
+        elif (_word_ct < 50
+              and _merged
+              and _merged[-1].concept_id == _chunk.concept_id):
+            # Backward merge into previous subsection within same section
+            _merged[-1].text += "\n\n" + _chunk.text
+            _merged[-1].image_urls += _chunk.image_urls
+            _merged[-1].latex += _chunk.latex
+            logger.info(
+                "Merged tiny chunk '%s' (%d words, %d images) backward into previous subsection",
+                _chunk.heading[:40], _word_ct, len(_chunk.image_urls),
+            )
         else:
+            # Keep as standalone — NEVER drop content
             _merged.append(_chunk)
     deduped = _merged
 
@@ -605,6 +652,17 @@ def parse_book_mmd(
         "Chunks after dedup: %d (removed %d duplicates)",
         len(deduped), len(raw_chunks) - len(deduped),
     )
+
+    # ── Coverage check (same as profile-driven path) ─────────────────────────
+    if total_body_chars > 0:
+        coverage = _check_coverage(total_body_chars, deduped)
+        logger.info("Coverage check: %.1f%% of body chars assigned to chunks", coverage * 100)
+        if coverage < 0.95:
+            logger.warning(
+                "Coverage below 95%% for book %s (%.1f%%) — some body text may be unassigned",
+                book_slug, coverage * 100,
+            )
+
     return deduped
 
 
@@ -1119,8 +1177,8 @@ def _parse_book_mmd_with_profile(mmd_text: str, book_slug: str, profile) -> list
             # Skip X.Y section headings that leaked into the body
             if re.match(r"^\d+\.\d+\s", heading_text):
                 continue
-            # Skip profile-defined noise / feature-box headings
-            if _is_noise_heading_profile(heading_text, compiled_noise):
+            # Skip profile-defined noise / feature-box headings AND universal noise patterns
+            if _is_noise_heading_profile(heading_text, compiled_noise) or _is_noise_heading(heading_text):
                 continue
             meaningful_subs.append((sh_start, sh_end, heading_text))
 

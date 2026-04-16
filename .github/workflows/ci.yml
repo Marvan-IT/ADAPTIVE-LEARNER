@@ -52,11 +52,48 @@ jobs:
           VITE_API_BASE_URL: http://localhost:8889
           VITE_API_SECRET_KEY: ci-placeholder-key
 
+  # ── Backend: run pytest suite ──────────────────────────────────────────────
+  backend-test:
+    name: Backend — Test
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: test_db
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install backend dependencies
+        run: pip install -r backend/requirements.txt
+
+      - name: Run pytest
+        run: pytest backend/tests/ -v
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
+          OPENAI_API_KEY: test-key-not-real
+          API_SECRET_KEY: test-secret-key-for-ci
+          JWT_SECRET_KEY: test-jwt-secret-for-ci
+          ENVIRONMENT: test
+
   # ── Deploy to EC2 (main branch only) ───────────────────────────────────────
   deploy:
     name: Deploy — EC2
     runs-on: ubuntu-latest
-    needs: [backend-lint, frontend-build]
+    needs: [backend-lint, frontend-build, backend-test]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     steps:
       - name: SSH deploy
@@ -68,5 +105,10 @@ jobs:
           script: |
             cd ${{ secrets.EC2_PROJECT_PATH }}
             git pull origin main
-            docker compose up --build -d backend frontend book-watcher
+            # Regenerate nginx.conf from template using DOMAIN from .env
+            if [ -f frontend/nginx.conf.template ] && grep -q '^DOMAIN=' .env 2>/dev/null; then
+              export $(grep '^DOMAIN=' .env | head -1)
+              envsubst '${DOMAIN}' < frontend/nginx.conf.template > frontend/nginx.conf
+            fi
+            docker compose up --build -d backend frontend
             docker compose exec -T backend python -m alembic upgrade head

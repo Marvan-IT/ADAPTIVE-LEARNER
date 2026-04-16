@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -49,6 +49,23 @@ from api.prompts import LANGUAGE_NAMES
 
 
 logger = logging.getLogger(__name__)
+
+
+def _configure_logging():
+    """Configure structured JSON logging in production for CloudWatch."""
+    from config import ENVIRONMENT
+    if ENVIRONMENT == "production":
+        from pythonjsonlogger.json import JsonFormatter
+        handler = logging.StreamHandler()
+        handler.setFormatter(JsonFormatter(
+            fmt="%(asctime)s %(levelname)s %(name)s %(message)s",
+            rename_fields={"asctime": "timestamp", "levelname": "level"},
+        ))
+        root = logging.getLogger()
+        root.handlers.clear()
+        root.addHandler(handler)
+        root.setLevel(logging.INFO)
+
 
 # ── Rate limiter (shared via rate_limiter module to avoid circular imports) ─
 from api.rate_limiter import limiter  # noqa: E402
@@ -100,6 +117,7 @@ def _save_translation_cache() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _configure_logging()
     validate_required_env_vars()
     global _chunk_knowledge_svc, _openai_client, _cache_write_lock
     _cache_write_lock = asyncio.Lock()
@@ -297,26 +315,24 @@ app.mount("/static/output", StaticFiles(directory=str(OUTPUT_DIR)), name="static
 async def health():
     from db.connection import get_db
     chunk_count = 0
-    graph_nodes = 0
-    graph_edges = 0
+    db_ok = False
     try:
         async for _db in get_db():
             chunk_count = await _chunk_knowledge_svc.get_chunk_count(_db) if _chunk_knowledge_svc else 0
+            db_ok = True
             break
     except Exception as exc:
-        logger.warning("[health] chunk_count query failed: %s", exc)
-    try:
-        if _chunk_knowledge_svc:
-            graph_info = _chunk_knowledge_svc.get_graph_info("prealgebra")
-            graph_nodes = graph_info["num_nodes"]
-            graph_edges = graph_info["num_edges"]
-    except Exception as exc:
-        logger.warning("[health] graph_info failed: %s", exc)
+        logger.warning("[health] DB query failed: %s", exc)
+
+    if not db_ok:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "unhealthy", "reason": "database_unavailable"},
+        )
+
     return {
         "status": "ok",
         "chunk_count": chunk_count,
-        "graph_nodes": graph_nodes,
-        "graph_edges": graph_edges,
     }
 
 
@@ -326,7 +342,7 @@ async def health():
 
 @app.post("/api/v1/concepts/query", response_model=ConceptQueryResponse)
 @limiter.limit("60/minute")
-async def query_concepts(request: Request, req: ConceptQuery, book_slug: str = "prealgebra"):
+async def query_concepts(request: Request, req: ConceptQuery, book_slug: str = Query("prealgebra", pattern=r"^[a-z0-9_-]+$")):
     """
     Semantic search using pgvector similarity.
     Combines PostgreSQL vector search (RAG) with NetworkX prerequisite checking (Graph).
@@ -385,7 +401,7 @@ async def query_concepts(request: Request, req: ConceptQuery, book_slug: str = "
 
 @app.post("/api/v1/concepts/next", response_model=NextConceptsResponse)
 @limiter.limit("60/minute")
-async def next_concepts(request: Request, req: NextConceptsRequest, book_slug: str = "prealgebra"):
+async def next_concepts(request: Request, req: NextConceptsRequest, book_slug: str = Query("prealgebra", pattern=r"^[a-z0-9_-]+$")):
     """Given mastered concepts, return all concepts now ready to learn and locked ones."""
     ready = _chunk_knowledge_svc.get_next_concepts(book_slug, req.mastered_concepts)
     locked = _chunk_knowledge_svc.get_locked_concepts(book_slug, req.mastered_concepts)
@@ -397,7 +413,7 @@ async def next_concepts(request: Request, req: NextConceptsRequest, book_slug: s
 
 
 @app.get("/api/v1/concepts/{concept_id}", response_model=ConceptDetailResponse)
-async def get_concept(concept_id: str, book_slug: str = "prealgebra"):
+async def get_concept(concept_id: str, book_slug: str = Query("prealgebra", pattern=r"^[a-z0-9_-]+$")):
     """Full detail for a single concept including prerequisites and dependents."""
     from db.connection import get_db as _get_db
     async for _db in _get_db():
@@ -409,7 +425,7 @@ async def get_concept(concept_id: str, book_slug: str = "prealgebra"):
 
 
 @app.get("/api/v1/concepts/{concept_id}/prerequisites")
-async def get_prerequisites(concept_id: str, book_slug: str = "prealgebra"):
+async def get_prerequisites(concept_id: str, book_slug: str = Query("prealgebra", pattern=r"^[a-z0-9_-]+$")):
     """All transitive prerequisites for a concept."""
     all_prereqs = _chunk_knowledge_svc.get_all_prerequisites(book_slug, concept_id)
     return {
@@ -424,7 +440,7 @@ async def get_prerequisites(concept_id: str, book_slug: str = "prealgebra"):
 # ═══════════════════════════════════════════════════════════════════
 
 @app.get("/api/v1/concepts/{concept_id}/images")
-async def get_concept_images(concept_id: str, book_slug: str = "prealgebra"):
+async def get_concept_images(concept_id: str, book_slug: str = Query("prealgebra", pattern=r"^[a-z0-9_-]+$")):
     """List all extracted images for a concept."""
     from db.connection import get_db as _get_db
     async for _db in _get_db():
@@ -463,7 +479,7 @@ async def _require_visible_book(book_slug: str, db: AsyncSession) -> None:
 
 
 @app.get("/api/v1/graph/info", response_model=GraphInfoResponse)
-async def graph_info(book_slug: str = "prealgebra", db: AsyncSession = Depends(get_db)):
+async def graph_info(book_slug: str = Query("prealgebra", pattern=r"^[a-z0-9_-]+$"), db: AsyncSession = Depends(get_db)):
     """Dependency graph statistics."""
     await _require_visible_book(book_slug, db)
     info = _chunk_knowledge_svc.get_graph_info(book_slug)
@@ -477,7 +493,7 @@ async def graph_info(book_slug: str = "prealgebra", db: AsyncSession = Depends(g
 
 
 @app.get("/api/v1/graph/nodes")
-async def graph_nodes(book_slug: str = "prealgebra", db: AsyncSession = Depends(get_db)):
+async def graph_nodes(book_slug: str = Query("prealgebra", pattern=r"^[a-z0-9_-]+$"), db: AsyncSession = Depends(get_db)):
     """List all concept nodes with graph properties."""
     await _require_visible_book(book_slug, db)
     nodes = _chunk_knowledge_svc.get_all_nodes(book_slug)
@@ -486,7 +502,7 @@ async def graph_nodes(book_slug: str = "prealgebra", db: AsyncSession = Depends(
 
 @app.post("/api/v1/graph/learning-path", response_model=LearningPathResponse)
 @limiter.limit("60/minute")
-async def learning_path(request: Request, req: LearningPathRequest, book_slug: str = "prealgebra", db: AsyncSession = Depends(get_db)):
+async def learning_path(request: Request, req: LearningPathRequest, book_slug: str = Query("prealgebra", pattern=r"^[a-z0-9_-]+$"), db: AsyncSession = Depends(get_db)):
     """Compute the optimal learning path to reach a target concept."""
     await _require_visible_book(book_slug, db)
     result = _chunk_knowledge_svc.get_learning_path(book_slug, req.target_concept_id, req.mastered_concepts)
@@ -498,7 +514,7 @@ async def learning_path(request: Request, req: LearningPathRequest, book_slug: s
 
 
 @app.get("/api/v1/graph/full")
-async def graph_full(book_slug: str = "prealgebra", db: AsyncSession = Depends(get_db)):
+async def graph_full(book_slug: str = Query("prealgebra", pattern=r"^[a-z0-9_-]+$"), db: AsyncSession = Depends(get_db)):
     """Full graph with nodes and edges for frontend visualization."""
     await _require_visible_book(book_slug, db)
     nodes = _chunk_knowledge_svc.get_all_nodes(book_slug)
@@ -507,7 +523,7 @@ async def graph_full(book_slug: str = "prealgebra", db: AsyncSession = Depends(g
 
 
 @app.get("/api/v1/graph/topological-order")
-async def topological_order(book_slug: str = "prealgebra", db: AsyncSession = Depends(get_db)):
+async def topological_order(book_slug: str = Query("prealgebra", pattern=r"^[a-z0-9_-]+$"), db: AsyncSession = Depends(get_db)):
     """Return all concepts in a valid learning sequence."""
     await _require_visible_book(book_slug, db)
     order = _chunk_knowledge_svc.get_topological_order(book_slug)

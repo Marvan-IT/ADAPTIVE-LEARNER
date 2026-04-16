@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from auth.dependencies import require_admin
 from auth.models import User
-from config import OUTPUT_DIR, DATA_DIR
+from config import OUTPUT_DIR, DATA_DIR, BACKEND_DIR
 from db.connection import get_db
 import openai
 import networkx as nx
@@ -63,8 +63,10 @@ def _check_api_key(request: Request) -> None:
 
 # ── Subjects ───────────────────────────────────────────────────────────────────
 
+@limiter.limit("30/minute")
 @router.get("/api/admin/subjects")
 async def list_subjects(
+    request: Request,
     _user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
@@ -84,6 +86,7 @@ async def list_subjects(
     return result
 
 
+@limiter.limit("30/minute")
 @router.post("/api/admin/subjects")
 async def create_subject(
     request: Request,
@@ -107,6 +110,7 @@ async def create_subject(
     return {"slug": subj.slug, "label": subj.label}
 
 
+@limiter.limit("30/minute")
 @router.put("/api/admin/subjects/{slug}")
 async def update_subject(
     slug: str,
@@ -130,8 +134,10 @@ async def update_subject(
     return {"slug": subj.slug, "label": subj.label}
 
 
+@limiter.limit("30/minute")
 @router.delete("/api/admin/subjects/{slug}", status_code=204)
 async def delete_subject(
+    request: Request,
     slug: str,
     _user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
@@ -155,6 +161,7 @@ async def delete_subject(
     logger.info("[admin] Subject deleted: slug=%s by admin=%s", slug, str(_user.id))
 
 
+@limiter.limit("30/minute")
 @router.patch("/api/admin/subjects/{slug}/visibility")
 async def toggle_subject_visibility(
     slug: str,
@@ -198,6 +205,10 @@ async def upload_book(
     dest_dir = DATA_DIR / subject
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest_path = dest_dir / safe_filename
+    try:
+        dest_path.resolve().relative_to(DATA_DIR.resolve())
+    except ValueError:
+        raise HTTPException(400, "Invalid upload destination")
     content = await file.read()
     # Validate file size (max 100MB)
     if len(content) > 100_000_000:
@@ -239,13 +250,15 @@ async def upload_book(
         sys.executable, "-m", "src.watcher.pipeline_runner",
         "--pdf", str(dest_path),
         "--subject", subject,
-    ])
+    ], cwd=str(BACKEND_DIR))
     logger.info("[upload] Spawned pipeline for '%s' (subject=%s)", slug, subject)
     return {"slug": slug, "title": title, "subject": subject, "status": "PROCESSING"}
 
 
+@limiter.limit("30/minute")
 @router.get("/api/admin/books")
 async def list_admin_books(
+    request: Request,
     subject: str = None,
     _user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
@@ -268,6 +281,7 @@ async def list_admin_books(
     ]
 
 
+@limiter.limit("30/minute")
 @router.patch("/api/admin/books/{slug}/visibility")
 async def toggle_book_visibility(
     slug: str,
@@ -289,8 +303,10 @@ async def toggle_book_visibility(
     return {"slug": book.book_slug, "is_hidden": book.is_hidden}
 
 
+@limiter.limit("30/minute")
 @router.get("/api/admin/books/{slug}/status")
 async def get_book_status(
+    request: Request,
     slug: str,
     _user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
@@ -394,8 +410,10 @@ def _section_sort_key(section_str: str):
     return tuple(parts) if parts else (float("inf"), 0)
 
 
+@limiter.limit("30/minute")
 @router.get("/api/admin/books/{slug}/sections")
 async def get_book_sections(
+    request: Request,
     slug: str,
     _user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
@@ -492,8 +510,10 @@ async def get_book_sections(
     return {"title": book_title, "chapters": [{"chapter": ch, "sections": secs} for ch, secs in sorted(chapters.items())]}
 
 
+@limiter.limit("30/minute")
 @router.get("/api/admin/books/{slug}/chunks/{concept_id:path}")
 async def get_book_chunks(
+    request: Request,
     slug: str,
     concept_id: str,
     _user: User = Depends(require_admin),
@@ -533,8 +553,10 @@ async def get_book_chunks(
     return result
 
 
+@limiter.limit("30/minute")
 @router.get("/api/admin/books/{slug}/graph")
 async def get_book_graph(
+    request: Request,
     slug: str,
     _user: User = Depends(require_admin),
 ):
@@ -544,6 +566,7 @@ async def get_book_graph(
     return json.loads(graph_path.read_text(encoding="utf-8"))
 
 
+@limiter.limit("30/minute")
 @router.post("/api/admin/books/{slug}/publish")
 async def publish_book(
     slug: str,
@@ -839,8 +862,10 @@ _reload_lock: asyncio.Lock | None = None
 
 # ── Dashboard ──────────────────────────────────────────────────────────────────
 
+@limiter.limit("30/minute")
 @router.get("/api/admin/dashboard")
 async def admin_dashboard(
+    request: Request,
     _user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
@@ -915,8 +940,10 @@ async def admin_dashboard(
 
 # ── Student Management ─────────────────────────────────────────────────────────
 
+@limiter.limit("30/minute")
 @router.get("/api/admin/students")
 async def admin_list_students(
+    request: Request,
     search: str = None,
     limit: int = 50,
     offset: int = 0,
@@ -985,8 +1012,10 @@ async def admin_list_students(
     return {"total": total, "items": items}
 
 
+@limiter.limit("30/minute")
 @router.get("/api/admin/students/{student_id}")
 async def admin_get_student(
+    request: Request,
     student_id: str,
     _user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
@@ -1106,6 +1135,7 @@ async def admin_get_student(
     }
 
 
+@limiter.limit("30/minute")
 @router.patch("/api/admin/students/{student_id}")
 async def admin_update_student(
     student_id: str,
@@ -1150,6 +1180,7 @@ async def admin_update_student(
     return {"id": str(student.id), "display_name": student.display_name}
 
 
+@limiter.limit("30/minute")
 @router.patch("/api/admin/students/{student_id}/access")
 async def admin_set_student_access(
     student_id: str,
@@ -1220,8 +1251,10 @@ async def admin_delete_student(
     return {"status": "deactivated"}
 
 
+@limiter.limit("30/minute")
 @router.post("/api/admin/students/{student_id}/reset-password")
 async def admin_reset_student_password(
+    request: Request,
     student_id: str,
     _user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
@@ -1253,8 +1286,10 @@ async def admin_reset_student_password(
 
 # ── Manual Mastery ─────────────────────────────────────────────────────────────
 
+@limiter.limit("30/minute")
 @router.post("/api/admin/students/{student_id}/mastery/{concept_id:path}")
 async def admin_grant_mastery(
+    request: Request,
     student_id: str,
     concept_id: str,
     _user: User = Depends(require_admin),
@@ -1292,8 +1327,10 @@ async def admin_grant_mastery(
     return {"status": "mastered", "concept_id": concept_id}
 
 
+@limiter.limit("30/minute")
 @router.delete("/api/admin/students/{student_id}/mastery/{concept_id:path}")
 async def admin_revoke_mastery(
+    request: Request,
     student_id: str,
     concept_id: str,
     _user: User = Depends(require_admin),
@@ -1322,8 +1359,10 @@ async def admin_revoke_mastery(
 
 # ── Sessions ───────────────────────────────────────────────────────────────────
 
+@limiter.limit("30/minute")
 @router.get("/api/admin/sessions")
 async def admin_list_sessions(
+    request: Request,
     phase: str = None,
     book_slug: str = None,
     limit: int = 50,
@@ -1379,8 +1418,10 @@ async def admin_list_sessions(
 
 # ── Analytics ──────────────────────────────────────────────────────────────────
 
+@limiter.limit("30/minute")
 @router.get("/api/admin/analytics")
 async def admin_analytics(
+    request: Request,
     _user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
@@ -1536,6 +1577,7 @@ async def admin_create_admin_user(
     }
 
 
+@limiter.limit("30/minute")
 @router.patch("/api/admin/users/{user_id}/role")
 async def admin_set_user_role(
     user_id: str,
@@ -1580,8 +1622,10 @@ async def admin_set_user_role(
     return {"role": target_user.role}
 
 
+@limiter.limit("30/minute")
 @router.get("/api/admin/users")
 async def admin_list_users(
+    request: Request,
     role: str = None,
     limit: int = Query(default=50, le=200),
     offset: int = Query(default=0, ge=0),
@@ -1619,8 +1663,10 @@ async def admin_list_users(
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 
+@limiter.limit("30/minute")
 @router.get("/api/admin/config")
 async def admin_get_config(
+    request: Request,
     _user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
@@ -1631,6 +1677,7 @@ async def admin_get_config(
     return {r.key: r.value for r in rows}
 
 
+@limiter.limit("30/minute")
 @router.patch("/api/admin/config")
 async def admin_update_config(
     request: Request,
@@ -1675,6 +1722,7 @@ async def admin_update_config(
 
 # ── Chunk Edit ──────────────────────────────────────────────────────────────────
 
+@limiter.limit("30/minute")
 @router.patch("/api/admin/chunks/{chunk_id}")
 async def update_chunk(
     chunk_id: str,
@@ -1720,8 +1768,10 @@ async def update_chunk(
     }
 
 
+@limiter.limit("30/minute")
 @router.patch("/api/admin/chunks/{chunk_id}/visibility")
 async def toggle_chunk_visibility(
+    request: Request,
     chunk_id: str,
     _user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
@@ -1744,8 +1794,10 @@ async def toggle_chunk_visibility(
     return {"id": chunk_id, "is_hidden": chunk.is_hidden}
 
 
+@limiter.limit("30/minute")
 @router.patch("/api/admin/chunks/{chunk_id}/exam-gate")
 async def toggle_chunk_exam_gate(
+    request: Request,
     chunk_id: str,
     _user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
@@ -1770,6 +1822,7 @@ async def toggle_chunk_exam_gate(
 
 # ── Merge / Split / Reorder ────────────────────────────────────────────────────
 
+@limiter.limit("30/minute")
 @router.post("/api/admin/chunks/merge")
 async def merge_chunks(
     request: Request,
@@ -1889,6 +1942,7 @@ async def merge_chunks(
     }
 
 
+@limiter.limit("30/minute")
 @router.post("/api/admin/chunks/{chunk_id}/split")
 async def split_chunk(
     chunk_id: str,
@@ -2020,6 +2074,7 @@ async def split_chunk(
     }
 
 
+@limiter.limit("30/minute")
 @router.put("/api/admin/concepts/{concept_id:path}/reorder")
 async def reorder_chunks(
     concept_id: str,
@@ -2066,8 +2121,10 @@ async def reorder_chunks(
 
 # ── Embedding Regeneration ─────────────────────────────────────────────────────
 
+@limiter.limit("30/minute")
 @router.post("/api/admin/chunks/{chunk_id}/regenerate-embedding")
 async def regenerate_chunk_embedding(
+    request: Request,
     chunk_id: str,
     _user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
@@ -2094,6 +2151,7 @@ async def regenerate_chunk_embedding(
     return {"id": chunk_id, "embedding_regenerated": True}
 
 
+@limiter.limit("30/minute")
 @router.post("/api/admin/concepts/{concept_id:path}/regenerate-embeddings")
 async def regenerate_concept_embeddings(
     concept_id: str,
@@ -2144,6 +2202,7 @@ async def regenerate_concept_embeddings(
 
 # ── Section-Level Controls ─────────────────────────────────────────────────────
 
+@limiter.limit("30/minute")
 @router.patch("/api/admin/sections/{concept_id:path}/rename")
 async def rename_section(
     concept_id: str,
@@ -2176,6 +2235,7 @@ async def rename_section(
     return {"concept_id": concept_id, "admin_section_name": name, "chunks_updated": chunks_updated}
 
 
+@limiter.limit("30/minute")
 @router.patch("/api/admin/sections/{concept_id:path}/optional")
 async def toggle_section_optional(
     concept_id: str,
@@ -2208,6 +2268,7 @@ async def toggle_section_optional(
     return {"concept_id": concept_id, "is_optional": bool(is_optional), "chunks_updated": chunks_updated}
 
 
+@limiter.limit("30/minute")
 @router.patch("/api/admin/sections/{concept_id:path}/exam-gate")
 async def toggle_section_exam_gate(
     concept_id: str,
@@ -2240,6 +2301,7 @@ async def toggle_section_exam_gate(
     return {"concept_id": concept_id, "exam_disabled": bool(disabled), "chunks_updated": chunks_updated}
 
 
+@limiter.limit("30/minute")
 @router.patch("/api/admin/sections/{concept_id:path}/visibility")
 async def toggle_section_visibility(
     concept_id: str,
@@ -2277,6 +2339,7 @@ async def toggle_section_visibility(
     return {"updated": chunks_updated, "is_hidden": bool(is_hidden)}
 
 
+@limiter.limit("30/minute")
 @router.post("/api/admin/sections/{concept_id:path}/promote")
 async def promote_subsection_to_section(
     concept_id: str,
@@ -2479,8 +2542,10 @@ async def promote_subsection_to_section(
 
 # ── Graph Edge Operations ──────────────────────────────────────────────────────
 
+@limiter.limit("30/minute")
 @router.get("/api/admin/graph/{book_slug}/edges")
 async def list_graph_edges(
+    request: Request,
     book_slug: str,
     _user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
@@ -2493,8 +2558,10 @@ async def list_graph_edges(
     return [{"source": src, "target": tgt} for src, tgt in G.edges()]
 
 
+@limiter.limit("30/minute")
 @router.get("/api/admin/graph/{book_slug}/overrides")
 async def list_graph_overrides(
+    request: Request,
     book_slug: str,
     _user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
@@ -2519,6 +2586,7 @@ async def list_graph_overrides(
     ]
 
 
+@limiter.limit("30/minute")
 @router.post("/api/admin/graph/{book_slug}/edges")
 async def modify_graph_edge(
     book_slug: str,
@@ -2573,8 +2641,10 @@ async def modify_graph_edge(
     return {"action": action, "source": source, "target": target}
 
 
+@limiter.limit("30/minute")
 @router.delete("/api/admin/graph/{book_slug}/overrides/{override_id}")
 async def delete_graph_override(
+    request: Request,
     book_slug: str,
     override_id: str,
     _user: User = Depends(require_admin),
@@ -2609,8 +2679,10 @@ async def delete_graph_override(
 # GAMIFICATION — ADMIN PROGRESS REPORT
 # ═══════════════════════════════════════════════════════════════════
 
+@limiter.limit("30/minute")
 @router.get("/api/admin/students/{student_id}/progress-report")
 async def get_progress_report(
+    request: Request,
     student_id: UUID,
     period: str = "week",
     _user: User = Depends(require_admin),

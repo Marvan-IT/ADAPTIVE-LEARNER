@@ -28,7 +28,7 @@ async def send_otp_email(to_email: str, otp: str, purpose: str) -> None:
         # Development / CI mode: log OTP so it can be used without real email
         from config import ENVIRONMENT
         if ENVIRONMENT != "production":
-            logger.warning("[DEV] OTP for %s (%s): %s", to_email, purpose, otp)
+            logger.warning("[DEV] OTP for %s (%s): %s****", to_email, purpose, otp[:2])
         else:
             logger.error("SMTP not configured in production — OTP email for %s could not be sent", to_email)
         return

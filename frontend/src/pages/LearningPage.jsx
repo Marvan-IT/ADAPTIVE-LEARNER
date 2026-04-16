@@ -57,21 +57,24 @@ export default function LearningPage() {
 
   useEffect(() => {
     if (conceptId && phase === "IDLE" && !prereqChecked) {
+      let cancelled = false;
       setPrereqChecked(true);
       const decodedConceptId = decodeURIComponent(conceptId);
 
-      const launchLesson = () => startLesson(decodedConceptId, null, []);
+      const launchLesson = () => { if (!cancelled) startLesson(decodedConceptId, null, []); };
 
       const tryResume = () => {
         const savedSessionId = localStorage.getItem(`ada_session_${student?.id}_${decodedConceptId}`);
         if (savedSessionId) {
           getSession(savedSessionId)
             .then(res => {
+              if (cancelled) return;
               const existing = res.data;
               if (existing && existing.phase !== "COMPLETED") {
                 // Restore session state then load chunk list to resume at SELECTING_CHUNK
                 dispatch({ type: "SESSION_CREATED", payload: existing });
                 return getChunkList(existing.id).then(chunkRes => {
+                  if (cancelled) return;
                   const chunkListData = chunkRes.data;
                   if (chunkListData.chunks && chunkListData.chunks.length > 0) {
                     dispatch({ type: "CHUNK_LIST_LOADED", payload: chunkListData });
@@ -83,7 +86,7 @@ export default function LearningPage() {
                 launchLesson();
               }
             })
-            .catch(() => launchLesson());
+            .catch(() => { if (!cancelled) launchLesson(); });
         } else {
           launchLesson();
         }
@@ -91,6 +94,7 @@ export default function LearningPage() {
 
       checkConceptReadiness(decodedConceptId, student.id, bookSlug)
         .then(res => {
+          if (cancelled) return;
           const data = res.data;
           if (!data.all_prerequisites_met && data.unmet_prerequisites.length > 0) {
             setPrereqWarning({ unmet: data.unmet_prerequisites });
@@ -100,8 +104,10 @@ export default function LearningPage() {
         })
         .catch((err) => {
           console.error("[LearningPage] prereq check failed:", err);
-          launchLesson();
+          if (!cancelled) launchLesson();
         });
+
+      return () => { cancelled = true; };
     }
   }, [conceptId, phase, prereqChecked]);
 

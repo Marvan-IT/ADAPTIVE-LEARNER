@@ -7,7 +7,7 @@ import re
 from datetime import datetime, timezone, timedelta
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func, and_, update
 from sqlalchemy import update as sa_update
@@ -242,7 +242,7 @@ async def list_students(
     request: Request,
     db: AsyncSession = Depends(get_db),
     limit: int = 50,
-    offset: int = 0,
+    offset: int = Query(0, ge=0),
     _user: User = Depends(require_admin),
 ):
     """List student profiles with their mastery counts (paginated). Admin only."""

@@ -102,6 +102,19 @@ export default function DashboardPage() {
 
         setBookMap(slugToBook);
 
+        // Fetch all book graphs in parallel across all subjects
+        const allBooks = Object.values(bySubject).flat();
+        const graphResults = await Promise.allSettled(
+          allBooks.map((book) => getGraphFull(book.slug))
+        );
+        const graphBySlug = {};
+        allBooks.forEach((book, i) => {
+          const result = graphResults[i];
+          graphBySlug[book.slug] = result.status === "fulfilled"
+            ? result.value.data?.nodes || []
+            : [];
+        });
+
         const subjectData = [];
         for (const [subj, bookList] of Object.entries(bySubject)) {
           let total = 0;
@@ -109,14 +122,9 @@ export default function DashboardPage() {
           const bookSlugs = new Set(bookList.map((b) => b.slug));
 
           for (const book of bookList) {
-            try {
-              const graphRes = await getGraphFull(book.slug);
-              const nodes = graphRes.data?.nodes || [];
-              total += nodes.length;
-              mastered += nodes.filter((n) => masteredSet.has(n.concept_id)).length;
-            } catch {
-              // skip if graph not ready
-            }
+            const nodes = graphBySlug[book.slug] || [];
+            total += nodes.length;
+            mastered += nodes.filter((n) => masteredSet.has(n.concept_id)).length;
           }
 
           // Find the most recent session for this subject

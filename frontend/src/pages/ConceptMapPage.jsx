@@ -155,6 +155,9 @@ export default function ConceptMapPage() {
       setBookGraphStats(stats);
       setStatsLoading(false);
     });
+    return () => {
+      graphCacheRef.current = {};
+    };
   }, [availableBooks, masteredSet]);
 
   /* ── Review-due concepts ── */

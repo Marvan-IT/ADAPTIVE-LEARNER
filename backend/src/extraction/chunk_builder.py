@@ -47,7 +47,7 @@ logger = logging.getLogger(__name__)
 
 # ── Image download ────────────────────────────────────────────────────────────
 
-def download_image(cdn_url: str, images_dir: Path) -> str:
+def download_image(cdn_url: str, images_dir: Path) -> str | None:
     """
     Download a CDN image to local disk once; return the local filename.
 
@@ -80,6 +80,7 @@ def download_image(cdn_url: str, images_dir: Path) -> str:
             logger.debug("Copied local image: %s → %s", filename, local_filename)
         else:
             logger.warning("Local image not found in mathpix_extracted/: %s", filename)
+            return None
         return local_filename
 
     logger.debug("Downloading image: %s → %s", cdn_url[:80], local_filename)
@@ -90,8 +91,7 @@ def download_image(cdn_url: str, images_dir: Path) -> str:
         logger.debug("Saved %d bytes → %s", len(r.content), local_filename)
     except Exception as exc:
         logger.warning("Failed to download image %s: %s", cdn_url[:80], exc)
-        # Return the filename anyway so the DB record still points to the right place;
-        # the file will be absent on disk until the next run succeeds.
+        return None
     return local_filename
 
 
@@ -216,17 +216,25 @@ async def save_chunk(
     # flush to get the auto-generated UUID before inserting child ChunkImage rows
     await db.flush()
 
+    _img_order = 0
     for i, cdn_url in enumerate(chunk.image_urls):
         local_filename = download_image(cdn_url, images_dir)
-        # Serve via the backend's /images static route; CDN URL retained for reference
+        if local_filename is None:
+            logger.warning("Skipping ChunkImage for failed download: %s", cdn_url[:80])
+            continue
+        if not (images_dir / local_filename).exists():
+            logger.warning("Image file missing after download: %s", local_filename)
+            continue
         image_url = f"/images/{book_slug}/images_downloaded/{local_filename}"
+        _caption = chunk.image_captions[i] if i < len(chunk.image_captions) else None
         db_image = ChunkImage(
             chunk_id=db_chunk.id,
             image_url=image_url,
-            caption=None,
-            order_index=i,
+            caption=_caption,
+            order_index=_img_order,
         )
         db.add(db_image)
+        _img_order += 1
 
     return db_chunk
 
@@ -303,6 +311,16 @@ async def build_chunks(
         "Done. %d/%d chunks saved for %s (%d already existed)",
         saved, len(chunks), book_slug, skipped,
     )
+
+    # Post-pipeline image validation — warn about orphan records
+    orphan_count = await validate_and_clean_images(book_slug, db)
+    if orphan_count > 0:
+        logger.warning(
+            "Image validation: removed %d orphan ChunkImage records (missing files on disk) for %s",
+            orphan_count, book_slug,
+        )
+    else:
+        logger.info("Image validation: all ChunkImage records have matching files on disk")
 
 
 async def _download_image_with_retry(url: str, dest: Path, max_retries: int = 3) -> bool:

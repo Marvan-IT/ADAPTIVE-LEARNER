@@ -27,7 +27,15 @@ FROM nginx:alpine
 COPY --from=builder /app/dist /usr/share/nginx/html
 
 # nginx config: SPA fallback + API proxy to the backend service
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+# In production, deploy.sh generates nginx.conf from nginx.conf.template via envsubst.
+# For local/CI builds, fall back to the template with literal ${DOMAIN} placeholders
+# (which is fine because local dev doesn't use SSL).
+COPY nginx.conf* nginx.conf.template /tmp/nginx-candidates/
+RUN if [ -f /tmp/nginx-candidates/nginx.conf ]; then \
+        cp /tmp/nginx-candidates/nginx.conf /etc/nginx/conf.d/default.conf; \
+    else \
+        cp /tmp/nginx-candidates/nginx.conf.template /etc/nginx/conf.d/default.conf; \
+    fi && rm -rf /tmp/nginx-candidates
 
 EXPOSE 80
 
