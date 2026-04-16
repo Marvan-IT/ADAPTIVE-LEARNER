@@ -382,34 +382,76 @@ export default function AdminBookContentPage() {
   };
 
   const handleToggleSectionOptional = async (sec) => {
+    if (selectedConcept === sec.concept_id && isDirty) {
+      if (!(await dialog.confirm({ title: "Unsaved Changes", message: "This section has unsaved chunk edits that will be discarded. Continue?", variant: "danger", confirmLabel: "Continue" }))) return;
+    }
     try {
       await toggleSectionOptional(sec.concept_id, slug, !sec.is_optional);
       const r = await getBookSections(slug);
       setSections(r.data?.chapters || r.data || []);
       if (r.data?.title) setBookTitle(r.data.title);
+      if (selectedConcept === sec.concept_id) {
+        await loadChunks(sec.concept_id);
+      }
     } catch (e) {
       toast({ variant: "danger", title: "Error", description: e.response?.data?.detail || e.message || "Failed to toggle optional" });
     }
   };
 
   const handleToggleSectionExamGate = async (sec) => {
+    if (selectedConcept === sec.concept_id && isDirty) {
+      if (!(await dialog.confirm({ title: "Unsaved Changes", message: "This section has unsaved chunk edits that will be discarded. Continue?", variant: "danger", confirmLabel: "Continue" }))) return;
+    }
     try {
       await toggleSectionExamGate(sec.concept_id, slug, !sec.exam_disabled);
       const r = await getBookSections(slug);
       setSections(r.data?.chapters || r.data || []);
       if (r.data?.title) setBookTitle(r.data.title);
+      if (selectedConcept === sec.concept_id) {
+        await loadChunks(sec.concept_id);
+      }
     } catch (e) {
       toast({ variant: "danger", title: "Error", description: e.response?.data?.detail || e.message || "Failed to toggle exam gate" });
     }
   };
 
   const handleToggleSectionVisibility = async (sec) => {
+    if (selectedConcept === sec.concept_id && isDirty) {
+      if (!(await dialog.confirm({ title: "Unsaved Changes", message: "This section has unsaved chunk edits that will be discarded. Continue?", variant: "danger", confirmLabel: "Continue" }))) return;
+    }
+    const newHidden = !sec.is_hidden;
+    // Optimistic update — flip the section flag immediately so the UI reacts
+    setSections((prev) =>
+      prev.map((ch) => ({
+        ...ch,
+        sections: ch.sections.map((s) =>
+          s.concept_id === sec.concept_id
+            ? { ...s, is_hidden: newHidden, hidden_count: newHidden ? s.chunk_count : 0 }
+            : s
+        ),
+      }))
+    );
     try {
-      await toggleSectionVisibility(sec.concept_id, slug, !sec.is_hidden);
+      await toggleSectionVisibility(sec.concept_id, slug, newHidden);
+      // Reconcile with server truth
       const r = await getBookSections(slug);
       setSections(r.data?.chapters || r.data || []);
       if (r.data?.title) setBookTitle(r.data.title);
+      if (selectedConcept === sec.concept_id) {
+        await loadChunks(sec.concept_id);
+      }
     } catch (e) {
+      // Revert optimistic update on failure
+      setSections((prev) =>
+        prev.map((ch) => ({
+          ...ch,
+          sections: ch.sections.map((s) =>
+            s.concept_id === sec.concept_id
+              ? { ...s, is_hidden: sec.is_hidden, hidden_count: sec.hidden_count }
+              : s
+          ),
+        }))
+      );
       toast({ variant: "danger", title: "Error", description: e.response?.data?.detail || e.message || "Failed to toggle section visibility" });
     }
   };
@@ -514,18 +556,29 @@ export default function AdminBookContentPage() {
                           alignItems: "flex-start",
                           gap: "6px",
                           flexWrap: "wrap",
-                          transition: "background-color 0.15s",
-                          backgroundColor: isSelected ? "#FFF7ED" : "transparent",
-                          color: isSelected ? "#EA580C" : "#0F172A",
-                          borderLeft: isSelected ? "3px solid #EA580C" : "3px solid transparent",
+                          transition: "background-color 0.15s, opacity 0.15s",
+                          opacity: sec.is_hidden ? 0.55 : 1,
+                          backgroundColor: sec.is_hidden ? "#FEF2F2" : isSelected ? "#FFF7ED" : "transparent",
+                          color: sec.is_hidden ? "#94A3B8" : isSelected ? "#EA580C" : "#0F172A",
+                          borderLeft: sec.is_hidden ? "3px solid #FCA5A5" : isSelected ? "3px solid #EA580C" : "3px solid transparent",
                         }}
                       >
                         <span style={{ flex: 1 }}>
                           <strong style={{ fontWeight: 600 }}>{sectionNum}</strong>{" "}
-                          <span style={{ fontWeight: 400, color: isSelected ? "#EA580C" : "#475569" }}>{heading !== sectionNum ? heading : ""}</span>
+                          <span style={{ fontWeight: 400, color: sec.is_hidden ? "#94A3B8" : isSelected ? "#EA580C" : "#475569" }}>{heading !== sectionNum ? heading : ""}</span>
                           {badges.map((b) => (
                             <SectionBadge key={b.label} label={b.label} cls={b.cls} />
                           ))}
+                          {sec.is_hidden && (
+                            <span style={{ display: "inline-block", fontSize: "10px", fontWeight: 600, color: "#DC2626", backgroundColor: "#FEE2E2", padding: "1px 5px", borderRadius: "3px", marginLeft: "4px", verticalAlign: "middle" }}>
+                              hidden
+                            </span>
+                          )}
+                          {!sec.is_hidden && (sec.hidden_count || 0) > 0 && (
+                            <span style={{ display: "inline-block", fontSize: "10px", fontWeight: 600, color: "#B45309", backgroundColor: "#FEF3C7", padding: "1px 5px", borderRadius: "3px", marginLeft: "4px", verticalAlign: "middle" }}>
+                              {sec.hidden_count}/{sec.chunk_count} hidden
+                            </span>
+                          )}
                           {prereqCount > 0 && (
                             <span style={{ fontSize: "10px", color: "#94A3B8", marginLeft: "4px" }}>({prereqCount} prereqs)</span>
                           )}
@@ -547,37 +600,37 @@ export default function AdminBookContentPage() {
                             ✎
                           </button>
                           <button
-                            title="Toggle optional"
+                            title={sec.is_optional ? "All optional" : (sec.optional_count || 0) > 0 ? `${sec.optional_count}/${sec.chunk_count} optional` : "Toggle optional"}
                             onClick={() => handleToggleSectionOptional(sec)}
                             style={{
                               padding: "2px 6px", fontSize: "10px", fontWeight: 600, borderRadius: "4px", cursor: "pointer",
-                              border: sec.is_optional ? "1px solid #FCD34D" : "1px solid #E2E8F0",
-                              backgroundColor: sec.is_optional ? "#FEF3C7" : "#F8FAFC",
-                              color: sec.is_optional ? "#92400E" : "#64748B",
+                              border: sec.is_optional ? "1px solid #FCD34D" : (!sec.is_optional && (sec.optional_count || 0) > 0) ? "1px solid #FDBA74" : "1px solid #E2E8F0",
+                              backgroundColor: sec.is_optional ? "#FEF3C7" : (!sec.is_optional && (sec.optional_count || 0) > 0) ? "#FFF7ED" : "#F8FAFC",
+                              color: sec.is_optional ? "#92400E" : (!sec.is_optional && (sec.optional_count || 0) > 0) ? "#C2410C" : "#64748B",
                             }}
                           >
                             Opt
                           </button>
                           <button
-                            title="Toggle exam gate"
+                            title={sec.exam_disabled ? "All exams disabled" : (sec.exam_disabled_count || 0) > 0 ? `${sec.exam_disabled_count}/${sec.chunk_count} exams disabled` : "Toggle exam gate"}
                             onClick={() => handleToggleSectionExamGate(sec)}
                             style={{
                               padding: "2px 6px", fontSize: "10px", fontWeight: 700, borderRadius: "4px", cursor: "pointer",
-                              border: sec.exam_disabled ? "1px solid #FCA5A5" : "1px solid #E2E8F0",
-                              backgroundColor: sec.exam_disabled ? "#FEE2E2" : "#F8FAFC",
-                              color: sec.exam_disabled ? "#991B1B" : "#64748B",
+                              border: sec.exam_disabled ? "1px solid #FCA5A5" : (!sec.exam_disabled && (sec.exam_disabled_count || 0) > 0) ? "1px solid #FDBA74" : "1px solid #E2E8F0",
+                              backgroundColor: sec.exam_disabled ? "#FEE2E2" : (!sec.exam_disabled && (sec.exam_disabled_count || 0) > 0) ? "#FFF7ED" : "#F8FAFC",
+                              color: sec.exam_disabled ? "#991B1B" : (!sec.exam_disabled && (sec.exam_disabled_count || 0) > 0) ? "#C2410C" : "#64748B",
                             }}
                           >
                             E
                           </button>
                           <button
-                            title={sec.is_hidden ? "Show section" : "Hide section"}
+                            title={sec.is_hidden ? "Show section" : (sec.hidden_count || 0) > 0 ? `${sec.hidden_count}/${sec.chunk_count} hidden` : "Hide section"}
                             onClick={() => handleToggleSectionVisibility(sec)}
                             style={{
                               padding: "2px 6px", fontSize: "10px", fontWeight: 600, borderRadius: "4px", cursor: "pointer",
-                              border: sec.is_hidden ? "1px solid #FCA5A5" : "1px solid #E2E8F0",
-                              backgroundColor: sec.is_hidden ? "#FEE2E2" : "#F8FAFC",
-                              color: sec.is_hidden ? "#991B1B" : "#64748B",
+                              border: sec.is_hidden ? "1px solid #FCA5A5" : (!sec.is_hidden && (sec.hidden_count || 0) > 0) ? "1px solid #FDBA74" : "1px solid #E2E8F0",
+                              backgroundColor: sec.is_hidden ? "#FEE2E2" : (!sec.is_hidden && (sec.hidden_count || 0) > 0) ? "#FFF7ED" : "#F8FAFC",
+                              color: sec.is_hidden ? "#991B1B" : (!sec.is_hidden && (sec.hidden_count || 0) > 0) ? "#C2410C" : "#64748B",
                             }}
                           >
                             {sec.is_hidden ? "Show" : "Hide"}
@@ -587,7 +640,7 @@ export default function AdminBookContentPage() {
 
                       {/* Sub-items: chunk headings when this section is selected */}
                       {isSelected && !chunksLoading && draftChunks.length > 0 && (
-                        <div style={{ marginBottom: "4px" }}>
+                        <div style={{ marginBottom: "4px", opacity: sec.is_hidden ? 0.45 : 1 }}>
                           {draftChunks.map((chunk, ci) => {
                             const isActive = activeChunkId === String(chunk.id);
                             const isModifiedLeft = modifiedChunkIds.has(chunk.id);
@@ -713,6 +766,10 @@ export default function AdminBookContentPage() {
                             setSections(secData?.chapters || secData || []);
                             if (secData?.title) setBookTitle(secData.title);
                             loadChunks(selectedConcept);
+                            getGraphEdges(slug).then((r) => setGraphEdges(r.data || [])).catch(() => {});
+                            getBookGraph(slug).then((r) => {
+                              if (r.data) setGraphInfo({ nodes: r.data.nodes?.length || 0, edges: r.data.edges?.length || 0 });
+                            }).catch(() => {});
                             toast({ variant: "success", title: "Promoted", description: "Chunk promoted to new section" });
                           } catch (e) {
                             toast({ variant: "danger", title: "Error", description: e.response?.data?.detail || "Failed to promote" });

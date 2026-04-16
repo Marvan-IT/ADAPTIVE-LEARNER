@@ -142,6 +142,18 @@ type: project
 - Fix 17: `/api/v1/books` in main.py; `graph_full` has `book_slug` param
 - Fix 18: SLOW maps to STRUGGLING; `_CARD_MODE_DELIVERY` has no SLOW key
 
+### test_xp_engine.py — 43 tests (8 groups)
+- `TestComputeAndAwardXpDifficultyWeighted` (8), `TestComputeAndAwardXpDisabled` (3), `TestAwardMasteryXp` (6), `TestAwardConsolationXp` (3)
+- NEW: `TestAwardRecoveryXp` (7), `TestComputeAndAwardXpStreakInfo` (5), `TestComputeAndAwardXpAnswerStreakBadges` (3), `TestMasteryXpBoundaryPrecision` (4), `TestFlatXpMode` (3)
+- `_make_mock_db(config_overrides)` factory: inspects `stmt.whereclause.right.value` to return correct AdminConfig value per key
+- Badge eval patch target: `"gamification.badge_engine.evaluate_badges"` (module-level function, not method)
+- Streak patch target: `"gamification.streak_engine.update_daily_streak"` (AsyncMock returning dict)
+- streak_info key is only present and non-None in `compute_and_award_xp` when is_correct=True AND GAMIFICATION_ENABLED=true
+- answer_streak=0 skips the third `evaluate_badges("answer_streak", ...)` call entirely
+- Flat XP mode (DIFFICULTY_WEIGHTED_XP_ENABLED=false): base_xp = XP_CONSOLATION (default=10); no hint/wrong/first_attempt penalties applied
+
+### test_streak_engine.py — (existing, separate file)
+
 ### test_real_students_e2e.py — 10 tests (5 journey classes, @pytest.mark.e2e)
 - Uses synchronous `requests`, no mocks; backend at `http://localhost:8889`
 - Skip pattern: 404 on _start_session → pytest.skip() when ChromaDB not loaded

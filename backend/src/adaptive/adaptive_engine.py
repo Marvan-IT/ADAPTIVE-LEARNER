@@ -581,18 +581,18 @@ def compute_numeric_state_score(speed: str, comprehension: str) -> float:
     Result is clamped to [1.0, 3.0].
     """
     base = {"SLOW": 1.0, "NORMAL": 2.0, "FAST": 3.0}.get(speed.upper(), 2.0)
-    modifier = {"STRUGGLING": -0.3, "OK": 0.0, "STRONG": 0.3}.get(comprehension.upper(), 0.0)
+    modifier = {"STRUGGLING": -0.5, "OK": 0.0, "STRONG": 0.3}.get(comprehension.upper(), 0.0)
     return max(1.0, min(3.0, base + modifier))
 
 
 def blended_score_to_generate_as(blended_score: float) -> str:
     """Convert a blended numeric state score to a generate_as label.
 
-    < 1.7   -> 'STRUGGLING'
+    <= 1.7  -> 'STRUGGLING'
     1.7-2.4 -> 'NORMAL'
     >= 2.5  -> 'FAST'
     """
-    if blended_score < 1.7:
+    if blended_score <= 1.7:
         return "STRUGGLING"
     elif blended_score >= 2.5:
         return "FAST"

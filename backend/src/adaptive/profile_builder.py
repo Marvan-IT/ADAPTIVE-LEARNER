@@ -53,7 +53,7 @@ def classify_comprehension(
     Derives error_rate = wrong_attempts / attempts internally.
 
     Rules (evaluated in order):
-      STRUGGLING — error_rate >= 0.5  OR  quiz_score < 0.5
+      STRUGGLING — error_rate > 0.5  OR  quiz_score < 0.5
                    (STRUGGLING check runs first: a high quiz score does not
                    override extremely high error rate)
       STRONG     — quiz_score >= 0.8  AND  error_rate <= 0.2  AND  hints_used <= 2
@@ -62,7 +62,7 @@ def classify_comprehension(
     Returns one of: "STRUGGLING", "OK", "STRONG"
     """
     error_rate = wrong_attempts / attempts if attempts > 0 else 0.0
-    if error_rate >= 0.5 or quiz_score < 0.5:
+    if error_rate > 0.5 or quiz_score < 0.5:
         return "STRUGGLING"
     if quiz_score >= 0.8 and error_rate <= 0.2 and hints_used <= 2:
         return "STRONG"

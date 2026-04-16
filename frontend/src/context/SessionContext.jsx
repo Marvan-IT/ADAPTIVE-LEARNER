@@ -544,6 +544,12 @@ export function SessionProvider({ children }) {
           dispatch({ type: "NEXT_CARD" });
           return;
         }
+        // Record failed interaction so analytics capture it (0 XP for wrong answer)
+        try {
+          await recordCardInteraction(state.session.id, { ...signals, isCorrect: false });
+        } catch (err) {
+          console.error("[card] failed interaction record failed:", err);
+        }
         const chunkMeta = state.chunkList?.find(c => c.chunk_id === state.currentChunkId);
         const isExercise = chunkMeta?.chunk_type === "exercise";
         dispatch({ type: "ADAPTIVE_CALL_STARTED" });
@@ -560,7 +566,10 @@ export function SessionProvider({ children }) {
             dispatch({ type: "INSERT_RECOVERY_CARD", payload: recoveryCard });
           }
           dispatch({ type: "NEXT_CARD" });   // advance past the failed card
-          useAdaptiveStore.getState().awardXP(5);
+          const xpData = res?.xp_awarded;
+          if (xpData?.final_xp) {
+            useAdaptiveStore.getState().awardXP(xpData.final_xp);
+          }
         } catch (err) {
           console.error("[SessionContext] recovery card fetch failed:", err);
           dispatch({ type: "ADAPTIVE_CARD_ERROR" });
@@ -737,6 +746,11 @@ export function SessionProvider({ children }) {
       const evalBadges = res?.data?.new_badges || [];
       if (evalBadges.length) {
         evalBadges.forEach((b) => useAdaptiveStore.getState().addBadge(b));
+      }
+      // Award mastery XP if returned from backend
+      const evalXp = res?.data?.xp_awarded;
+      if (evalXp?.final_xp) {
+        useAdaptiveStore.getState().awardXP(evalXp.final_xp);
       }
       if (res.data.passed) {
         refreshMastery();

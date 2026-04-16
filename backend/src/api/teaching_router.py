@@ -1088,7 +1088,6 @@ async def generate_chunk_cards(
 
 @router.post(
     "/sessions/{session_id}/chunk-recovery-card",
-    response_model=LessonCard,
     summary="Generate a recovery card when student fails an MCQ twice",
 )
 @limiter.limit("20/minute")
@@ -1128,8 +1127,13 @@ async def generate_chunk_recovery_card(
     if not recovery:
         raise HTTPException(500, "Recovery card generation failed")
 
+    from gamification.xp_engine import award_recovery_xp
+    xp_result = await award_recovery_xp(db, session.student_id, session.id)
+
     await db.commit()
-    return LessonCard(**recovery)
+    card_data = LessonCard(**recovery).model_dump()
+    card_data["xp_awarded"] = {"base_xp": xp_result["base_xp"], "final_xp": xp_result["final_xp"]}
+    return card_data
 
 
 @router.post(
@@ -1404,6 +1408,7 @@ async def evaluate_chunk_answers(
     all_study_complete = False
     next_mode = "NORMAL"
     chunk_badges: list = []
+    mastery_xp_data: dict | None = None
 
     if passed:
         # Evaluate chunk_complete badges (e.g. perfect_chunk)
@@ -1508,6 +1513,7 @@ async def evaluate_chunk_answers(
                 session_id=session.id,
                 score=int(round(score_frac * 100)) if score_frac is not None else None,
             )
+            mastery_xp_data = mastery_xp_result
             chunk_badges = chunk_badges + mastery_xp_result.get("new_badges", [])
 
         await db.commit()
@@ -1520,6 +1526,10 @@ async def evaluate_chunk_answers(
         feedback=feedback,
         next_mode=next_mode,
         new_badges=chunk_badges,
+        xp_awarded=(
+            {"base_xp": mastery_xp_data["base_xp"], "final_xp": mastery_xp_data["final_xp"]}
+            if mastery_xp_data else None
+        ),
     )
 
 
@@ -1808,6 +1818,7 @@ async def record_card_interaction(
             "base_xp": xp_result["base_xp"],
             "multiplier": xp_result["multiplier"],
             "final_xp": xp_result["final_xp"],
+            "streak_info": xp_result.get("streak_info"),
         },
         "new_badges": xp_result.get("new_badges", []),
     }

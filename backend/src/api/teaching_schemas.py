@@ -359,6 +359,7 @@ class ChunkEvaluateResponse(BaseModel):
     feedback: list[ChunkEvaluateFeedback]
     next_mode: str = "NORMAL"
     new_badges: list = Field(default_factory=list)
+    xp_awarded: dict | None = None
 
 
 class CompleteChunkRequest(BaseModel):

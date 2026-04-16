@@ -426,6 +426,11 @@ async def get_book_sections(
             func.bool_and(ConceptChunk.is_optional),
             func.bool_and(ConceptChunk.exam_disabled),
             func.bool_and(ConceptChunk.is_hidden),
+            # Per-flag counts for mixed-state detection
+            func.count().label("chunk_count"),
+            func.count().filter(ConceptChunk.is_hidden == True).label("hidden_count"),
+            func.count().filter(ConceptChunk.is_optional == True).label("optional_count"),
+            func.count().filter(ConceptChunk.exam_disabled == True).label("exam_disabled_count"),
         )
         .where(ConceptChunk.book_slug == slug)
         .group_by(ConceptChunk.concept_id, ConceptChunk.book_slug)
@@ -433,12 +438,9 @@ async def get_book_sections(
     )).all()
 
     chapters: dict = {}
-    for concept_id, section, heading, admin_name, is_optional, exam_disabled, is_hidden in rows:
-        # Count chunks for this concept
-        chunk_count = (await db.execute(
-            select(func.count()).select_from(ConceptChunk)
-            .where(ConceptChunk.book_slug == slug, ConceptChunk.concept_id == concept_id)
-        )).scalar() or 0
+    for (concept_id, section, heading, admin_name, is_optional, exam_disabled, is_hidden,
+         chunk_count_agg, hidden_count, optional_count, exam_disabled_count) in rows:
+        chunk_count = chunk_count_agg or 0
         # Count images via JOIN
         image_count = (await db.execute(
             select(func.count()).select_from(ChunkImage)
@@ -469,6 +471,9 @@ async def get_book_sections(
             "is_optional": bool(is_optional),
             "exam_disabled": bool(exam_disabled),
             "is_hidden": bool(is_hidden),
+            "hidden_count": hidden_count or 0,
+            "optional_count": optional_count or 0,
+            "exam_disabled_count": exam_disabled_count or 0,
         })
 
     # Sort sections within each chapter numerically (e.g. 1.2 before 1.10).
@@ -2252,18 +2257,24 @@ async def toggle_section_visibility(
 
     result = await db.execute(
         text(
-            "UPDATE concept_chunks SET is_hidden = :val, chunk_type_locked = true "
+            "UPDATE concept_chunks SET is_hidden = :val, "
+            "chunk_type_locked = CASE WHEN :val THEN true ELSE chunk_type_locked END "
             "WHERE concept_id = :cid AND book_slug = :slug"
         ),
         {"val": bool(is_hidden), "cid": concept_id, "slug": book_slug},
     )
     chunks_updated = result.rowcount
+    if chunks_updated == 0:
+        logger.warning(
+            "[admin] Section visibility toggle matched 0 chunks: concept=%s book=%s is_hidden=%s admin=%s",
+            concept_id, book_slug, is_hidden, str(_user.id),
+        )
     await db.commit()
     logger.info(
         "[admin] Section concept=%s book=%s is_hidden=%s set by admin %s (%d chunks)",
         concept_id, book_slug, is_hidden, str(_user.id), chunks_updated,
     )
-    return {"updated": chunks_updated}
+    return {"updated": chunks_updated, "is_hidden": bool(is_hidden)}
 
 
 @router.post("/api/admin/sections/{concept_id:path}/promote")
@@ -2419,6 +2430,7 @@ async def promote_subsection_to_section(
         chunk.concept_id = new_concept_id
         chunk.section = section_label
         chunk.order_index = new_idx
+        chunk.is_hidden = False
 
     await db.flush()
     await db.commit()

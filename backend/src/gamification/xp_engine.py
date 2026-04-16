@@ -33,6 +33,7 @@ DEFAULTS = {
     "XP_MASTERY_BONUS": "25",
     "XP_MASTERY_BONUS_THRESHOLD": "90",
     "XP_CONSOLATION": "10",
+    "XP_RECOVERY": "5",
     "GAMIFICATION_ENABLED": "true",
     "DIFFICULTY_WEIGHTED_XP_ENABLED": "true",
     "BADGES_ENABLED": "true",
@@ -103,11 +104,12 @@ async def compute_and_award_xp(
             "multiplier": 1.0,
             "final_xp": flat_xp,
             "new_badges": [],
+            "streak_info": None,
         }
 
     # No XP for wrong answers
     if not is_correct:
-        return {"base_xp": 0, "multiplier": 1.0, "final_xp": 0, "new_badges": []}
+        return {"base_xp": 0, "multiplier": 1.0, "final_xp": 0, "new_badges": [], "streak_info": None}
 
     diff_enabled = await _get_config(db, "DIFFICULTY_WEIGHTED_XP_ENABLED")
 
@@ -205,6 +207,11 @@ async def compute_and_award_xp(
         "multiplier": round(total_multiplier, 4),
         "final_xp": final_xp,
         "new_badges": new_badges,
+        "streak_info": {
+            "daily_streak": streak_result.get("daily_streak", 0),
+            "daily_streak_best": streak_result.get("daily_streak_best", 0),
+            "multiplier": streak_result.get("multiplier", 1.0),
+        },
     }
 
 
@@ -296,5 +303,42 @@ async def award_consolation_xp(
         "base_xp": consolation,
         "multiplier": 1.0,
         "final_xp": consolation,
+        "new_badges": [],
+    }
+
+
+async def award_recovery_xp(
+    db: AsyncSession,
+    student_id: UUID,
+    session_id: UUID | None,
+) -> dict:
+    """Award XP when a student receives a recovery card after failing an MCQ twice.
+
+    Encourages persistence without penalising struggle.
+    Returns the same dict shape as compute_and_award_xp.
+    """
+    recovery_xp = await _get_config_int(db, "XP_RECOVERY")
+    event = XpEvent(
+        student_id=student_id,
+        session_id=session_id,
+        interaction_id=None,
+        event_type="recovery_card",
+        base_xp=recovery_xp,
+        multiplier=1.0,
+        final_xp=recovery_xp,
+        metadata_={"recovery": True},
+    )
+    db.add(event)
+    await db.execute(
+        update(Student)
+        .where(Student.id == student_id)
+        .values(xp=Student.xp + recovery_xp)
+    )
+    await db.flush()
+    logger.info("[xp-recovery] student_id=%s xp=%d", student_id, recovery_xp)
+    return {
+        "base_xp": recovery_xp,
+        "multiplier": 1.0,
+        "final_xp": recovery_xp,
         "new_badges": [],
     }

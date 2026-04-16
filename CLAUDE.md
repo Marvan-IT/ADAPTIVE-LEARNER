@@ -442,6 +442,15 @@ docs/
 | Simplified registration (removed interests + style, added age) | Done | `auth/schemas.py`, `RegisterPage.jsx` |
 | Thread-safe graph cache | Done | `chunk_knowledge_service.py` |
 
+### ✅ Admin Section Toggle Fix (2026-04-16)
+
+| Issue | Fix Applied | Files |
+|---|---|---|
+| Section Hide toggle didn't update sidebar (button stayed "Hide", no hidden styling) | Optimistic state update flips `is_hidden` + `hidden_count` immediately; reverts on error; server reconciliation follows | `AdminBookContentPage.jsx` |
+| Hide toggle sent `is_hidden=true` repeatedly (never toggled to unhide) | Fixed by optimistic update making `sec.is_hidden` reflect true state before next click | `AdminBookContentPage.jsx` |
+| Backend: 0-chunk updates logged silently | Added `logger.warning()` when section visibility toggle matches 0 chunks | `admin_router.py` |
+| Backend: response missing `is_hidden` echo | Added `is_hidden` to toggle response payload | `admin_router.py` |
+
 ### ⚠️ Known Technical Debt (Requires devops-engineer)
 
 | Issue | File | Priority |

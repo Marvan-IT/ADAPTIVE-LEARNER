@@ -334,68 +334,11 @@ export function LeaderboardMini() {
 
 // ── Tab pills (UI-only) ──────────────────────────────────────────
 
-const TABS = [
-  { key: "weekly", label: "leaderboard.tabWeekly", fallback: "This Week" },
-  { key: "allTime", label: "leaderboard.tabAllTime", fallback: "All Time" },
-  { key: "bySubject", label: "leaderboard.tabBySubject", fallback: "By Subject" },
-];
-
-function TabPills({ activeTab, setActiveTab }) {
-  const { t } = useTranslation();
-  return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 8,
-        width: "fit-content",
-        margin: "0 auto 32px auto",
-      }}
-    >
-      {TABS.map(({ key, label, fallback }) => (
-        <button
-          key={key}
-          onClick={() => setActiveTab(key)}
-          style={
-            activeTab === key
-              ? {
-                  border: "2px solid var(--color-primary)",
-                  color: "var(--color-primary)",
-                  background: "transparent",
-                  borderRadius: 9999,
-                  padding: "6px 16px",
-                  fontSize: 14,
-                  fontWeight: 600,
-                  cursor: "pointer",
-                  transition: "all 200ms ease",
-                }
-              : {
-                  border: "1px solid var(--color-border)",
-                  color: "var(--color-text-muted)",
-                  background: "transparent",
-                  borderRadius: 9999,
-                  padding: "6px 16px",
-                  fontSize: 14,
-                  fontWeight: 600,
-                  cursor: "pointer",
-                  transition: "all 200ms ease",
-                }
-          }
-        >
-          {t(label, fallback)}
-        </button>
-      ))}
-    </div>
-  );
-}
-
 // ── LeaderboardPage — full ranked display ────────────────────────
 
 export default function LeaderboardPage() {
   const { t } = useTranslation();
   const { student } = useStudent();
-  const [activeTab, setActiveTab] = useState("weekly");
-
   const [rows, setRows] = useState([]);
   const [yourRank, setYourRank] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -412,7 +355,7 @@ export default function LeaderboardPage() {
         }
         return getLeaderboard(20)
           .then((res) => {
-            const entries = res.data?.entries ?? res.data;
+            const entries = res.data?.leaderboard ?? res.data?.entries ?? res.data;
             setRows(Array.isArray(entries) ? entries : []);
             setYourRank(res.data?.your_rank ?? null);
           })
@@ -519,9 +462,6 @@ export default function LeaderboardPage() {
         <p style={{ color: "#64748B", textAlign: "center", marginTop: 4, fontSize: 15 }}>
           {t("leaderboard.subtitle", "See how you rank against other learners")}
         </p>
-
-        {/* Tab pills */}
-        <TabPills activeTab={activeTab} setActiveTab={setActiveTab} />
 
         {rows.length === 0 ? (
           <p style={{ color: "#9ca3af", fontSize: 14, textAlign: "center" }}>
