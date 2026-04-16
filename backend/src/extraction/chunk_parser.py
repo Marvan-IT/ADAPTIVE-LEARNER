@@ -454,13 +454,20 @@ def parse_book_mmd(
 
     # ── Step 1c: Detect chapter intro boundaries ─────────────────────────────
     # Chapters have intro content (title, images, objectives) BEFORE section X.1.
-    # Detect chapter headings (## N | Title — no decimal) to adjust body boundaries.
-    _CHAPTER_HEADING = re.compile(r"^#{1,4}\s+(\d+)\s*[|:]\s+", re.MULTILINE)
+    # Detect chapter headings in ALL formats Mathpix produces:
+    #   Markdown: "## N | TITLE", "## N <br> TITLE", "## N: TITLE", "## N TITLE"
+    #   LaTeX:    "\section*{N | TITLE}", "\section*{N}", "\section*{N TITLE}"
+    _CHAPTER_HEADING_PATTERNS = [
+        re.compile(r"^#{1,4}\s+(\d+)\s*(?:[|:<]|\s+[A-Z])", re.MULTILINE),  # ## N | Title, ## N <br>, ## N Title
+        re.compile(r"^#{1,4}\s+(\d+)\s*$", re.MULTILINE),                   # ## N (bare number, end of line)
+        re.compile(r"^\\\\section\*\{(\d+)(?:\s*[|]|\s*\})", re.MULTILINE),  # \section*{N} or \section*{N | Title}
+    ]
     _chapter_intro_pos: dict[int, int] = {}  # chapter_num → start position of chapter heading
-    for _cm in _CHAPTER_HEADING.finditer(mmd_text):
-        _ch = int(_cm.group(1))
-        if _ch not in _chapter_intro_pos:
-            _chapter_intro_pos[_ch] = _cm.start()
+    for _pat in _CHAPTER_HEADING_PATTERNS:
+        for _cm in _pat.finditer(mmd_text):
+            _ch = int(_cm.group(1))
+            if _ch not in _chapter_intro_pos:
+                _chapter_intro_pos[_ch] = _cm.start()
 
     _first_section_idx: dict[int, int] = {}  # chapter_num → index in section_matches
     for _si, _sec in enumerate(section_matches):
@@ -1118,12 +1125,18 @@ def _parse_book_mmd_with_profile(mmd_text: str, book_slug: str, profile) -> list
             )
 
     # ── Detect chapter intro positions ───────────────────────────────────────
-    _CHAPTER_HEADING = re.compile(r"^#{1,4}\s+(\d+)\s*[|:]\s+", re.MULTILINE)
+    # Universal detection: Markdown + LaTeX chapter heading formats
+    _CHAPTER_HEADING_PATTERNS = [
+        re.compile(r"^#{1,4}\s+(\d+)\s*(?:[|:<]|\s+[A-Z])", re.MULTILINE),
+        re.compile(r"^#{1,4}\s+(\d+)\s*$", re.MULTILINE),
+        re.compile(r"^\\\\section\*\{(\d+)(?:\s*[|]|\s*\})", re.MULTILINE),
+    ]
     _chapter_intro_pos: dict[int, int] = {}
-    for _cm in _CHAPTER_HEADING.finditer(mmd_text):
-        _ch = int(_cm.group(1))
-        if _ch not in _chapter_intro_pos:
-            _chapter_intro_pos[_ch] = _cm.start()
+    for _pat in _CHAPTER_HEADING_PATTERNS:
+        for _cm in _pat.finditer(mmd_text):
+            _ch = int(_cm.group(1))
+            if _ch not in _chapter_intro_pos:
+                _chapter_intro_pos[_ch] = _cm.start()
 
     _first_section_idx: dict[int, int] = {}
     for _si, _sec in enumerate(section_matches):
