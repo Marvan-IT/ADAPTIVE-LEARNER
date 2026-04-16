@@ -1,0 +1,111 @@
+# Mathematics subject patterns (Algebra, Statistics, Calculus, Prealgebra)
+
+consumers:
+  - consume_worked_example
+  - consume_how_to
+  - consume_figure
+  - consume_table
+  - consume_exercise_group
+  - consume_feature_box
+  - consume_prose_run
+
+worked_example_start:
+  - '^##\s+EXAMPLE(\s+\d+\.\d+)?\s*$'
+  - '^##\s+Example(\s+\d+\.\d+)?\s*$'
+
+how_to_start:
+  - '^##\s+HOW\s+TO(:.+)?$'
+  - '^##\s+How\s+To(:.+)?$'
+
+solution_continuation:
+  - '^##\s+Solution$'
+  - '^##\s+Sample\s+Solution$'
+  - '^##\s+Problem$'
+  - '^##\s+\[?Show/Hide\s+Solution\]?$'
+  - '^\(r\)\s+Solution'
+  - '^\(J\)\s+Solution'
+  - '^\(\s*\)\s+Solution'
+  - '^\(\s*[A-Z]\s*\)\s+Solution'
+  - '^\([a-z0-9]\)\s+Solution'
+
+try_it_continuation:
+  - '^##\s+TRY\s+IT(\s+\d+\.\d+)?\s*$'
+  - '^##\s+Try\s+It(\s+\d+\.\d+)?\s*$'
+
+exercise_group_start:
+  - '^##\s+Practice\s+Makes\s+Perfect$'
+  - '^##\s+Writing\s+Exercises$'
+  - '^##\s+Everyday\s+Math$'
+  - '^##\s+Mixed\s+Practice$'
+  - '^##\s+SECTION\s+\d+\.\d+\s+EXERCISES$'
+  - '^##\s+Section\s+\d+\.\d+\s+Exercises$'
+  - '^##\s+Review\s+Exercises$'
+  - '^##\s+Practice\s+Test$'
+  - '^##\s+Practice$'
+
+feature_box_start:
+  - '^##\s+Key\s+Takeaway$'
+  - '^##\s+Key\s+Terms$'
+  - '^##\s+Key\s+Concepts$'
+  - '^##\s+Key\s+Equations$'
+  - '^##\s+Be\s+Prepared(\s+\d+\.\d+)?$'
+  - '^##\s+BE\s+PREPARED(\s+\d+\.\d+)?$'
+  - '^##\s+Self\s+Check$'
+  - '^##\s+Checking\s+In$'
+  - '^##\s+Check\s+Your\s+Understanding$'
+  - '^##\s+MEDIA$'
+  - '^##\s+Media$'
+  - '^##\s+Link\s+to\s+Learning$'
+  - '^##\s+LINK\s+TO\s+LEARNING$'
+  - '^##\s+MANIPULATIVE\s+MATHEMATICS$'
+  - '^##\s+COLLABORATIVE\s+EXERCISE$'
+  - '^##\s+Bringing\s+It\s+Together$'
+  - '^##\s+Cool\s+Down$'
+  - '^##\s+Warm\s+Up$'
+  - '^##\s+Activity$'
+  - '^##\s+Additional\s+Resources$'
+  - '^##\s+Building\s+Character$'
+  - '^##\s+Are\s+you\s+ready\s+for\s+more'
+  - '^##\s+Extending\s+Your\s+Thinking$'
+  - '^##\s+Lesson\s+Summary$'
+  - '^##\s+Lesson\s+Overview$'
+  - '^##\s+Mini.Lesson'
+  - '^##\s+Sample\s+Solution$'
+
+# Noise headings specific to math (in addition to _base.yaml)
+noise_headings:
+  - '^EXAMPLE'
+  - '^TRY\s+IT'
+  - '^Try\s+It'
+  - '^HOW\s+TO'
+  - '^How\s+To'
+  - '^MANIPULATIVE'
+  - '^Self\s+Check'
+  - '^In\s+the\s+following\s+exercises'
+  - '^[A-Z]{2,}$'
+  - '^\d+\.\s'
+  - '^LINK\s+TO\s+LEARNING'
+  - '^Practice'
+  - '^Bringing\s+It\s+Together'
+  - '^COLLABORATIVE\s+EXERCISE'
+  - '^Key\s+Terms'
+  - '^Solutions?$'
+  - '^Verbal$'
+  - '^Algebraic$'
+  - '^Key\s+Concepts$'
+  - '^Cool\s+Down$'
+  - '^Warm\s+Up$'
+  - '^Activity$'
+  - '^Are\s+you\s+ready\s+for\s+more'
+  - '^Extending\s+Your\s+Thinking$'
+  - '^Building\s+Character$'
+  - '^Check\s+Your\s+Understanding'
+  - '^Lesson\s+Summary$'
+  - '^Mini.Lesson'
+  - '^Lesson\s+Overview$'
+  - '^Sample\s+Solution$'
+  - '^Additional\s+Resources$'
+  - '^MEDIA$'
+  - '^Media$'
+  - '^PATIENT\s+CONVERSATIONS$'
+  - '^CLINICAL\s+SAFETY'

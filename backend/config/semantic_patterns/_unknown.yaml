@@ -1,0 +1,16 @@
+# Unknown subject — conservative fallback
+# No subject-specific consumers; only basic structural parsing
+
+consumers:
+  - consume_figure
+  - consume_table
+  - consume_feature_box
+  - consume_prose_run
+
+feature_box_start:
+  - '^##\s+Key\s+Takeaway$'
+  - '^##\s+Key\s+Terms$'
+  - '^##\s+Learning\s+Objectives$'
+  - '^##\s+Summary$'
+
+noise_headings: []

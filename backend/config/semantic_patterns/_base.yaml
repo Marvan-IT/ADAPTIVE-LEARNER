@@ -1,0 +1,48 @@
+# Base semantic patterns — loaded for ALL subjects
+# Subject-specific files override/extend these
+
+figure_start:
+  - '^!\[.*\]\(.*\)$'
+
+table_start:
+  - '^\\begin\{tabular\}'
+
+always_drop_lines:
+  - '^##\s+RICE$'
+  - '^##\s+openstax$'
+  - '^##\s+\$\\square\$$'
+  - '^##\s+Image\s+\d+$'
+  - '^##\s+Alg-$'
+  - '^##\s+ebra$'
+
+running_page_header_detection:
+  method: repeat_threshold
+  threshold: 3
+
+# Chapter review zone markers (universal)
+chapter_review_start:
+  - '^##\s+Chapter\s+Review$'
+  - '^##\s+Key\s+Terms$'
+  - '^##\s+Key\s+Concepts$'
+  - '^##\s+Review\s+Exercises$'
+  - '^##\s+Chapter\s+Review\s+Exercises$'
+
+# Noise headings that should NEVER become subsection split points
+noise_headings:
+  - '^Solution'
+  - '^Problem'
+  - '^NOTE'
+  - '^INTRODUCTION$'
+  - '^Introduction$'
+  - '^Learning\s+Objectives?'
+  - '^LEARNING\s+OBJECTIVES?'
+  - '^Chapter\s+Outline'
+  - '^CHAPTER\s+OUTLINE'
+  - '^Chapter\s+Review'
+  - '^Chapter\s+\d+$'
+  - '^References'
+  - '^Homework'
+  - '^Formula\s+Review'
+  - '^Complete\s+the\s+following'
+  - '^Access\s+for\s+free'
+  - '^Before\s+you\s+get\s+started'
