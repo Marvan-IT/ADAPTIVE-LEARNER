@@ -73,7 +73,7 @@ def _setup_file_log(slug: str) -> None:
 
 
 async def run_pipeline(pdf_path: Path, subject: str) -> None:
-    from src.pipeline import run_whole_pdf_pipeline
+    from src.pipeline import run_mathpix_extraction
     from src.extraction.chunk_builder import build_chunks, validate_and_clean_images
     from src.db.connection import async_session_factory
     from src.validators.post_parse_validator import PipelineValidationError
@@ -121,7 +121,7 @@ async def run_pipeline(pdf_path: Path, subject: str) -> None:
 
         # Stage 2 — Mathpix whole-PDF extraction (sync → thread so we don't block)
         logger.info("[%s] Stage 2/6: Mathpix PDF extraction (30–60 min)...", slug)
-        await asyncio.to_thread(run_whole_pdf_pipeline, code)
+        await asyncio.to_thread(run_mathpix_extraction, code)
         logger.info("[%s] Stage 2/6: Done", slug)
 
         # Stage 3 — Chunk pipeline (universal parser + embed + persist + image validation)

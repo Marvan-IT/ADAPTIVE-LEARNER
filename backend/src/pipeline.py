@@ -53,6 +53,41 @@ from storage.json_exporter import export_full_output, export_individual_files
 from validation.validator import validate_all_blocks, get_validation_summary
 
 
+def run_mathpix_extraction(book_code: str, force: bool = False, pdf_id: str | None = None) -> None:
+    """
+    Run ONLY Mathpix PDF extraction (Stage A).
+    Produces: output/{slug}/book.mmd + output/{slug}/mathpix_extracted/
+    Skips legacy parsing — chunk_parser handles that in Stage 3.
+    """
+    config = get_book_config(book_code)
+    slug = config["book_slug"]
+    pdf_path = get_pdf_path(book_code)
+    out_dir = OUTPUT_DIR / slug
+    out_dir.mkdir(parents=True, exist_ok=True)
+    mmd_cache = out_dir / "book.mmd"
+    image_dir = out_dir / "mathpix_extracted"
+
+    if not pdf_path.exists():
+        raise FileNotFoundError(f"PDF not found: {pdf_path}")
+
+    if mmd_cache.exists() and not force:
+        logger.info("Using cached MMD: %s (skip Mathpix)", mmd_cache)
+        return
+
+    if pdf_id:
+        logger.info("Using supplied pdf_id: %s", pdf_id)
+    else:
+        logger.info("Submitting %s to Mathpix /v3/pdf ...", slug)
+        pdf_id = submit_pdf(pdf_path)
+        logger.info("pdf_id: %s — polling...", pdf_id)
+
+    wait_for_pdf_completion(pdf_id)
+    mmd_text = download_pdf_mmd_zip(pdf_id, image_dir)
+    mmd_cache.write_text(mmd_text, encoding="utf-8")
+    img_count = len(list(image_dir.iterdir())) if image_dir.exists() else 0
+    logger.info("Saved book.mmd (%d chars) and %d images", len(mmd_text), img_count)
+
+
 
 def run_whole_pdf_pipeline(
     book_code: str,
