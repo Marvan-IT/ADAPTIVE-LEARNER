@@ -410,7 +410,7 @@ def _build_parse_config(profile, corrected_headings: dict | None) -> dict:
     compiled_exercise_markers: list[tuple[re.Pattern, str]] = []
     subsection_signals: list[re.Pattern] = [_H2_PATTERN]  # default: ## headings only
     min_body_words = MIN_SECTION_BODY_WORDS
-    max_chunk_words = None
+    max_chunk_words = 800  # default: split chunks exceeding 800 words at paragraph boundaries
     toc_sections = None
     corrections = dict(corrected_headings or {})
     max_sections_per_chapter = 99  # no effective cap by default
@@ -880,7 +880,7 @@ def _postprocess_chunks(
     _merged: list[ParsedChunk] = []
     for _mi, _chunk in enumerate(deduped):
         _word_ct = len(_chunk.text.split())
-        if (_word_ct < 50
+        if (_word_ct < 80
                 and _mi + 1 < len(deduped)
                 and deduped[_mi + 1].concept_id == _chunk.concept_id):
             # Forward merge into next subsection within same section

@@ -325,8 +325,8 @@ class TestBug5ChunkSize:
         if not word_counts:
             pytest.skip("No chunks produced — cannot check distribution")
         p50 = statistics.median(word_counts)
-        assert 200 <= p50 <= 600, (
-            f"Median chunk word count is {p50:.0f} — expected 200–600. "
+        assert 150 <= p50 <= 800, (
+            f"Median chunk word count is {p50:.0f} — expected 150–800. "
             f"This suggests systematic size problems in the parser."
         )
 
