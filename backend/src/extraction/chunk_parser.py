@@ -323,9 +323,31 @@ def _normalize_mmd_format(mmd_text: str) -> str:
 
     Markdown books (prealgebra) already use ### and ## — transformation is a no-op.
     Uses re.escape() to avoid \\s being misinterpreted as whitespace class.
+
+    BUG 1 fix: bare-number subsections like \\subsection*{1.21} (exercise/example numbers)
+    are converted to inline bold markers, NOT ### headings. Only subsections with
+    a title after the number become ### headings.
     """
-    _SUBSEC = re.compile("^" + re.escape("\\subsection*{") + r"(.+?)" + re.escape("}"), re.MULTILINE)
-    text = _SUBSEC.sub(r"### \1", mmd_text)
+    _bs = re.escape("\\subsection*{")
+    _be = re.escape("}")
+    # Pattern A: real section heading — N.M followed by title text (space + letter/symbol)
+    _SUBSEC_TITLED = re.compile("^" + _bs + r"(\d+\.\d+\s+\S.+?)" + _be, re.MULTILINE)
+    # Pattern B: bare exercise/example number — N.M or N.MM alone (no title)
+    _SUBSEC_BARE = re.compile("^" + _bs + r"(\d+\.\d+)" + _be + r"\s*$", re.MULTILINE)
+    # Pattern C: non-numeric subsection — \subsection*{Title Text}
+    _SUBSEC_OTHER = re.compile("^" + _bs + r"([^}]+?)" + _be, re.MULTILINE)
+
+    # Order matters: match bare numbers FIRST (convert to inline marker, not heading)
+    text = _SUBSEC_BARE.sub(r"**[EX \1]**", mmd_text)
+    # Then convert titled sections to ### headings
+    text = _SUBSEC_TITLED.sub(r"### \1", text)
+    # Then convert remaining non-numeric subsections to ### headings
+    text = _SUBSEC_OTHER.sub(r"### \1", text)
+
+    # \section*{N.M} bare number → inline marker (same fix as subsection)
+    _SEC_BARE = re.compile("^" + re.escape("\\section*{") + r"(\d+\.\d+)" + re.escape("}") + r"\s*$", re.MULTILINE)
+    text = _SEC_BARE.sub(r"**[EX \1]**", text)
+    # \section*{Title} → ## Title (all remaining section types)
     _SEC = re.compile("^" + re.escape("\\section*{") + r"(.+?)" + re.escape("}"), re.MULTILINE)
     text = _SEC.sub(r"## \1", text)
     return text
