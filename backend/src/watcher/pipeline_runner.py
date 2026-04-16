@@ -1,5 +1,5 @@
 """
-5-stage pipeline runner for a single book.
+6-stage pipeline runner for a single book.
 Spawned as subprocess by book_watcher.py.
 
 Usage:
@@ -76,6 +76,7 @@ async def run_pipeline(pdf_path: Path, subject: str) -> None:
     from src.pipeline import run_whole_pdf_pipeline
     from src.extraction.chunk_builder import build_chunks, validate_and_clean_images
     from src.db.connection import async_session_factory
+    from src.validators.post_parse_validator import PipelineValidationError
 
     slug = derive_slug(pdf_path.name)
     code = derive_code(slug)  # may collide; resolved from books.yaml after Stage 1
@@ -89,7 +90,7 @@ async def run_pipeline(pdf_path: Path, subject: str) -> None:
 
     try:
         # Stage 1 — Register book metadata in books.yaml + BOOK_REGISTRY
-        logger.info("[%s] Stage 1/5: Registering book metadata...", slug)
+        logger.info("[%s] Stage 1/6: Registering book metadata...", slug)
         entry = {
             "book_code": code,
             "book_slug": slug,
@@ -116,31 +117,45 @@ async def run_pipeline(pdf_path: Path, subject: str) -> None:
                 if hasattr(_mod, "BOOK_CODE_MAP"):
                     _mod.BOOK_CODE_MAP[slug] = code
                 logger.info("[%s] Hot-registered '%s' into %s.BOOK_REGISTRY", slug, code, _mod_name)
-        logger.info("[%s] Stage 1/5: Done", slug)
+        logger.info("[%s] Stage 1/6: Done", slug)
 
         # Stage 2 — Mathpix whole-PDF extraction (sync → thread so we don't block)
-        logger.info("[%s] Stage 2/5: Mathpix PDF extraction (30–60 min)...", slug)
+        logger.info("[%s] Stage 2/6: Mathpix PDF extraction (30–60 min)...", slug)
         await asyncio.to_thread(run_whole_pdf_pipeline, code)
-        logger.info("[%s] Stage 2/5: Done", slug)
+        logger.info("[%s] Stage 2/6: Done", slug)
 
         # Stage 3 — Chunk pipeline (universal parser + embed + persist + image validation)
-        logger.info("[%s] Stage 3/5: Building chunks & embeddings...", slug)
+        logger.info("[%s] Stage 3/6: Building chunks & embeddings...", slug)
         mmd_path = OUTPUT_DIR / slug / "book.mmd"
         async with async_session_factory() as db:
             await build_chunks(slug, mmd_path, db, rebuild=False)
             removed = await validate_and_clean_images(slug, db)
-        logger.info("[%s] Stage 3/5: Done. Removed %d orphan image rows.", slug, removed)
+        logger.info("[%s] Stage 3/6: Done. Removed %d orphan image rows.", slug, removed)
 
-        # Stage 4 — Dependency graph
-        logger.info("[%s] Stage 4/5: Building dependency graph...", slug)
+        # Stage 4 — Post-parse validation (blocks pipeline on critical quality failures)
+        logger.info("[%s] Stage 4/6: Validating parsed chunks...", slug)
+        from src.validators.post_parse_validator import validate_parsed_book
+        from src.extraction.chunk_parser import parse_book_mmd, _normalize_mmd_format
+        mmd_text = mmd_path.read_text(encoding="utf-8")
+        normalized = _normalize_mmd_format(mmd_text)
+        # Re-parse to get chunks for validation (build_chunks already saved to DB)
+        validation_chunks = parse_book_mmd(mmd_path, slug)
+        result = validate_parsed_book(slug, validation_chunks, normalized)
+        if not result.passed:
+            logger.error("[%s] Validation FAILED: %s", slug, result.errors)
+            raise PipelineValidationError(result.errors)
+        logger.info("[%s] Stage 4/6: Validation passed: %s", slug, result.stats)
+
+        # Stage 5 — Dependency graph
+        logger.info("[%s] Stage 5/6: Building dependency graph...", slug)
         graph_path = OUTPUT_DIR / slug / "graph.json"
         from src.extraction.graph_builder import build_graph
         async with async_session_factory() as db:
             await build_graph(db, slug, graph_path)
-        logger.info("[%s] Stage 4/5: Done", slug)
+        logger.info("[%s] Stage 5/6: Done", slug)
 
-        # Stage 5 — Hot-load into running server
-        logger.info("[%s] Stage 5/5: Hot-loading into server...", slug)
+        # Stage 6 — Hot-load into running server
+        logger.info("[%s] Stage 6/6: Hot-loading into server...", slug)
         api_base = os.getenv("API_BASE_URL", "http://localhost:8889")
         api_key = os.getenv("API_SECRET_KEY", "")
         try:
@@ -150,9 +165,9 @@ async def run_pipeline(pdf_path: Path, subject: str) -> None:
                 timeout=30,
             )
             resp.raise_for_status()
-            logger.info("[%s] Stage 7/7: Hot-load successful", slug)
+            logger.info("[%s] Stage 6/6: Hot-load successful", slug)
         except Exception as exc:
-            logger.error("[%s] Stage 7/7: Hot-load failed: %s", slug, exc)
+            logger.error("[%s] Stage 6/6: Hot-load failed: %s", slug, exc)
 
         logger.info("[%s] Pipeline complete", slug)
 
@@ -170,6 +185,20 @@ async def run_pipeline(pdf_path: Path, subject: str) -> None:
         except Exception:
             logger.exception("[%s] Could not update books status to READY_FOR_REVIEW", slug)
 
+    except PipelineValidationError as exc:
+        logger.error("[%s] Pipeline VALIDATION FAILED: %s", slug, exc.errors)
+        try:
+            from src.db.connection import async_session_factory as _asf
+            from sqlalchemy import text as _text
+            async with _asf() as _status_db:
+                await _status_db.execute(
+                    _text("UPDATE books SET status='VALIDATION_FAILED' WHERE book_slug=:slug"),
+                    {"slug": slug},
+                )
+                await _status_db.commit()
+            logger.error("[%s] Updated books status → VALIDATION_FAILED", slug)
+        except Exception:
+            logger.exception("[%s] Could not update books status to VALIDATION_FAILED", slug)
     except Exception as exc:
         logger.error("[%s] Pipeline FAILED: %s", slug, exc, exc_info=True)
         try:
