@@ -39,18 +39,18 @@ function InputField({
 }) {
   const isFocused = focusedField === id;
   return (
-    <div className="mb-5">
+    <div className="mb-3">
       <label
         htmlFor={id}
-        className="block text-[13px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-3"
+        className="block text-[12px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-1.5"
       >
         {label}
       </label>
       <div className="relative">
         {Icon && (
           <Icon
-            size={16}
-            className={`absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none transition-colors duration-150 ${
+            size={15}
+            className={`absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none transition-colors duration-150 ${
               isFocused
                 ? "text-[var(--color-primary)]"
                 : "text-[var(--color-border-strong)]"
@@ -68,8 +68,8 @@ function InputField({
           onBlur={onBlur}
           placeholder={placeholder}
           required={required}
-          className={`w-full h-[52px] bg-[var(--color-surface-2)] border-2 rounded-2xl text-[var(--color-text)] text-[0.95rem] outline-none transition-[border-color,box-shadow] duration-150 ${
-            Icon ? "pl-10 pr-3.5" : "px-3.5"
+          className={`w-full h-[44px] bg-[var(--color-surface-2)] border-2 rounded-xl text-[var(--color-text)] text-[0.9rem] outline-none transition-[border-color,box-shadow] duration-150 ${
+            Icon ? "pl-9 pr-3" : "px-3"
           } ${
             isFocused
               ? "border-[var(--color-primary)] ring-2 ring-[var(--color-primary)]/15"
@@ -143,13 +143,13 @@ export default function RegisterPage() {
   return (
     <>
         {/* Card */}
-        <div className="bg-[var(--color-surface)] rounded-2xl p-8 shadow-sm">
+        <div className="bg-[var(--color-surface)] rounded-2xl p-5 lg:p-6 shadow-sm">
           {/* Heading */}
-          <h1 className="text-3xl font-bold text-[var(--color-text)] mb-2">
+          <h1 className="text-2xl font-bold text-[var(--color-text)] mb-1">
             {t("auth.joinAdventure", "Join the adventure!")}
           </h1>
-          <p className="text-[var(--color-text-muted)] mb-8">
-            {t("auth.registerSubtitle", "Create your account and start learning")}
+          <p className="text-sm text-[var(--color-text-muted)] mb-4">
+            {t("auth.registerSubtitle", "Start your learning journey today")}
           </p>
 
           {/* Error */}
@@ -242,10 +242,10 @@ export default function RegisterPage() {
             </InputField>
 
             {/* Age */}
-            <div className="mb-5">
+            <div className="mb-3">
               <label
                 htmlFor="reg-age"
-                className="block text-[13px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-3"
+                className="block text-[12px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-1.5"
               >
                 {t("auth.ageLabel", "Age")}{" "}
                 <span className="font-normal normal-case text-xs">
@@ -262,7 +262,7 @@ export default function RegisterPage() {
                 onFocus={() => setFocusedField("reg-age")}
                 onBlur={() => setFocusedField(null)}
                 placeholder={t("auth.agePlaceholder", "Your age")}
-                className={`w-full h-[52px] px-3.5 bg-[var(--color-surface-2)] border-2 rounded-2xl text-[var(--color-text)] text-[0.95rem] outline-none transition-[border-color,box-shadow] duration-150 ${
+                className={`w-full h-[44px] px-3 bg-[var(--color-surface-2)] border-2 rounded-xl text-[var(--color-text)] text-[0.9rem] outline-none transition-[border-color,box-shadow] duration-150 ${
                   focusedField === "reg-age"
                     ? "border-[var(--color-primary)] ring-2 ring-[var(--color-primary)]/15"
                     : "border-[var(--color-border)]"
@@ -271,10 +271,10 @@ export default function RegisterPage() {
             </div>
 
             {/* Language */}
-            <div className="mb-8">
+            <div className="mb-4">
               <label
                 htmlFor="reg-language"
-                className="block text-[13px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-3"
+                className="block text-[12px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-1.5"
               >
                 {t("form.languageLabel", "Preferred Language")}
               </label>
@@ -282,7 +282,7 @@ export default function RegisterPage() {
                 id="reg-language"
                 value={preferredLanguage}
                 onChange={(e) => setPreferredLanguage(e.target.value)}
-                className="w-full h-[52px] px-3.5 bg-[var(--color-surface-2)] border-2 border-[var(--color-border)] rounded-2xl text-[var(--color-text)] text-[0.95rem] outline-none cursor-pointer appearance-none"
+                className="w-full h-[44px] px-3 bg-[var(--color-surface-2)] border-2 border-[var(--color-border)] rounded-xl text-[var(--color-text)] text-[0.9rem] outline-none cursor-pointer appearance-none"
               >
                 {SUPPORTED_LANGUAGES.map((lang) => (
                   <option
