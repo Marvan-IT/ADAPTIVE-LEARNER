@@ -32,6 +32,11 @@ async def main() -> None:
     # Import all models so Base.metadata knows about every table
     from db.models import Base  # noqa: F401 — triggers auth.models import too
 
+    # Enable pgvector extension (required for Vector column type)
+    print("Enabling pgvector extension...")
+    async with engine.begin() as conn:
+        await conn.execute(__import__("sqlalchemy").text("CREATE EXTENSION IF NOT EXISTS vector"))
+
     print("Creating all tables from ORM models...")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
