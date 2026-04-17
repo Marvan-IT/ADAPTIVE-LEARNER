@@ -53,16 +53,16 @@ class Student(Base):
     overall_accuracy_rate: Mapped[float] = mapped_column(Float, default=0.5, server_default="0.5", nullable=False)
     preferred_analogy_style: Mapped[str | None] = mapped_column(String(50), nullable=True)
     boredom_pattern: Mapped[str | None] = mapped_column(String(20), nullable=True)
-    frustration_tolerance: Mapped[str | None] = mapped_column(String(20), default="medium", server_default="'medium'", nullable=True)
-    recovery_speed: Mapped[str | None] = mapped_column(String(20), default="normal", server_default="'normal'", nullable=True)
-    avg_state_score: Mapped[float] = mapped_column(Float, default=2.0, server_default="2.0", nullable=False)
-    effective_analogies: Mapped[list] = mapped_column(JSONB, default=list, server_default="'[]'::jsonb", nullable=False)
-    effective_engagement: Mapped[list] = mapped_column(JSONB, default=list, server_default="'[]'::jsonb", nullable=False)
-    ineffective_engagement: Mapped[list] = mapped_column(JSONB, default=list, server_default="'[]'::jsonb", nullable=False)
+    frustration_tolerance: Mapped[str | None] = mapped_column(String(20), default="medium", server_default=text("'medium'"), nullable=True)
+    recovery_speed: Mapped[str | None] = mapped_column(String(20), default="normal", server_default=text("'normal'"), nullable=True)
+    avg_state_score: Mapped[float] = mapped_column(Float, default=2.0, server_default=text("2.0"), nullable=False)
+    effective_analogies: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"), nullable=False)
+    effective_engagement: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"), nullable=False)
+    ineffective_engagement: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"), nullable=False)
     state_distribution: Mapped[dict] = mapped_column(
         JSONB,
         default=lambda: {"struggling": 0, "normal": 0, "fast": 0},
-        server_default='\'{"struggling": 0, "normal": 0, "fast": 0}\'::jsonb',
+        server_default=text("'{\"struggling\": 0, \"normal\": 0, \"fast\": 0}'::jsonb"),
         nullable=False,
     )
 
