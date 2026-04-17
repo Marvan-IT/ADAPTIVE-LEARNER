@@ -713,7 +713,7 @@ async def retrigger_book(
         sys.executable, "-m", "src.watcher.pipeline_runner",
         "--pdf", str(pdf_path),
         "--subject", subject,
-    ])
+    ], cwd=str(BACKEND_DIR))
     logger.info("[retrigger] Re-queued '%s' (subject=%s)", slug, subject)
     return {"status": "retriggered", "book_slug": slug, "pdf": pdf_path.name}
 

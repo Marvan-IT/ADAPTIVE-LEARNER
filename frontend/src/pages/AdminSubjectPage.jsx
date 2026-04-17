@@ -205,6 +205,12 @@ export default function AdminSubjectPage() {
                         {t("admin.subject.actionViewContent", "View Content")}
                       </button>
                       <button
+                        onClick={() => handleRetrigger(b.slug)}
+                        style={{ padding: "6px 14px", backgroundColor: "#64748B", color: "#FFF", borderRadius: "9999px", fontSize: "12px", fontWeight: 600, border: "none", cursor: "pointer" }}
+                      >
+                        {t("admin.subject.actionRetrigger", "Retrigger")}
+                      </button>
+                      <button
                         onClick={() => handleDrop(b.slug, b.title)}
                         style={{ padding: "6px 14px", backgroundColor: "#F59E0B", color: "#FFF", borderRadius: "9999px", fontSize: "12px", fontWeight: 600, border: "none", cursor: "pointer" }}
                       >
@@ -218,7 +224,7 @@ export default function AdminSubjectPage() {
                       </button>
                     </>
                   )}
-                  {(b.status === "DROPPED" || b.status === "FAILED") && (
+                  {(b.status === "DROPPED" || b.status === "FAILED" || b.status === "VALIDATION_FAILED" || b.status === "READY_FOR_REVIEW") && (
                     <>
                       <button
                         onClick={() => handleRetrigger(b.slug)}
