@@ -39,10 +39,10 @@ function InputField({
 }) {
   const isFocused = focusedField === id;
   return (
-    <div className="mb-4">
+    <div className="mb-5">
       <label
         htmlFor={id}
-        className="block text-[13px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-2"
+        className="block text-[13px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-3"
       >
         {label}
       </label>
@@ -242,10 +242,10 @@ export default function RegisterPage() {
             </InputField>
 
             {/* Age */}
-            <div className="mb-4">
+            <div className="mb-5">
               <label
                 htmlFor="reg-age"
-                className="block text-[13px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-2"
+                className="block text-[13px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-3"
               >
                 {t("auth.ageLabel", "Age")}{" "}
                 <span className="font-normal normal-case text-xs">
@@ -271,10 +271,10 @@ export default function RegisterPage() {
             </div>
 
             {/* Language */}
-            <div className="mb-6">
+            <div className="mb-8">
               <label
                 htmlFor="reg-language"
-                className="block text-[13px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-2"
+                className="block text-[13px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-3"
               >
                 {t("form.languageLabel", "Preferred Language")}
               </label>

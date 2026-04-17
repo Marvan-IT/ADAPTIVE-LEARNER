@@ -100,10 +100,10 @@ export default function ResetPasswordPage() {
 
           <form onSubmit={handleSubmit} noValidate>
             {/* New password */}
-            <div className="mb-4">
+            <div className="mb-5">
               <label
                 htmlFor="reset-password"
-                className="block text-[13px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-2"
+                className="block text-[13px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-3"
               >
                 {t("auth.newPasswordLabel", "New Password")}
               </label>
@@ -139,10 +139,10 @@ export default function ResetPasswordPage() {
             </div>
 
             {/* Confirm password */}
-            <div className="mb-6">
+            <div className="mb-8">
               <label
                 htmlFor="reset-confirm"
-                className="block text-[13px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-2"
+                className="block text-[13px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-3"
               >
                 {t("auth.confirmPasswordLabel", "Confirm Password")}
               </label>

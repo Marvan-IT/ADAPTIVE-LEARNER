@@ -42,7 +42,7 @@ export default function ForgotPasswordPage() {
         {/* Card */}
         <div className="bg-[var(--color-surface)] rounded-2xl p-8 shadow-sm">
           {/* Large Mail icon */}
-          <div className="flex justify-center mb-4">
+          <div className="flex justify-center mb-6">
             <div className="w-16 h-16 rounded-full bg-[var(--color-primary)]/10 flex items-center justify-center">
               <Mail size={32} className="text-[var(--color-primary)]" aria-hidden="true" />
             </div>
@@ -78,7 +78,7 @@ export default function ForgotPasswordPage() {
             <div className="mb-6">
               <label
                 htmlFor="forgot-email"
-                className="block text-[13px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-2"
+                className="block text-[13px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-3"
               >
                 {t("auth.emailLabel", "Email")}
               </label>

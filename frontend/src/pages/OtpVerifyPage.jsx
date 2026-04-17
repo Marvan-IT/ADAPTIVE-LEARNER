@@ -167,7 +167,7 @@ export default function OtpVerifyPage() {
         {/* Card */}
         <div className="bg-[var(--color-surface)] rounded-2xl p-8 shadow-sm">
           {/* Animated mail icon */}
-          <div className="flex justify-center mb-4">
+          <div className="flex justify-center mb-6">
             <motion.div
               animate={{ y: [0, -6, 0] }}
               transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
@@ -262,7 +262,7 @@ export default function OtpVerifyPage() {
           </Button>
 
           {/* Resend */}
-          <p className="text-center text-[var(--color-text-muted)] text-sm m-0">
+          <p className="text-center text-[var(--color-text-muted)] text-sm mt-2">
             {t("auth.didntGetCode", "Didn't get a code?")}{" "}
             {cooldown > 0 ? (
               <span className="text-[var(--color-text-muted)]">
