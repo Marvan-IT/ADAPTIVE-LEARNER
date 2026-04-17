@@ -536,14 +536,17 @@ def _find_sections(mmd_text: str, book_slug: str, config: dict) -> list[dict]:
     # ── Build TOC section set for word-count filter bypass ─────────────────
     # Sections listed in the TOC are ALWAYS kept, even with <30 body words
     # (lab/experiment sections have short bodies but are real sections).
+    # Use the simple dotted-line regex (X.Y Title ..... PageNum) which is the
+    # most reliable TOC format across all books. The more complex parse_toc()
+    # fails on some books (e.g., business_statistics) due to density scan issues.
     _toc_set_for_filter: set[str] = set()
     if has_toc:
         _toc_set_for_filter = {str(e.get("section_number", "")) for e in toc_sections}
     else:
-        from extraction.ocr_validator import parse_toc as _parse_toc_early
-        _toc_early = _parse_toc_early(mmd_text)
-        if _toc_early:
-            _toc_set_for_filter = {e.section_number for e in _toc_early}
+        for _tm in re.finditer(r"^(\d+\.\d+)\s+.+?\.{3,}\s*\d+", mmd_text, re.MULTILINE):
+            _toc_set_for_filter.add(_tm.group(1))
+    if _toc_set_for_filter:
+        logger.info("TOC filter bypass set: %d sections", len(_toc_set_for_filter))
 
     # ── TOC-first dedup: for each section, find FIRST match AFTER the TOC ────
     # The body content always appears after the TOC. By starting from _toc_end,

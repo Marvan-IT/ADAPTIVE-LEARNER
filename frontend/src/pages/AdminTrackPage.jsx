@@ -60,7 +60,9 @@ export default function AdminTrackPage() {
 
   useEffect(() => {
     load();
-    pollRef.current = setInterval(load, 5000);
+    // Quick second poll to catch fast stages (1-2 complete in <1 sec)
+    setTimeout(load, 800);
+    pollRef.current = setInterval(load, 2000);
 
     timerRef.current = setInterval(() => {
       if (stageStartRef.current) {
@@ -90,8 +92,8 @@ export default function AdminTrackPage() {
     : notStarted
     ? t("admin.pipeline.statusWaiting", "Waiting for pipeline to start...")
     : isInitializing
-    ? (status?.stage_label || t("admin.pipeline.statusInitializing", "Initializing..."))
-    : t("admin.pipeline.statusProcessing", "Processing...");
+    ? (status?.stage_label || t("admin.pipeline.statusInitializing", "Initializing...")) + ` [stage=${currentStage}]`
+    : t("admin.pipeline.statusProcessing", "Processing...") + ` [stage=${currentStage}]`;
 
   return (
     <div style={{ margin: "0 auto" }}>

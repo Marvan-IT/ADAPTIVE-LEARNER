@@ -95,6 +95,10 @@ _SIGNAL_LATEX_SUBSECTION = "latex_subsection"
 # Matches X.Y section numbers — used to detect TOC density and body headings
 _SECTION_NUMBER_RE = re.compile(r"(\d+)\.(\d+)\s+\w")
 
+# More specific TOC line pattern — matches "N.M Title ..... PageNum" dotted entries
+# Used as a fallback for density detection when _SECTION_NUMBER_RE picks body content
+_TOC_DOTTED_RE = re.compile(r"(\d+)\.(\d+)\s+.+?\.{3,}\s*\d+")
+
 # Matches any markdown heading at any level, capturing level and text
 _MD_HEADING_RE = re.compile(r"^(#{1,4})\s+(.+)$", re.MULTILINE)
 
@@ -239,21 +243,37 @@ def parse_toc(mmd_text: str) -> list[TocEntry]:
     search_limit = max(5000, len(mmd_text) // 5)
     candidate_region = mmd_text[:search_limit]
 
-    # Slide a 2000-char window through the candidate region, count X.Y matches
+    # Slide a 2000-char window through the candidate region, count TOC-like matches.
+    # Use the dotted-line pattern first (most specific, avoids body false positives).
+    # Fall back to generic _SECTION_NUMBER_RE if dotted lines are sparse.
     window_size = 2000
     step = 500
     best_count = 0
     best_start = 0
     best_end = min(window_size, len(candidate_region))
 
+    # Try dotted-line pattern first (e.g., "1.1 Title ..... 5")
+    _density_re = _TOC_DOTTED_RE
     for start in range(0, max(1, len(candidate_region) - window_size + 1), step):
         end = min(start + window_size, len(candidate_region))
         window = candidate_region[start:end]
-        count = len(_SECTION_NUMBER_RE.findall(window))
+        count = len(_density_re.findall(window))
         if count > best_count:
             best_count = count
             best_start = start
             best_end = end
+
+    # If dotted-line pattern found nothing, fall back to generic pattern
+    if best_count < 3:
+        _density_re = _SECTION_NUMBER_RE
+        for start in range(0, max(1, len(candidate_region) - window_size + 1), step):
+            end = min(start + window_size, len(candidate_region))
+            window = candidate_region[start:end]
+            count = len(_density_re.findall(window))
+            if count > best_count:
+                best_count = count
+                best_start = start
+                best_end = end
 
     if best_count < 3:
         # Not enough section numbers to be a TOC
@@ -268,7 +288,7 @@ def parse_toc(mmd_text: str) -> list[TocEntry]:
     while expand_left > 0:
         step_start = max(0, expand_left - _EXPANSION_STEP)
         chunk = candidate_region[step_start:expand_left]
-        if len(_SECTION_NUMBER_RE.findall(chunk)) >= _DENSITY_THRESHOLD:
+        if len(_density_re.findall(chunk)) >= _DENSITY_THRESHOLD:
             expand_left = step_start
         else:
             break
@@ -277,7 +297,7 @@ def parse_toc(mmd_text: str) -> list[TocEntry]:
     while expand_right < len(candidate_region):
         step_end = min(len(candidate_region), expand_right + _EXPANSION_STEP)
         chunk = candidate_region[expand_right:step_end]
-        if len(_SECTION_NUMBER_RE.findall(chunk)) >= _DENSITY_THRESHOLD:
+        if len(_density_re.findall(chunk)) >= _DENSITY_THRESHOLD:
             expand_right = step_end
         else:
             break
@@ -288,7 +308,7 @@ def parse_toc(mmd_text: str) -> list[TocEntry]:
     peek_end = min(len(candidate_region), expand_right + _EXPANSION_STEP * 2)
     if peek_end > expand_right:
         peek_chunk = candidate_region[expand_right:peek_end]
-        if len(_SECTION_NUMBER_RE.findall(peek_chunk)) >= 1:
+        if len(_density_re.findall(peek_chunk)) >= 1:
             expand_right = peek_end
 
     toc_start = expand_left
@@ -326,6 +346,8 @@ def parse_toc(mmd_text: str) -> list[TocEntry]:
         title = _clean_heading_text(title_raw)
         # Strip trailing page numbers (common in TOC lines: "1.1 Intro ...... 12")
         title = re.sub(r"[\s.]+\d+\s*$", "", title).strip()
+        # Strip leading pipe/colon/dash separators (e.g., "| Probability Topics")
+        title = re.sub(r"^\s*[|:—–\-·]\s*", "", title).strip()
 
         if not title:
             continue
