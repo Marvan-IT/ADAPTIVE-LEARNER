@@ -500,6 +500,8 @@ def _find_sections(mmd_text: str, book_slug: str, config: dict) -> list[dict]:
         if section_in_chapter > max_section_in_chapter and not has_toc:
             continue  # heuristic cap — only applies when no TOC whitelist
         section_title_raw = m.group(4).strip()
+        # Strip pipe/colon/dash separator from start of title (e.g., "| Probability Topics" → "Probability Topics")
+        section_title_raw = re.sub(r"^\s*[|:—–\-·]\s*", "", section_title_raw).strip()
         section_title = corrections.get(section_title_raw, section_title_raw)
         if section_title != section_title_raw:
             logger.info(
@@ -531,6 +533,18 @@ def _find_sections(mmd_text: str, book_slug: str, config: dict) -> list[dict]:
     if _toc_end > 0:
         logger.info("TOC region detected, ends at char %d (%.1f%%)", _toc_end, _toc_end / len(mmd_text) * 100)
 
+    # ── Build TOC section set for word-count filter bypass ─────────────────
+    # Sections listed in the TOC are ALWAYS kept, even with <30 body words
+    # (lab/experiment sections have short bodies but are real sections).
+    _toc_set_for_filter: set[str] = set()
+    if has_toc:
+        _toc_set_for_filter = {str(e.get("section_number", "")) for e in toc_sections}
+    else:
+        from extraction.ocr_validator import parse_toc as _parse_toc_early
+        _toc_early = _parse_toc_early(mmd_text)
+        if _toc_early:
+            _toc_set_for_filter = {e.section_number for e in _toc_early}
+
     # ── TOC-first dedup: for each section, find FIRST match AFTER the TOC ────
     # The body content always appears after the TOC. By starting from _toc_end,
     # we skip TOC stubs entirely and find the real teaching body for each section.
@@ -544,11 +558,11 @@ def _find_sections(mmd_text: str, book_slug: str, config: dict) -> list[dict]:
         body_start = sec["end"]
         body_end = all_matches[idx + 1]["start"] if idx + 1 < len(all_matches) else len(mmd_text)
         body_words = _word_count(mmd_text[body_start:body_end])
-        if body_words >= min_body_words:
+        if body_words >= min_body_words or key in _toc_set_for_filter:
             seen[key] = sec
         else:
             logger.info(
-                "Skipping short section %s (%d words) — likely exercise stub",
+                "Skipping short section %s (%d words) — not in TOC, likely exercise stub",
                 key, body_words,
             )
 
