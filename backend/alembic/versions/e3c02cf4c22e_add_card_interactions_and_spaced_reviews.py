@@ -1,7 +1,7 @@
 """add_card_interactions_and_spaced_reviews
 
 Revision ID: e3c02cf4c22e
-Revises: 
+Revises: 0001
 Create Date: 2026-02-27 16:48:48.109980
 
 """

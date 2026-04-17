@@ -7,7 +7,7 @@ from alembic import op
 import sqlalchemy as sa
 
 revision = "017_is_hidden"
-down_revision = None  # standalone migration — safe to run anytime
+down_revision = "016_add_missing_indexes"
 
 
 def upgrade():
