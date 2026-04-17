@@ -10,7 +10,7 @@ export function ThemeProvider({ children }) {
     // Migrate old ada_style "dark"/"light" values
     const oldStyle = localStorage.getItem("ada_style");
     if (oldStyle === "dark" || oldStyle === "light") return oldStyle;
-    return "dark";
+    return "light";
   });
 
   // Teaching style: default | pirate | astronaut | gamer — sent to backend
