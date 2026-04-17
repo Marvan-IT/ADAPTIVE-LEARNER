@@ -5,6 +5,58 @@ import { motion } from "framer-motion";
 import { Mail, Lock, AlertCircle, LogIn, CheckCircle2 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 
+// --- Style constants ---
+const inputBase = {
+  width: "100%",
+  height: 48,
+  paddingLeft: 44,
+  paddingRight: 16,
+  background: "#F8FAFC",
+  border: "1.5px solid #E2E8F0",
+  borderRadius: 12,
+  fontSize: 15,
+  color: "#1E293B",
+  outline: "none",
+  transition: "border-color 0.2s, box-shadow 0.2s",
+  boxSizing: "border-box",
+};
+
+const inputFocused = {
+  ...inputBase,
+  border: "1.5px solid #F97316",
+  boxShadow: "0 0 0 3px rgba(249,115,22,0.12)",
+};
+
+const iconBase = {
+  position: "absolute",
+  left: 14,
+  top: "50%",
+  transform: "translateY(-50%)",
+  pointerEvents: "none",
+  color: "#94A3B8",
+  transition: "color 0.2s",
+};
+
+const iconFocused = {
+  ...iconBase,
+  color: "#F97316",
+};
+
+const labelStyle = {
+  display: "block",
+  fontSize: 13,
+  fontWeight: 600,
+  color: "#64748B",
+  marginBottom: 6,
+};
+
+const cardStyle = {
+  background: "#FFFFFF",
+  borderRadius: 20,
+  padding: "32px 28px",
+  boxShadow: "0 4px 24px rgba(0,0,0,0.07)",
+};
+
 export default function LoginPage() {
   const { t } = useTranslation();
   const { login } = useAuth();
@@ -43,45 +95,45 @@ export default function LoginPage() {
 
   const canSubmit = email.trim() && password;
 
-  const inputStyle = (focused) => ({
+  const buttonStyle = {
     width: "100%",
-    height: "52px",
-    paddingLeft: "44px",
-    paddingRight: "16px",
-    backgroundColor: "#FFFFFF",
-    border: focused ? "2px solid #F97316" : "2px solid #CBD5E1",
-    borderRadius: "12px",
-    color: "#0F172A",
-    fontSize: "0.95rem",
-    outline: "none",
-    transition: "border-color 0.15s, box-shadow 0.15s",
-    boxShadow: focused ? "0 0 0 3px rgba(249,115,22,0.15)" : "none",
-  });
-
-  const iconStyle = (focused) => ({
-    position: "absolute",
-    left: "16px",
-    top: "50%",
-    transform: "translateY(-50%)",
-    pointerEvents: "none",
-    color: focused ? "#F97316" : "#94A3B8",
-    transition: "color 0.15s",
-  });
+    height: 48,
+    background: canSubmit && !loading ? "linear-gradient(135deg, #F97316, #EA580C)" : "#FDBA74",
+    color: "#FFFFFF",
+    border: "none",
+    borderRadius: 9999,
+    fontSize: 15,
+    fontWeight: 700,
+    cursor: canSubmit && !loading ? "pointer" : "not-allowed",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    transition: "all 0.2s",
+  };
 
   return (
     <>
-      {/* Card */}
-      <div style={{
-        backgroundColor: "#FFFFFF",
-        borderRadius: "16px",
-        padding: "40px 36px",
-        boxShadow: "0 4px 24px rgba(0,0,0,0.08)",
-      }}>
-        {/* Heading */}
-        <h1 style={{ fontFamily: "'Outfit', sans-serif", fontWeight: 700, fontSize: "32px", color: "#0F172A", marginBottom: "6px" }}>
+      <div style={cardStyle}>
+        <h1
+          style={{
+            fontSize: 26,
+            fontWeight: 800,
+            color: "#1E293B",
+            marginBottom: 4,
+            marginTop: 0,
+          }}
+        >
           {t("auth.welcomeBack", "Welcome back!")}
         </h1>
-        <p style={{ color: "#64748B", fontSize: "15px", marginBottom: "32px" }}>
+        <p
+          style={{
+            fontSize: 14,
+            color: "#94A3B8",
+            marginBottom: 28,
+            marginTop: 0,
+          }}
+        >
           {t("auth.loginSubtitle", "Sign in to continue learning")}
         </p>
 
@@ -91,10 +143,16 @@ export default function LoginPage() {
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: "auto" }}
             style={{
-              display: "flex", alignItems: "center", gap: "8px",
-              borderRadius: "12px", padding: "12px 16px", marginBottom: "20px",
-              fontSize: "14px", color: "#16A34A",
-              background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.3)",
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              borderRadius: 12,
+              padding: "12px 16px",
+              marginBottom: 20,
+              fontSize: 14,
+              color: "#16A34A",
+              background: "rgba(22,163,74,0.07)",
+              border: "1px solid rgba(22,163,74,0.22)",
             }}
           >
             <CheckCircle2 size={16} aria-hidden="true" />
@@ -107,13 +165,19 @@ export default function LoginPage() {
           <motion.div
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: "auto" }}
-            style={{
-              display: "flex", alignItems: "center", gap: "8px",
-              borderRadius: "12px", padding: "12px 16px", marginBottom: "20px",
-              fontSize: "14px", color: "#DC2626",
-              background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.3)",
-            }}
             role="alert"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              borderRadius: 12,
+              padding: "12px 16px",
+              marginBottom: 20,
+              fontSize: 14,
+              color: "#DC2626",
+              background: "rgba(239,68,68,0.06)",
+              border: "1px solid rgba(239,68,68,0.2)",
+            }}
           >
             <AlertCircle size={16} aria-hidden="true" />
             {error}
@@ -122,15 +186,16 @@ export default function LoginPage() {
 
         <form onSubmit={handleSubmit} noValidate>
           {/* Email field */}
-          <div style={{ marginBottom: "24px" }}>
-            <label
-              htmlFor="login-email"
-              style={{ display: "block", fontSize: "13px", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", color: "#64748B", marginBottom: "8px" }}
-            >
+          <div style={{ marginBottom: 20 }}>
+            <label htmlFor="login-email" style={labelStyle}>
               {t("auth.emailLabel", "Email")}
             </label>
             <div style={{ position: "relative" }}>
-              <Mail size={18} style={iconStyle(focusedField === "email")} aria-hidden="true" />
+              <Mail
+                size={18}
+                style={focusedField === "email" ? iconFocused : iconBase}
+                aria-hidden="true"
+              />
               <input
                 id="login-email"
                 type="email"
@@ -141,29 +206,42 @@ export default function LoginPage() {
                 onBlur={() => setFocusedField(null)}
                 placeholder={t("auth.emailPlaceholder", "you@example.com")}
                 required
-                style={inputStyle(focusedField === "email")}
+                style={focusedField === "email" ? inputFocused : inputBase}
               />
             </div>
           </div>
 
           {/* Password field */}
-          <div style={{ marginBottom: "24px" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
-              <label
-                htmlFor="login-password"
-                style={{ fontSize: "13px", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", color: "#64748B" }}
-              >
+          <div style={{ marginBottom: 24 }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: 6,
+              }}
+            >
+              <label htmlFor="login-password" style={{ ...labelStyle, marginBottom: 0 }}>
                 {t("auth.passwordLabel", "Password")}
               </label>
               <Link
                 to="/forgot-password"
-                style={{ color: "#F97316", fontSize: "14px", fontWeight: 500, textDecoration: "none" }}
+                style={{
+                  fontSize: 13,
+                  fontWeight: 600,
+                  color: "#F97316",
+                  textDecoration: "none",
+                }}
               >
                 {t("auth.forgotPassword", "Forgot password?")}
               </Link>
             </div>
             <div style={{ position: "relative" }}>
-              <Lock size={18} style={iconStyle(focusedField === "password")} aria-hidden="true" />
+              <Lock
+                size={18}
+                style={focusedField === "password" ? iconFocused : iconBase}
+                aria-hidden="true"
+              />
               <input
                 id="login-password"
                 type="password"
@@ -174,7 +252,7 @@ export default function LoginPage() {
                 onBlur={() => setFocusedField(null)}
                 placeholder="••••••••"
                 required
-                style={inputStyle(focusedField === "password")}
+                style={focusedField === "password" ? inputFocused : inputBase}
               />
             </div>
           </div>
@@ -183,41 +261,50 @@ export default function LoginPage() {
           <motion.button
             type="submit"
             disabled={loading || !canSubmit}
-            whileHover={canSubmit && !loading ? { scale: 1.01 } : {}}
-            whileTap={canSubmit && !loading ? { scale: 0.98 } : {}}
-            style={{
-              width: "100%",
-              height: "52px",
-              backgroundColor: canSubmit && !loading ? "#EA580C" : "#FDBA74",
-              color: "#FFFFFF",
-              border: "none",
-              borderRadius: "9999px",
-              fontSize: "16px",
-              fontWeight: 700,
-              fontFamily: "'Outfit', sans-serif",
-              cursor: canSubmit && !loading ? "pointer" : "not-allowed",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: "8px",
-              transition: "background-color 0.15s",
-            }}
+            whileHover={canSubmit && !loading ? { scale: 1.02 } : {}}
+            whileTap={canSubmit && !loading ? { scale: 0.97 } : {}}
+            style={buttonStyle}
           >
             {loading ? (
-              <div style={{ width: "18px", height: "18px", border: "2px solid rgba(255,255,255,0.4)", borderTopColor: "#fff", borderRadius: "50%", animation: "spin 0.7s linear infinite" }} aria-hidden="true" />
+              <span
+                style={{
+                  width: 18,
+                  height: 18,
+                  border: "2.5px solid rgba(255,255,255,0.35)",
+                  borderTopColor: "#FFFFFF",
+                  borderRadius: "50%",
+                  display: "inline-block",
+                  animation: "spin 0.7s linear infinite",
+                }}
+                aria-hidden="true"
+              />
             ) : (
               <LogIn size={18} aria-hidden="true" />
             )}
             {loading ? t("auth.loggingIn", "Signing in...") : t("auth.loginButton", "Log In")}
           </motion.button>
-
         </form>
       </div>
 
       {/* Register link */}
-      <p style={{ textAlign: "center", color: "#64748B", fontSize: "14px", marginTop: "24px" }}>
+      <p
+        style={{
+          textAlign: "center",
+          fontSize: 14,
+          color: "#64748B",
+          marginTop: 20,
+          marginBottom: 0,
+        }}
+      >
         {t("auth.noAccount", "Don't have an account?")}{" "}
-        <Link to="/register" style={{ color: "#F97316", fontWeight: 600, textDecoration: "none" }}>
+        <Link
+          to="/register"
+          style={{
+            color: "#F97316",
+            fontWeight: 700,
+            textDecoration: "none",
+          }}
+        >
           {t("auth.createAccount", "Create Account")}
         </Link>
       </p>

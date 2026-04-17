@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { motion, AnimatePresence } from "framer-motion";
 import { User, Mail, Lock, AlertCircle } from "lucide-react";
 import { registerUser } from "../api/auth";
-import { Button, StrengthBar, passwordStrength } from "../components/ui";
+import { StrengthBar, passwordStrength } from "../components/ui";
 
 const SUPPORTED_LANGUAGES = [
   { code: "en", label: "English" },
@@ -22,6 +22,85 @@ const SUPPORTED_LANGUAGES = [
   { code: "zh", label: "Chinese" },
 ];
 
+// --- Style constants (compact for register page) ---
+const compactInput = {
+  width: "100%",
+  height: 42,
+  paddingLeft: 40,
+  paddingRight: 14,
+  background: "#F8FAFC",
+  border: "1.5px solid #E2E8F0",
+  borderRadius: 10,
+  fontSize: 14,
+  color: "#1E293B",
+  outline: "none",
+  transition: "border-color 0.2s, box-shadow 0.2s",
+  boxSizing: "border-box",
+};
+
+const compactInputFocused = {
+  ...compactInput,
+  border: "1.5px solid #F97316",
+  boxShadow: "0 0 0 3px rgba(249,115,22,0.12)",
+};
+
+const compactInputNoIcon = {
+  ...compactInput,
+  paddingLeft: 14,
+};
+
+const compactInputNoIconFocused = {
+  ...compactInputFocused,
+  paddingLeft: 14,
+};
+
+const compactSelectStyle = {
+  ...compactInput,
+  paddingLeft: 14,
+  cursor: "pointer",
+  appearance: "none",
+  WebkitAppearance: "none",
+};
+
+const compactSelectFocused = {
+  ...compactInputFocused,
+  paddingLeft: 14,
+  cursor: "pointer",
+  appearance: "none",
+  WebkitAppearance: "none",
+};
+
+const iconBase = {
+  position: "absolute",
+  left: 12,
+  top: "50%",
+  transform: "translateY(-50%)",
+  pointerEvents: "none",
+  color: "#94A3B8",
+  transition: "color 0.2s",
+};
+
+const iconFocused = {
+  ...iconBase,
+  color: "#F97316",
+};
+
+const compactLabel = {
+  display: "block",
+  fontSize: 12,
+  fontWeight: 600,
+  color: "#64748B",
+  marginBottom: 4,
+};
+
+const compactCard = {
+  background: "#FFFFFF",
+  borderRadius: 20,
+  padding: "24px 24px",
+  boxShadow: "0 4px 24px rgba(0,0,0,0.07)",
+};
+
+// --- InputField sub-component (inline styles) ---
 function InputField({
   id,
   label,
@@ -39,22 +118,15 @@ function InputField({
 }) {
   const isFocused = focusedField === id;
   return (
-    <div className="mb-3">
-      <label
-        htmlFor={id}
-        className="block text-[12px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-1.5"
-      >
+    <div style={{ marginBottom: 12 }}>
+      <label htmlFor={id} style={compactLabel}>
         {label}
       </label>
-      <div className="relative">
+      <div style={{ position: "relative" }}>
         {Icon && (
           <Icon
             size={15}
-            className={`absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none transition-colors duration-150 ${
-              isFocused
-                ? "text-[var(--color-primary)]"
-                : "text-[var(--color-border-strong)]"
-            }`}
+            style={isFocused ? iconFocused : iconBase}
             aria-hidden="true"
           />
         )}
@@ -68,13 +140,7 @@ function InputField({
           onBlur={onBlur}
           placeholder={placeholder}
           required={required}
-          className={`w-full h-[44px] bg-[var(--color-surface-2)] border-2 rounded-xl text-[var(--color-text)] text-[0.9rem] outline-none transition-[border-color,box-shadow] duration-150 ${
-            Icon ? "pl-9 pr-3" : "px-3"
-          } ${
-            isFocused
-              ? "border-[var(--color-primary)] ring-2 ring-[var(--color-primary)]/15"
-              : "border-[var(--color-border)]"
-          }`}
+          style={isFocused ? compactInputFocused : compactInput}
         />
       </div>
       {children}
@@ -138,188 +204,281 @@ export default function RegisterPage() {
   };
 
   const strength = passwordStrength(password);
-  const isDisabled = loading || strength.score < 2 || password !== confirmPassword || !displayName.trim() || !email.trim();
+  const isDisabled =
+    loading ||
+    strength.score < 2 ||
+    password !== confirmPassword ||
+    !displayName.trim() ||
+    !email.trim();
+
+  const buttonStyle = {
+    width: "100%",
+    height: 42,
+    background: !isDisabled ? "linear-gradient(135deg, #F97316, #EA580C)" : "#FDBA74",
+    color: "#FFFFFF",
+    border: "none",
+    borderRadius: 9999,
+    fontSize: 15,
+    fontWeight: 700,
+    cursor: !isDisabled ? "pointer" : "not-allowed",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    transition: "all 0.2s",
+    marginTop: 4,
+  };
 
   return (
     <>
-        {/* Card */}
-        <div className="bg-[var(--color-surface)] rounded-2xl p-5 lg:p-6 shadow-sm">
-          {/* Heading */}
-          <h1 className="text-2xl font-bold text-[var(--color-text)] mb-1">
-            {t("auth.joinAdventure", "Join the adventure!")}
-          </h1>
-          <p className="text-sm text-[var(--color-text-muted)] mb-4">
-            {t("auth.registerSubtitle", "Start your learning journey today")}
-          </p>
+      <div style={compactCard}>
+        <h1
+          style={{
+            fontSize: 22,
+            fontWeight: 800,
+            color: "#1E293B",
+            marginBottom: 4,
+            marginTop: 0,
+          }}
+        >
+          {t("auth.joinAdventure", "Join the adventure!")}
+        </h1>
+        <p
+          style={{
+            fontSize: 13,
+            color: "#94A3B8",
+            marginBottom: 16,
+            marginTop: 0,
+          }}
+        >
+          {t("auth.registerSubtitle", "Start your learning journey today")}
+        </p>
 
-          {/* Error */}
-          <AnimatePresence>
-            {error && (
-              <motion.div
-                key="error"
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: "auto" }}
-                exit={{ opacity: 0, height: 0 }}
-                className="flex items-center gap-2 rounded-[10px] px-4 py-3 mb-5 text-sm text-[var(--color-danger)]"
+        {/* Error banner */}
+        <AnimatePresence>
+          {error && (
+            <motion.div
+              key="error"
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: "auto" }}
+              exit={{ opacity: 0, height: 0 }}
+              role="alert"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                borderRadius: 12,
+                padding: "10px 14px",
+                marginBottom: 14,
+                fontSize: 13,
+                color: "#DC2626",
+                background: "rgba(239,68,68,0.06)",
+                border: "1px solid rgba(239,68,68,0.2)",
+              }}
+            >
+              <AlertCircle size={15} aria-hidden="true" />
+              {error}
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        <form onSubmit={handleSubmit} noValidate>
+          {/* Display name */}
+          <InputField
+            id="reg-name"
+            label={t("auth.displayNameLabel", "Display name")}
+            value={displayName}
+            onChange={(e) => setDisplayName(e.target.value)}
+            placeholder={t("auth.displayNamePlaceholder", "Your name")}
+            autoComplete="name"
+            icon={User}
+            focusedField={focusedField}
+            onFocus={() => setFocusedField("reg-name")}
+            onBlur={() => setFocusedField(null)}
+            required
+          />
+
+          {/* Email */}
+          <InputField
+            id="reg-email"
+            label={t("auth.emailLabel", "Email")}
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder={t("auth.emailPlaceholder", "you@example.com")}
+            autoComplete="email"
+            icon={Mail}
+            focusedField={focusedField}
+            onFocus={() => setFocusedField("reg-email")}
+            onBlur={() => setFocusedField(null)}
+            required
+          />
+
+          {/* Password */}
+          <InputField
+            id="reg-password"
+            label={t("auth.passwordLabel", "Password")}
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="••••••••"
+            autoComplete="new-password"
+            icon={Lock}
+            focusedField={focusedField}
+            onFocus={() => setFocusedField("reg-password")}
+            onBlur={() => setFocusedField(null)}
+            required
+          >
+            <StrengthBar password={password} />
+          </InputField>
+
+          {/* Confirm password */}
+          <InputField
+            id="reg-confirm"
+            label={t("auth.confirmPasswordLabel", "Confirm password")}
+            type="password"
+            value={confirmPassword}
+            onChange={(e) => setConfirmPassword(e.target.value)}
+            placeholder="••••••••"
+            autoComplete="new-password"
+            icon={Lock}
+            focusedField={focusedField}
+            onFocus={() => setFocusedField("reg-confirm")}
+            onBlur={() => setFocusedField(null)}
+            required
+          >
+            {confirmPassword && password !== confirmPassword && (
+              <p
                 style={{
-                  background: "color-mix(in srgb, var(--color-danger) 8%, transparent)",
-                  border: "1px solid color-mix(in srgb, var(--color-danger) 40%, transparent)",
+                  color: "#DC2626",
+                  fontSize: 12,
+                  marginTop: 4,
+                  marginBottom: 0,
                 }}
-                role="alert"
               >
-                <AlertCircle size={16} aria-hidden="true" />
-                {error}
-              </motion.div>
+                {t("auth.passwordMismatchHint", "Passwords do not match")}
+              </p>
             )}
-          </AnimatePresence>
+          </InputField>
 
-          <form onSubmit={handleSubmit} noValidate>
-            <InputField
-              id="reg-name"
-              label={t("auth.displayNameLabel", "Display Name")}
-              value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
-              placeholder={t("auth.displayNamePlaceholder", "Your name")}
-              autoComplete="name"
-              icon={User}
-              focusedField={focusedField}
-              onFocus={() => setFocusedField("reg-name")}
+          {/* Age (optional) */}
+          <div style={{ marginBottom: 12 }}>
+            <label htmlFor="reg-age" style={compactLabel}>
+              {t("auth.ageLabel", "Age")}{" "}
+              <span style={{ fontWeight: 400, fontSize: 11, color: "#94A3B8" }}>
+                {t("auth.ageOptional", "(optional)")}
+              </span>
+            </label>
+            <input
+              id="reg-age"
+              type="number"
+              min={5}
+              max={120}
+              value={age}
+              onChange={(e) => setAge(e.target.value)}
+              onFocus={() => setFocusedField("reg-age")}
               onBlur={() => setFocusedField(null)}
-              required
+              placeholder={t("auth.agePlaceholder", "Your age")}
+              style={
+                focusedField === "reg-age"
+                  ? compactInputNoIconFocused
+                  : compactInputNoIcon
+              }
             />
+          </div>
 
-            <InputField
-              id="reg-email"
-              label={t("auth.emailLabel", "Email")}
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder={t("auth.emailPlaceholder", "you@example.com")}
-              autoComplete="email"
-              icon={Mail}
-              focusedField={focusedField}
-              onFocus={() => setFocusedField("reg-email")}
-              onBlur={() => setFocusedField(null)}
-              required
-            />
-
-            <InputField
-              id="reg-password"
-              label={t("auth.passwordLabel", "Password")}
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••"
-              autoComplete="new-password"
-              icon={Lock}
-              focusedField={focusedField}
-              onFocus={() => setFocusedField("reg-password")}
-              onBlur={() => setFocusedField(null)}
-              required
-            >
-              <StrengthBar password={password} />
-            </InputField>
-
-            <InputField
-              id="reg-confirm"
-              label={t("auth.confirmPasswordLabel", "Confirm Password")}
-              type="password"
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-              placeholder="••••••••"
-              autoComplete="new-password"
-              icon={Lock}
-              focusedField={focusedField}
-              onFocus={() => setFocusedField("reg-confirm")}
-              onBlur={() => setFocusedField(null)}
-              required
-            >
-              {confirmPassword && password !== confirmPassword && (
-                <p className="text-[var(--color-danger)] text-xs mt-1">
-                  {t("auth.passwordMismatchHint", "Passwords do not match")}
-                </p>
-              )}
-            </InputField>
-
-            {/* Age */}
-            <div className="mb-3">
-              <label
-                htmlFor="reg-age"
-                className="block text-[12px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-1.5"
-              >
-                {t("auth.ageLabel", "Age")}{" "}
-                <span className="font-normal normal-case text-xs">
-                  {t("auth.ageOptional", "(optional)")}
-                </span>
-              </label>
-              <input
-                id="reg-age"
-                type="number"
-                min={5}
-                max={120}
-                value={age}
-                onChange={(e) => setAge(e.target.value)}
-                onFocus={() => setFocusedField("reg-age")}
-                onBlur={() => setFocusedField(null)}
-                placeholder={t("auth.agePlaceholder", "Your age")}
-                className={`w-full h-[44px] px-3 bg-[var(--color-surface-2)] border-2 rounded-xl text-[var(--color-text)] text-[0.9rem] outline-none transition-[border-color,box-shadow] duration-150 ${
-                  focusedField === "reg-age"
-                    ? "border-[var(--color-primary)] ring-2 ring-[var(--color-primary)]/15"
-                    : "border-[var(--color-border)]"
-                }`}
-              />
-            </div>
-
-            {/* Language */}
-            <div className="mb-4">
-              <label
-                htmlFor="reg-language"
-                className="block text-[12px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-1.5"
-              >
-                {t("form.languageLabel", "Preferred Language")}
-              </label>
+          {/* Preferred language */}
+          <div style={{ marginBottom: 16 }}>
+            <label htmlFor="reg-language" style={compactLabel}>
+              {t("form.languageLabel", "Preferred language")}
+            </label>
+            <div style={{ position: "relative" }}>
               <select
                 id="reg-language"
                 value={preferredLanguage}
                 onChange={(e) => setPreferredLanguage(e.target.value)}
-                className="w-full h-[44px] px-3 bg-[var(--color-surface-2)] border-2 border-[var(--color-border)] rounded-xl text-[var(--color-text)] text-[0.9rem] outline-none cursor-pointer appearance-none"
+                onFocus={() => setFocusedField("reg-language")}
+                onBlur={() => setFocusedField(null)}
+                style={
+                  focusedField === "reg-language"
+                    ? compactSelectFocused
+                    : compactSelectStyle
+                }
               >
                 {SUPPORTED_LANGUAGES.map((lang) => (
-                  <option
-                    key={lang.code}
-                    value={lang.code}
-                    className="bg-[var(--color-surface-2)]"
-                  >
+                  <option key={lang.code} value={lang.code}>
                     {lang.label}
                   </option>
                 ))}
               </select>
+              {/* Custom chevron for select */}
+              <span
+                style={{
+                  position: "absolute",
+                  right: 12,
+                  top: "50%",
+                  transform: "translateY(-50%)",
+                  pointerEvents: "none",
+                  color: "#94A3B8",
+                  fontSize: 11,
+                  lineHeight: 1,
+                }}
+                aria-hidden="true"
+              >
+                ▾
+              </span>
             </div>
+          </div>
 
-            {/* Submit */}
-            <Button
-              type="submit"
-              variant="primary"
-              size="lg"
-              loading={loading}
-              disabled={isDisabled}
-              className="w-full"
-            >
-              {t("auth.signUpButton", "Sign Up")}
-            </Button>
-          </form>
-        </div>
-
-        {/* Login link */}
-        <p className="text-center text-[var(--color-text-muted)] text-sm mt-6 pb-8">
-          {t("auth.haveAccount", "Already have an account?")}{" "}
-          <Link
-            to="/login"
-            className="text-[var(--color-primary)] font-semibold no-underline hover:underline"
+          {/* Submit */}
+          <motion.button
+            type="submit"
+            disabled={isDisabled}
+            whileHover={!isDisabled ? { scale: 1.02 } : {}}
+            whileTap={!isDisabled ? { scale: 0.97 } : {}}
+            style={buttonStyle}
           >
-            {t("auth.signIn", "Sign In")}
-          </Link>
-        </p>
+            {loading ? (
+              <span
+                style={{
+                  width: 16,
+                  height: 16,
+                  border: "2.5px solid rgba(255,255,255,0.35)",
+                  borderTopColor: "#FFFFFF",
+                  borderRadius: "50%",
+                  display: "inline-block",
+                  animation: "spin 0.7s linear infinite",
+                }}
+                aria-hidden="true"
+              />
+            ) : null}
+            {loading ? t("auth.loggingIn", "Creating account...") : t("auth.signUpButton", "Sign Up")}
+          </motion.button>
+        </form>
+      </div>
+
+      {/* Login link */}
+      <p
+        style={{
+          textAlign: "center",
+          fontSize: 14,
+          color: "#64748B",
+          marginTop: 14,
+          marginBottom: 0,
+        }}
+      >
+        {t("auth.haveAccount", "Already have an account?")}{" "}
+        <Link
+          to="/login"
+          style={{
+            color: "#F97316",
+            fontWeight: 700,
+            textDecoration: "none",
+          }}
+        >
+          {t("auth.signIn", "Sign In")}
+        </Link>
+      </p>
     </>
   );
 }

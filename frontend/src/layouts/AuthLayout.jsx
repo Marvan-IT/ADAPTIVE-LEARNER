@@ -136,7 +136,7 @@ export default function AuthLayout() {
         </div>
 
         {/* Centered form area */}
-        <main className="flex-1 flex items-start lg:items-center justify-center px-6 py-4 lg:px-12 lg:py-4">
+        <main className="flex-1 flex items-center justify-center px-6 py-6 lg:px-12 lg:py-6">
           <div className="w-full max-w-[420px]">
             <AnimatePresence mode="wait">
               <motion.div

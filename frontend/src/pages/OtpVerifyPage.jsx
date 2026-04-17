@@ -5,10 +5,98 @@ import { motion } from "framer-motion";
 import { AlertCircle, CheckCircle2, Mail } from "lucide-react";
 import { verifyOtp, resendOtp } from "../api/auth";
 import { useAuth } from "../context/AuthContext";
-import { Button } from "../components/ui";
 
 const RESEND_COOLDOWN = 60;
 
+// ── Shared style tokens ────────────────────────────────────────────────────────
+const card = {
+  background: "#fff",
+  borderRadius: 20,
+  padding: "32px 28px",
+  boxShadow: "0 4px 24px rgba(0,0,0,0.07)",
+};
+
+const errorBannerStyle = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  borderRadius: 12,
+  padding: "12px 16px",
+  marginBottom: 20,
+  fontSize: 14,
+  color: "#DC2626",
+  background: "rgba(239,68,68,0.06)",
+  border: "1px solid rgba(239,68,68,0.2)",
+};
+
+const successBannerStyle = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  borderRadius: 12,
+  padding: "12px 16px",
+  marginBottom: 20,
+  fontSize: 14,
+  color: "#16A34A",
+  background: "rgba(34,197,94,0.06)",
+  border: "1px solid rgba(34,197,94,0.2)",
+};
+
+const getButtonStyle = (enabled) => ({
+  width: "100%",
+  height: 48,
+  background: enabled ? "linear-gradient(135deg, #F97316, #EA580C)" : "#FDBA74",
+  color: "#fff",
+  border: "none",
+  borderRadius: 9999,
+  fontSize: 15,
+  fontWeight: 700,
+  cursor: enabled ? "pointer" : "not-allowed",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: 8,
+  transition: "all 0.2s",
+  marginBottom: 12,
+});
+
+const bottomLink = {
+  textAlign: "center",
+  fontSize: 14,
+  color: "#64748B",
+  marginTop: 20,
+};
+
+const orangeLink = {
+  color: "#F97316",
+  fontWeight: 600,
+  textDecoration: "none",
+};
+
+// Per-digit input style based on state
+const getDigitStyle = (digit, isFocused, isDisabled) => ({
+  width: 48,
+  height: 54,
+  textAlign: "center",
+  fontSize: 22,
+  fontWeight: 700,
+  background: "#F8FAFC",
+  border: isFocused
+    ? "1.5px solid #F97316"
+    : digit
+    ? "1.5px solid rgba(249,115,22,0.5)"
+    : "1.5px solid #E2E8F0",
+  borderRadius: 12,
+  color: "#1E293B",
+  outline: "none",
+  transition: "all 0.2s",
+  boxShadow: isFocused ? "0 0 0 3px rgba(249,115,22,0.12)" : "none",
+  cursor: isDisabled ? "not-allowed" : "text",
+  caretColor: "#F97316",
+  boxSizing: "border-box",
+});
+
+// ── Component ──────────────────────────────────────────────────────────────────
 export default function OtpVerifyPage() {
   const { t } = useTranslation();
   const { setUser, setTokens, doRefresh } = useAuth();
@@ -24,6 +112,7 @@ export default function OtpVerifyPage() {
   const [loading, setLoading] = useState(false);
   const [resendLoading, setResendLoading] = useState(false);
   const [cooldown, setCooldown] = useState(0);
+  const [focusedIndex, setFocusedIndex] = useState(null);
 
   const inputRefs = useRef([]);
 
@@ -164,136 +253,151 @@ export default function OtpVerifyPage() {
 
   return (
     <>
-        {/* Card */}
-        <div className="bg-[var(--color-surface)] rounded-2xl p-8 shadow-sm">
-          {/* Animated mail icon */}
-          <div className="flex justify-center mb-6">
-            <motion.div
-              animate={{ y: [0, -6, 0] }}
-              transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
-              className="w-16 h-16 rounded-full bg-[var(--color-primary)]/10 flex items-center justify-center"
-            >
-              <Mail size={32} className="text-[var(--color-primary)]" aria-hidden="true" />
-            </motion.div>
-          </div>
-
-          {/* Heading */}
-          <h1 className="text-3xl font-bold text-[var(--color-text)] mb-2 text-center">
+      <div style={card}>
+        {/* Animated mail icon + heading */}
+        <div style={{ textAlign: "center", marginBottom: 20 }}>
+          <motion.div
+            animate={{ y: [0, -6, 0] }}
+            transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
+            style={{
+              width: 56,
+              height: 56,
+              borderRadius: "50%",
+              background: "rgba(249,115,22,0.1)",
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              marginBottom: 12,
+            }}
+          >
+            <Mail size={26} style={{ color: "#F97316" }} aria-hidden="true" />
+          </motion.div>
+          <h1
+            style={{
+              fontSize: 26,
+              fontWeight: 800,
+              color: "#1E293B",
+              margin: "0 0 4px",
+            }}
+          >
             {t("auth.checkEmail", "Check your email!")}
           </h1>
-          <p className="text-[var(--color-text-muted)] mb-8 text-center text-sm">
-            {t("auth.otpSentTo", "We sent a 6-digit code to")} <span className="font-semibold text-[var(--color-text)]">{email}</span>
-          </p>
-
-          {/* Error */}
-          {error && (
-            <motion.div
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: "auto" }}
-              className="flex items-center gap-2 rounded-[10px] px-4 py-3 mb-5 text-sm text-[var(--color-danger)]"
-              style={{
-                background: "color-mix(in srgb, var(--color-danger) 8%, transparent)",
-                border: "1px solid color-mix(in srgb, var(--color-danger) 40%, transparent)",
-              }}
-              role="alert"
-            >
-              <AlertCircle size={16} aria-hidden="true" />
-              {error}
-            </motion.div>
-          )}
-
-          {/* Success */}
-          {successMsg && (
-            <motion.div
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: "auto" }}
-              className="flex items-center gap-2 rounded-[10px] px-4 py-3 mb-5 text-sm text-[var(--color-success)]"
-              style={{
-                background: "color-mix(in srgb, var(--color-success) 8%, transparent)",
-                border: "1px solid color-mix(in srgb, var(--color-success) 40%, transparent)",
-              }}
-            >
-              <CheckCircle2 size={16} aria-hidden="true" />
-              {successMsg}
-            </motion.div>
-          )}
-
-          {/* OTP digit inputs */}
-          <fieldset
-            className="border-none p-0 m-0"
-            aria-label={t("auth.otpFieldset", "6-digit verification code")}
-          >
-            <div
-              className="flex gap-2.5 justify-center mb-8"
-              onPaste={handlePaste}
-            >
-              {digits.map((digit, index) => (
-                <input
-                  key={index}
-                  ref={(el) => { inputRefs.current[index] = el; }}
-                  type="text"
-                  inputMode="numeric"
-                  maxLength={1}
-                  value={digit}
-                  onChange={(e) => handleDigitChange(index, e.target.value)}
-                  onKeyDown={(e) => handleKeyDown(index, e)}
-                  aria-label={t("auth.otpDigitN", { n: index + 1 }, `Digit ${index + 1}`)}
-                  disabled={loading}
-                  autoFocus={index === 0}
-                  className={`w-[56px] h-[56px] text-center text-2xl font-bold bg-[var(--color-surface-2)] border-2 rounded-xl text-[var(--color-text)] outline-none transition-[border-color,transform,box-shadow] duration-150 caret-[var(--color-primary)] ${
-                    digit ? "border-[var(--color-primary)] scale-[1.04]" : "border-[var(--color-border)]"
-                  } ${loading ? "cursor-not-allowed" : "cursor-text"} focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/15`}
-                />
-              ))}
-            </div>
-          </fieldset>
-
-          {/* Submit button (manual) */}
-          <Button
-            type="button"
-            variant="primary"
-            size="lg"
-            loading={loading}
-            disabled={!allFilled || loading}
-            onClick={() => allFilled && submitOtp(digits.join(""))}
-            className="w-full mb-5"
-          >
-            {t("auth.verifyButton", "Verify Code")}
-          </Button>
-
-          {/* Resend */}
-          <p className="text-center text-[var(--color-text-muted)] text-sm mt-2">
-            {t("auth.didntGetCode", "Didn't get a code?")}{" "}
-            {cooldown > 0 ? (
-              <span className="text-[var(--color-text-muted)]">
-                {t("auth.resendIn", "Resend in {{s}}s", { s: cooldown })}
-              </span>
-            ) : (
-              <button
-                type="button"
-                onClick={handleResend}
-                disabled={resendLoading}
-                className={`bg-transparent border-none p-0 text-[var(--color-primary)] font-semibold text-sm underline underline-offset-2 ${
-                  resendLoading ? "cursor-wait" : "cursor-pointer"
-                }`}
-              >
-                {resendLoading
-                  ? t("auth.resending", "Resending...")
-                  : t("auth.resendCode", "Resend code")}
-              </button>
-            )}
+          <p style={{ fontSize: 14, color: "#94A3B8", margin: 0 }}>
+            {t("auth.otpSentTo", "We sent a 6-digit code to")}{" "}
+            <span style={{ fontWeight: 600, color: "#1E293B" }}>{email}</span>
           </p>
         </div>
 
-        {/* Back link */}
-        <p className="text-center text-[var(--color-text-muted)] text-sm mt-6">
-          <Link
-            to="/login"
-            className="text-[var(--color-primary)] no-underline font-medium hover:underline"
+        {/* Error banner */}
+        {error && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            style={errorBannerStyle}
+            role="alert"
           >
-            {t("auth.backToLogin", "Back to Login")}
-          </Link>
+            <AlertCircle size={16} aria-hidden="true" />
+            {error}
+          </motion.div>
+        )}
+
+        {/* Success banner */}
+        {successMsg && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            style={successBannerStyle}
+          >
+            <CheckCircle2 size={16} aria-hidden="true" />
+            {successMsg}
+          </motion.div>
+        )}
+
+        {/* 6-digit OTP inputs */}
+        <fieldset
+          style={{ border: "none", padding: 0, margin: 0 }}
+          aria-label={t("auth.otpFieldset", "6-digit verification code")}
+        >
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "center",
+              gap: 10,
+              marginBottom: 24,
+            }}
+            onPaste={handlePaste}
+          >
+            {digits.map((digit, index) => (
+              <input
+                key={index}
+                ref={(el) => { inputRefs.current[index] = el; }}
+                type="text"
+                inputMode="numeric"
+                maxLength={1}
+                value={digit}
+                onChange={(e) => handleDigitChange(index, e.target.value)}
+                onKeyDown={(e) => handleKeyDown(index, e)}
+                onFocus={() => setFocusedIndex(index)}
+                onBlur={() => setFocusedIndex(null)}
+                aria-label={t("auth.otpDigitN", { n: index + 1 }, `Digit ${index + 1}`)}
+                disabled={loading}
+                autoFocus={index === 0}
+                style={getDigitStyle(digit, focusedIndex === index, loading)}
+              />
+            ))}
+          </div>
+        </fieldset>
+
+        {/* Verify button */}
+        <button
+          type="button"
+          disabled={!allFilled || loading}
+          onClick={() => allFilled && submitOtp(digits.join(""))}
+          style={getButtonStyle(allFilled && !loading)}
+        >
+          {loading
+            ? t("auth.verifying", "Verifying...")
+            : t("auth.verifyButton", "Verify Code")}
+        </button>
+
+        {/* Resend */}
+        <p style={{ textAlign: "center", fontSize: 13, color: "#64748B", margin: 0 }}>
+          {t("auth.didntGetCode", "Didn't get a code?")}{" "}
+          {cooldown > 0 ? (
+            <span style={{ color: "#94A3B8" }}>
+              {t("auth.resendIn", "Resend in {{s}}s", { s: cooldown })}
+            </span>
+          ) : (
+            <button
+              type="button"
+              onClick={handleResend}
+              disabled={resendLoading}
+              style={{
+                background: "transparent",
+                border: "none",
+                padding: 0,
+                color: "#F97316",
+                fontWeight: 600,
+                fontSize: 13,
+                textDecoration: "underline",
+                textUnderlineOffset: 2,
+                cursor: resendLoading ? "wait" : "pointer",
+              }}
+            >
+              {resendLoading
+                ? t("auth.resending", "Resending...")
+                : t("auth.resendCode", "Resend code")}
+            </button>
+          )}
         </p>
+      </div>
+
+      {/* Back to login */}
+      <p style={bottomLink}>
+        <Link to="/login" style={orangeLink}>
+          {t("auth.backToLogin", "Back to Login")}
+        </Link>
+      </p>
     </>
   );
 }
