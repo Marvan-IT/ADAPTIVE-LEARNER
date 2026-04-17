@@ -11,6 +11,7 @@ can log in immediately without going through the OTP flow.
 
 import argparse
 import asyncio
+import os
 import sys
 from pathlib import Path
 
@@ -23,17 +24,24 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from auth.models import User
-from config import DATABASE_URL
+
+# Prefer the environment variable (set by Docker Compose) over .env file.
+# This ensures the script works inside Docker where DATABASE_URL points to
+# the 'db' service hostname, not 'localhost'.
+_db_url = os.environ.get("DATABASE_URL", "")
+if not _db_url:
+    from config import DATABASE_URL
+    _db_url = DATABASE_URL
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 async def main(email: str, password: str) -> None:
-    if not DATABASE_URL:
-        print("ERROR: DATABASE_URL is not set. Check backend/.env")
+    if not _db_url:
+        print("ERROR: DATABASE_URL is not set. Check backend/.env or environment.")
         sys.exit(1)
 
-    engine = create_async_engine(DATABASE_URL, echo=False)
+    engine = create_async_engine(_db_url, echo=False)
     async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
     async with async_session() as db:

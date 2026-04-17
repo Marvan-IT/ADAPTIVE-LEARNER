@@ -135,6 +135,18 @@ async def lifespan(app: FastAPI):
     _openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
     _load_translation_cache()
 
+    # ── Verify tables exist (helpful error if migrations haven't run) ───────────
+    try:
+        from db.connection import get_db as _get_db_check
+        async for _check_db in _get_db_check():
+            await _check_db.execute(text("SELECT 1 FROM students LIMIT 0"))
+            break
+    except Exception:
+        logger.warning(
+            "[startup] Database tables not found. Run 'python -m scripts.bootstrap_db' "
+            "or 'alembic upgrade head' before starting the server."
+        )
+
     # ── Recover PROCESSING books after restart (handles EC2 crash mid-pipeline) ──
     try:
         from db.connection import get_db as _get_db_startup_recover
