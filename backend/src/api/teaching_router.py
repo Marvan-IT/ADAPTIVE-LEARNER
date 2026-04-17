@@ -807,13 +807,13 @@ async def resume_session(
             TeachingSession.book_slug == book_slug,
             TeachingSession.phase != "DONE",
         )
-        .order_by(TeachingSession.created_at.desc())
+        .order_by(TeachingSession.started_at.desc())
         .limit(1)
     )
     session = result.scalar_one_or_none()
     if not session:
         raise HTTPException(status_code=404, detail="No active session found")
-    return session
+    return SessionResponse.model_validate(session)
 
 
 @router.get("/sessions/{session_id}", response_model=SessionResponse)
@@ -1236,7 +1236,40 @@ async def complete_chunk(
         and not c.get("is_optional", False)
         and not c.get("is_hidden", False)
     }
-    all_study_complete = bool(required_ids) and required_ids.issubset(completed_ids)
+    all_study_complete = required_ids.issubset(completed_ids)
+
+    # Record mastery when all required chunks are complete (mirrors evaluate_chunk_answers logic)
+    if all_study_complete:
+        from datetime import datetime, timezone as _tz
+        session.concept_mastered = True
+        session.phase = "COMPLETED"
+        session.completed_at = datetime.now(_tz.utc)
+        _existing_result = await db.execute(
+            select(StudentMastery).where(
+                StudentMastery.student_id == session.student_id,
+                StudentMastery.concept_id == session.concept_id,
+            )
+        )
+        _existing_mastery = _existing_result.scalar_one_or_none()
+        if _existing_mastery:
+            _existing_mastery.session_id = session.id
+            _existing_mastery.mastered_at = datetime.now(_tz.utc)
+        else:
+            db.add(StudentMastery(
+                student_id=session.student_id,
+                concept_id=session.concept_id,
+                session_id=session.id,
+            ))
+        logger.info(
+            "[complete-chunk] concept MASTERED: session_id=%s concept_id=%s score=%s",
+            session_id, session.concept_id, score,
+        )
+        await db.flush()
+        try:
+            from gamification.xp_engine import award_mastery_xp
+            await award_mastery_xp(db=db, student_id=session.student_id, session_id=session.id, score=score)
+        except Exception:
+            logger.exception("[complete-chunk] mastery XP award failed")
 
     await db.commit()
     return CompleteChunkResponse(
@@ -1308,7 +1341,7 @@ async def complete_chunk_item(
         and not c.get("is_optional", False)
         and not c.get("is_hidden", False)
     }
-    all_study_complete = bool(required_ids) and required_ids.issubset(completed_ids)
+    all_study_complete = required_ids.issubset(completed_ids)
 
     session.phase = "SELECTING_CHUNK"
     await db.commit()
@@ -1473,7 +1506,7 @@ async def evaluate_chunk_answers(
                 and not c.get("is_hidden", False)
             }
             completed_ids = set(existing_progress.keys())
-            all_study_complete = bool(required_ids) and required_ids.issubset(completed_ids)
+            all_study_complete = required_ids.issubset(completed_ids)
         except Exception:
             logger.exception("[evaluate-chunk] all_study_complete check failed")
 
@@ -1516,7 +1549,7 @@ async def evaluate_chunk_answers(
             mastery_xp_data = mastery_xp_result
             chunk_badges = chunk_badges + mastery_xp_result.get("new_badges", [])
 
-        await db.commit()
+    await db.commit()
 
     return ChunkEvaluateResponse(
         passed=passed,

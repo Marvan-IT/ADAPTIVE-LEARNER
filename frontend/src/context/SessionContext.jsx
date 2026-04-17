@@ -708,6 +708,11 @@ export function SessionProvider({ children }) {
           if (res.data.next_mode) {
             useAdaptiveStore.getState().setMode(res.data.next_mode);
           }
+          if (res.data.all_study_complete) {
+            refreshMastery();
+            dispatch({ type: "SESSION_COMPLETED" });
+            return;
+          }
         } catch (err) {
           console.error("[finishCards] auto-complete chunk failed:", err);
           dispatch({ type: "ERROR", payload: i18n.t("error.chunkCompleteFailed", "Failed to save your progress. Please try again.") });

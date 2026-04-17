@@ -212,30 +212,10 @@ export default function LoginPage() {
           </div>
 
           {/* Password field */}
-          <div style={{ marginBottom: 24 }}>
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                marginBottom: 6,
-              }}
-            >
-              <label htmlFor="login-password" style={{ ...labelStyle, marginBottom: 0 }}>
-                {t("auth.passwordLabel", "Password")}
-              </label>
-              <Link
-                to="/forgot-password"
-                style={{
-                  fontSize: 13,
-                  fontWeight: 600,
-                  color: "#F97316",
-                  textDecoration: "none",
-                }}
-              >
-                {t("auth.forgotPassword", "Forgot password?")}
-              </Link>
-            </div>
+          <div style={{ marginBottom: 10 }}>
+            <label htmlFor="login-password" style={labelStyle}>
+              {t("auth.passwordLabel", "Password")}
+            </label>
             <div style={{ position: "relative" }}>
               <Lock
                 size={18}
@@ -254,6 +234,19 @@ export default function LoginPage() {
                 required
                 style={focusedField === "password" ? inputFocused : inputBase}
               />
+            </div>
+            <div style={{ textAlign: "right", marginTop: 8 }}>
+              <Link
+                to="/forgot-password"
+                style={{
+                  fontSize: 13,
+                  fontWeight: 600,
+                  color: "#F97316",
+                  textDecoration: "none",
+                }}
+              >
+                {t("auth.forgotPassword", "Forgot password?")}
+              </Link>
             </div>
           </div>
 

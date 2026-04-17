@@ -96,7 +96,7 @@ const compactLabel = {
 const compactCard = {
   background: "#FFFFFF",
   borderRadius: 20,
-  padding: "24px 24px",
+  padding: "20px 20px",
   boxShadow: "0 4px 24px rgba(0,0,0,0.07)",
 };
 
@@ -234,7 +234,7 @@ export default function RegisterPage() {
       <div style={compactCard}>
         <h1
           style={{
-            fontSize: 22,
+            fontSize: 20,
             fontWeight: 800,
             color: "#1E293B",
             marginBottom: 4,
@@ -247,7 +247,7 @@ export default function RegisterPage() {
           style={{
             fontSize: 13,
             color: "#94A3B8",
-            marginBottom: 16,
+            marginBottom: 12,
             marginTop: 0,
           }}
         >

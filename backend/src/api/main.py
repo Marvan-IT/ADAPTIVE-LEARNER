@@ -518,9 +518,20 @@ async def learning_path(request: Request, req: LearningPathRequest, book_slug: s
     """Compute the optimal learning path to reach a target concept."""
     await _require_visible_book(book_slug, db)
     result = _chunk_knowledge_svc.get_learning_path(book_slug, req.target_concept_id, req.mastered_concepts)
+    path_steps = []
+    for step in result["path"]:
+        if isinstance(step, str):
+            node = _chunk_knowledge_svc.get_concept_node(book_slug, step)
+            path_steps.append(LearningPathStep(
+                concept_id=step,
+                concept_title=node["title"] if node else step,
+                chapter="", section="",
+            ))
+        else:
+            path_steps.append(LearningPathStep(**step))
     return LearningPathResponse(
         target=result["target"],
-        path=[LearningPathStep(**step) for step in result["path"]],
+        path=path_steps,
         total_steps=result["total_steps"],
     )
 

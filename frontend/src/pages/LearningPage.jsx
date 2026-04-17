@@ -34,7 +34,6 @@ export default function LearningPage() {
 
   const [resolvedBookTitle, setResolvedBookTitle] = useState("");
   const [prereqWarning, setPrereqWarning] = useState(null);
-  const [prereqChecked, setPrereqChecked] = useState(false);
   const [chunkAnswers, setChunkAnswers] = useState({});
 
   // Per-chunk picker state
@@ -42,6 +41,9 @@ export default function LearningPage() {
   const [chunkStyle, setChunkStyle] = useState(globalStyle || "default");
   const [chunkInterests, setChunkInterests] = useState([]);
   const [chunkInterestInput, setChunkInterestInput] = useState("");
+
+  // Track which concept we've already initiated to prevent duplicate starts
+  const [startedForConcept, setStartedForConcept] = useState(null);
 
   // Fetch book title from books API so we don't show raw slug
   useEffect(() => {
@@ -55,61 +57,65 @@ export default function LearningPage() {
     }
   }, [bookSlug]);
 
+  // Main lesson initialization — fires once per concept when student is ready
   useEffect(() => {
-    if (conceptId && phase === "IDLE" && !prereqChecked) {
-      let cancelled = false;
-      setPrereqChecked(true);
-      const decodedConceptId = decodeURIComponent(conceptId);
+    if (!conceptId || !student || startedForConcept === conceptId) return;
 
-      const launchLesson = () => { if (!cancelled) startLesson(decodedConceptId, null, []); };
+    // Reset previous session state for new concept
+    reset();
+    setPrereqWarning(null);
+    setStartedForConcept(conceptId);
 
-      const tryResume = () => {
-        const savedSessionId = localStorage.getItem(`ada_session_${student?.id}_${decodedConceptId}`);
-        if (savedSessionId) {
-          getSession(savedSessionId)
-            .then(res => {
-              if (cancelled) return;
-              const existing = res.data;
-              if (existing && existing.phase !== "COMPLETED") {
-                // Restore session state then load chunk list to resume at SELECTING_CHUNK
-                dispatch({ type: "SESSION_CREATED", payload: existing });
-                return getChunkList(existing.id).then(chunkRes => {
-                  if (cancelled) return;
-                  const chunkListData = chunkRes.data;
-                  if (chunkListData.chunks && chunkListData.chunks.length > 0) {
-                    dispatch({ type: "CHUNK_LIST_LOADED", payload: chunkListData });
-                  } else {
-                    launchLesson();
-                  }
-                });
-              } else {
-                launchLesson();
-              }
-            })
-            .catch(() => { if (!cancelled) launchLesson(); });
+    let cancelled = false;
+    const decodedConceptId = decodeURIComponent(conceptId);
+
+    const launchLesson = () => { if (!cancelled) startLesson(decodedConceptId, null, []); };
+
+    const tryResume = () => {
+      const savedSessionId = localStorage.getItem(`ada_session_${student?.id}_${decodedConceptId}`);
+      if (savedSessionId) {
+        getSession(savedSessionId)
+          .then(res => {
+            if (cancelled) return;
+            const existing = res.data;
+            if (existing && existing.phase !== "COMPLETED") {
+              dispatch({ type: "SESSION_CREATED", payload: existing });
+              return getChunkList(existing.id).then(chunkRes => {
+                if (cancelled) return;
+                const chunkListData = chunkRes.data;
+                if (chunkListData.chunks && chunkListData.chunks.length > 0) {
+                  dispatch({ type: "CHUNK_LIST_LOADED", payload: chunkListData });
+                } else {
+                  launchLesson();
+                }
+              });
+            } else {
+              launchLesson();
+            }
+          })
+          .catch(() => { if (!cancelled) launchLesson(); });
+      } else {
+        launchLesson();
+      }
+    };
+
+    checkConceptReadiness(decodedConceptId, student.id, bookSlug)
+      .then(res => {
+        if (cancelled) return;
+        const data = res.data;
+        if (!data.all_prerequisites_met && data.unmet_prerequisites.length > 0) {
+          setPrereqWarning({ unmet: data.unmet_prerequisites });
         } else {
-          launchLesson();
+          tryResume();
         }
-      };
+      })
+      .catch((err) => {
+        console.error("[LearningPage] prereq check failed:", err);
+        if (!cancelled) launchLesson();
+      });
 
-      checkConceptReadiness(decodedConceptId, student.id, bookSlug)
-        .then(res => {
-          if (cancelled) return;
-          const data = res.data;
-          if (!data.all_prerequisites_met && data.unmet_prerequisites.length > 0) {
-            setPrereqWarning({ unmet: data.unmet_prerequisites });
-          } else {
-            tryResume();
-          }
-        })
-        .catch((err) => {
-          console.error("[LearningPage] prereq check failed:", err);
-          if (!cancelled) launchLesson();
-        });
-
-      return () => { cancelled = true; };
-    }
-  }, [conceptId, phase, prereqChecked]);
+    return () => { cancelled = true; };
+  }, [conceptId, student]);
 
   useEffect(() => {
     return () => reset();
@@ -209,8 +215,6 @@ export default function LearningPage() {
   // ── Subsection picker ──────────────────────────────────────────────────────
   if (phase === "SELECTING_CHUNK") {
     const visibleChunks = (chunkList || []).slice().sort((a, b) => {
-      if (a.chunk_type === "chapter_review" && b.chunk_type !== "chapter_review") return 1;
-      if (b.chunk_type === "chapter_review" && a.chunk_type !== "chapter_review") return -1;
       return (a.order_index ?? 0) - (b.order_index ?? 0);
     });
 
