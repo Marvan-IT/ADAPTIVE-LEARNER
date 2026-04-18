@@ -506,8 +506,26 @@ export default function AdminBookContentPage() {
 
       {/* Header */}
       <div style={{ padding: "12px 20px", borderBottom: "1px solid #E2E8F0", display: "flex", alignItems: "center", gap: "16px", flexShrink: 0, backgroundColor: "#FFFFFF" }}>
-        <h2 style={{ fontSize: "18px", fontWeight: 600, color: "#0F172A", textTransform: "capitalize" }}>
+        <h2 style={{ fontSize: "18px", fontWeight: 600, color: "#0F172A", textTransform: "capitalize", display: "flex", alignItems: "center", gap: "8px" }}>
           {bookTitle || slug.replace(/_/g, " ")} — Content Editor
+          <button
+            onClick={async () => {
+              const newTitle = prompt("Rename book:", bookTitle || slug.replace(/_/g, " "));
+              if (newTitle && newTitle.trim()) {
+                try {
+                  const { renameBook } = await import("../api/admin");
+                  await renameBook(slug, newTitle.trim());
+                  setBookTitle(newTitle.trim());
+                } catch (e) {
+                  alert("Failed to rename book: " + (e.response?.data?.detail || e.message));
+                }
+              }
+            }}
+            title="Rename book"
+            style={{ background: "none", border: "none", cursor: "pointer", padding: "4px", color: "#94A3B8", fontSize: "14px" }}
+          >
+            ✎
+          </button>
         </h2>
         <span style={{ fontSize: "12px", color: "#22C55E", backgroundColor: "#F0FDF4", padding: "2px 10px", borderRadius: "9999px", fontWeight: 500 }}>Published</span>
         {isDirty && (

@@ -7,6 +7,8 @@ export const toggleSubjectVisibility = (slug, isHidden) =>
   api.patch(`/api/admin/subjects/${slug}/visibility`, { is_hidden: isHidden });
 export const toggleBookVisibility = (slug, isHidden) =>
   api.patch(`/api/admin/books/${slug}/visibility`, { is_hidden: isHidden });
+export const renameBook = (slug, title) =>
+  api.patch(`/api/admin/books/${slug}/rename`, { title });
 
 export const getAdminBooks = (subject) =>
   api.get("/api/admin/books", { params: subject ? { subject } : {} });

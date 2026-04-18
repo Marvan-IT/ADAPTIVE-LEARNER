@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { Users, Activity, BookOpen, BarChart3, Settings, Plus, Trash2, Eye, EyeOff } from "lucide-react";
+import { Users, Activity, BookOpen, BarChart3, Settings, Plus, Trash2, Eye, EyeOff, Pencil } from "lucide-react";
 import { getSubjects, createSubject, deleteSubject, toggleSubjectVisibility, getDashboard } from "../api/admin";
 import { useToast } from "../components/ui/Toast";
 import { useDialog } from "../context/DialogProvider";
@@ -307,6 +307,31 @@ export default function AdminPage() {
                   onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}
                 >
                   {s.is_hidden ? <Eye size={14} color="#22C55E" /> : <EyeOff size={14} color="#F59E0B" />}
+                </button>
+                <button
+                  onClick={async () => {
+                    const newLabel = prompt("Rename subject:", s.label);
+                    if (newLabel && newLabel.trim() && newLabel.trim() !== s.label) {
+                      try {
+                        const api = await import("../api/client");
+                        await api.default.put(`/api/admin/subjects/${s.slug}`, { label: newLabel.trim() });
+                        loadSubjects();
+                      } catch (e) {
+                        toast({ variant: "danger", title: "Error", description: e.response?.data?.detail || "Failed to rename subject" });
+                      }
+                    }
+                  }}
+                  title="Rename subject"
+                  style={{
+                    width: "28px", height: "28px", borderRadius: "50%",
+                    border: "none", backgroundColor: "transparent", cursor: "pointer",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    transition: "background-color 0.15s",
+                  }}
+                  onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = "#E0F2FE"; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = "transparent"; }}
+                >
+                  <Pencil size={14} color="#3B82F6" />
                 </button>
                 <button
                   onClick={() => handleDeleteSubject(s)}

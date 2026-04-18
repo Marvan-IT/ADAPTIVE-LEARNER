@@ -304,6 +304,28 @@ async def toggle_book_visibility(
 
 
 @limiter.limit("30/minute")
+@router.patch("/api/admin/books/{slug}/rename")
+async def rename_book(
+    slug: str,
+    request: Request,
+    _user: User = Depends(require_admin),
+    db: AsyncSession = Depends(get_db),
+):
+    """Rename a book's display title."""
+    body = await request.json()
+    title = body.get("title", "").strip()
+    if not title:
+        raise HTTPException(400, "title is required")
+    book = (await db.execute(select(Book).where(Book.book_slug == slug))).scalar_one_or_none()
+    if not book:
+        raise HTTPException(404, f"Book '{slug}' not found")
+    book.title = title
+    await db.commit()
+    logger.info("[admin] Book renamed: slug=%s title=%s by admin=%s", slug, title, str(_user.id))
+    return {"slug": book.book_slug, "title": book.title}
+
+
+@limiter.limit("30/minute")
 @router.get("/api/admin/books/{slug}/status")
 async def get_book_status(
     request: Request,
