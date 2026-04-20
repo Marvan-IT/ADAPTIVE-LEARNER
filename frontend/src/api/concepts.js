@@ -19,3 +19,6 @@ export const checkConceptReadiness = (conceptId, studentId, bookSlug = "prealgeb
   api.get(`/api/v2/concepts/${encodeURIComponent(conceptId)}/readiness`, {
     params: { student_id: studentId, book_slug: bookSlug },
   });
+
+export const getChunksPreview = (bookSlug, conceptId) =>
+  api.get(`/api/v2/concepts/${encodeURIComponent(bookSlug)}/${encodeURIComponent(conceptId)}/chunks-preview`);

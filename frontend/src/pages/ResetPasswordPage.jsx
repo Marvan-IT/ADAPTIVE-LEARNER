@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { useNavigate, useLocation, Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { motion } from "framer-motion";
-import { Lock, AlertCircle, ArrowLeft } from "lucide-react";
+import { Lock, AlertCircle, ArrowLeft, Eye, EyeOff } from "lucide-react";
 import { resetPassword } from "../api/auth";
 import { StrengthBar, passwordStrength } from "../components/ui";
 
@@ -123,6 +123,8 @@ export default function ResetPasswordPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [focusedField, setFocusedField] = useState(null);
+  const [showNewPw, setShowNewPw] = useState(false);
+  const [showConfirmPw, setShowConfirmPw] = useState(false);
 
   // Redirect to forgot-password if no email in state
   useEffect(() => {
@@ -234,7 +236,7 @@ export default function ResetPasswordPage() {
               />
               <input
                 id="reset-password"
-                type="password"
+                type={showNewPw ? "text" : "password"}
                 autoComplete="new-password"
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
@@ -243,8 +245,31 @@ export default function ResetPasswordPage() {
                 placeholder="••••••••"
                 required
                 autoFocus
-                style={focusedField === "reset-password" ? inputFocused : inputBase}
+                style={{
+                  ...(focusedField === "reset-password" ? inputFocused : inputBase),
+                  paddingRight: 44,
+                }}
               />
+              <button
+                type="button"
+                onClick={() => setShowNewPw((p) => !p)}
+                aria-label={showNewPw ? t("auth.hidePassword", "Hide password") : t("auth.showPassword", "Show password")}
+                style={{
+                  position: "absolute",
+                  right: 14,
+                  top: "50%",
+                  transform: "translateY(-50%)",
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  padding: 0,
+                  color: "#94A3B8",
+                  display: "flex",
+                  alignItems: "center",
+                }}
+              >
+                {showNewPw ? <EyeOff size={18} /> : <Eye size={18} />}
+              </button>
             </div>
             <StrengthBar password={newPassword} />
           </div>
@@ -262,7 +287,7 @@ export default function ResetPasswordPage() {
               />
               <input
                 id="reset-confirm"
-                type="password"
+                type={showConfirmPw ? "text" : "password"}
                 autoComplete="new-password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
@@ -270,8 +295,28 @@ export default function ResetPasswordPage() {
                 onBlur={() => setFocusedField(null)}
                 placeholder="••••••••"
                 required
-                style={confirmInputStyle}
+                style={{ ...confirmInputStyle, paddingRight: 44 }}
               />
+              <button
+                type="button"
+                onClick={() => setShowConfirmPw((p) => !p)}
+                aria-label={showConfirmPw ? t("auth.hidePassword", "Hide password") : t("auth.showPassword", "Show password")}
+                style={{
+                  position: "absolute",
+                  right: 14,
+                  top: "50%",
+                  transform: "translateY(-50%)",
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  padding: 0,
+                  color: "#94A3B8",
+                  display: "flex",
+                  alignItems: "center",
+                }}
+              >
+                {showConfirmPw ? <EyeOff size={18} /> : <Eye size={18} />}
+              </button>
             </div>
             {confirmHasMismatch && (
               <p

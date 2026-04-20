@@ -64,6 +64,7 @@ from api.teaching_schemas import (
     CompleteChunkItemResponse,
     ChunkSummary, ChunkListResponse,
     StudentLanguageResponse,
+    ChunkPreviewItem, ChunkPreviewResponse,
 )
 from api.rate_limiter import limiter
 from api.prompts import _language_instruction
@@ -2278,3 +2279,139 @@ async def list_available_books(db: AsyncSession = Depends(get_db)):
         for r in rows
         if r[2] not in hidden_subjects and r[0] in active_books
     ]
+
+
+# ═══════════════════════════════════════════════════════════════════
+# CHUNKS PREVIEW (no session required)
+# ═══════════════════════════════════════════════════════════════════
+
+@router.get(
+    "/concepts/{book_slug}/{concept_id}/chunks-preview",
+    response_model=ChunkPreviewResponse,
+    summary="Preview chunk list for a concept without creating a session",
+)
+@limiter.limit("60/minute")
+async def get_chunks_preview(
+    request: Request,
+    book_slug: str,
+    concept_id: str,
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(get_current_user),
+):
+    """Return a lightweight list of chunk summaries for a concept.
+
+    Does NOT create or require a teaching session — intended for the concept
+    map and lesson selection UI to display what content a concept contains
+    before the student commits to starting a session.
+
+    Excludes hidden chunks and chunks shorter than 100 characters (typically
+    placeholder or stub entries).
+    """
+    # Fetch all visible, substantive chunks for this concept ordered by position
+    result = await db.execute(
+        select(ConceptChunk)
+        .where(
+            ConceptChunk.book_slug == book_slug,
+            ConceptChunk.concept_id == concept_id,
+            ConceptChunk.is_hidden.is_(False),
+            func.length(ConceptChunk.text) >= 100,
+        )
+        .order_by(ConceptChunk.order_index)
+    )
+    chunks = result.scalars().all()
+
+    if not chunks:
+        logger.info(
+            "[chunks-preview] no visible chunks for book_slug=%s concept_id=%s",
+            book_slug, concept_id,
+        )
+        return ChunkPreviewResponse(concept_id=concept_id, chunks=[])
+
+    # Bulk-check which chunks have associated images (one query, not N)
+    chunk_ids = [c.id for c in chunks]
+    img_result = await db.execute(
+        select(ChunkImage.chunk_id)
+        .where(ChunkImage.chunk_id.in_(chunk_ids))
+        .distinct()
+    )
+    chunks_with_images: set = {row[0] for row in img_result.fetchall()}
+
+    items = [
+        ChunkPreviewItem(
+            heading=c.heading or "",
+            chunk_type=c.chunk_type or _get_chunk_type(c.heading or "", c.text or ""),
+            has_images=c.id in chunks_with_images,
+            has_mcq=_heading_has_mcq(c.heading or ""),
+            is_optional=bool(c.is_optional),
+            exam_disabled=bool(c.exam_disabled),
+            order_index=c.order_index,
+        )
+        for c in chunks
+    ]
+
+    logger.info(
+        "[chunks-preview] book_slug=%s concept_id=%s chunks=%d",
+        book_slug, concept_id, len(items),
+    )
+    return ChunkPreviewResponse(concept_id=concept_id, chunks=items)
+
+
+# ── Student self-profile update ──────────────────────────────────────────
+
+
+@router.patch("/students/{student_id}/profile", summary="Update student profile")
+@limiter.limit("30/minute")
+async def update_student_profile(
+    request: Request,
+    student_id: UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update editable student profile fields (display_name, age, preferred_style, interests)."""
+    await _validate_student_ownership(user, student_id, db)
+    student = await db.get(Student, student_id)
+    if not student:
+        raise HTTPException(404, "Student not found")
+
+    body = await request.json()
+    allowed_styles = {"default", "pirate", "astronaut", "gamer"}
+
+    if "display_name" in body:
+        val = str(body["display_name"]).strip()
+        if not val:
+            raise HTTPException(400, "display_name cannot be empty")
+        if len(val) > 100:
+            raise HTTPException(400, "display_name must be 100 characters or fewer")
+        student.display_name = val
+
+    if "age" in body:
+        if body["age"] is None:
+            student.age = None
+        else:
+            age_val = int(body["age"])
+            if age_val < 5 or age_val > 120:
+                raise HTTPException(400, "age must be between 5 and 120")
+            student.age = age_val
+
+    if "preferred_style" in body:
+        style = str(body["preferred_style"])
+        if style not in allowed_styles:
+            raise HTTPException(400, f"preferred_style must be one of: {sorted(allowed_styles)}")
+        student.preferred_style = style
+
+    if "interests" in body:
+        interests = body["interests"]
+        if not isinstance(interests, list):
+            raise HTTPException(400, "interests must be a list")
+        student.interests = [str(i).strip() for i in interests if str(i).strip()][:20]
+
+    await db.commit()
+    await db.refresh(student)
+    logger.info("[profile] Student %s updated own profile", student_id)
+    return {
+        "id": str(student.id),
+        "display_name": student.display_name,
+        "age": student.age,
+        "preferred_style": student.preferred_style,
+        "interests": student.interests or [],
+    }

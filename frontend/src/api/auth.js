@@ -10,3 +10,5 @@ export const resetPassword = (email, otp, new_password) =>
   api.post("/api/v1/auth/reset-password", { email, otp, new_password });
 export const resendOtp = (email, purpose) => api.post("/api/v1/auth/resend-otp", { email, purpose });
 export const logoutUser = (refresh_token) => api.post("/api/v1/auth/logout", { refresh_token });
+export const changePassword = (current_password, new_password) =>
+  api.post("/api/v1/auth/change-password", { current_password, new_password });

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useNavigate, useLocation, Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { motion } from "framer-motion";
-import { Mail, Lock, AlertCircle, LogIn, CheckCircle2 } from "lucide-react";
+import { Mail, Lock, AlertCircle, LogIn, CheckCircle2, Eye, EyeOff } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 
 // --- Style constants ---
@@ -68,6 +68,7 @@ export default function LoginPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [focusedField, setFocusedField] = useState(null);
+  const [showPassword, setShowPassword] = useState(false);
 
   const from = location.state?.from?.pathname || null;
   const successMsg = location.state?.successMsg || null;
@@ -224,7 +225,7 @@ export default function LoginPage() {
               />
               <input
                 id="login-password"
-                type="password"
+                type={showPassword ? "text" : "password"}
                 autoComplete="current-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -232,8 +233,31 @@ export default function LoginPage() {
                 onBlur={() => setFocusedField(null)}
                 placeholder="••••••••"
                 required
-                style={focusedField === "password" ? inputFocused : inputBase}
+                style={{
+                  ...(focusedField === "password" ? inputFocused : inputBase),
+                  paddingRight: 44,
+                }}
               />
+              <button
+                type="button"
+                onClick={() => setShowPassword((p) => !p)}
+                aria-label={showPassword ? t("auth.hidePassword", "Hide password") : t("auth.showPassword", "Show password")}
+                style={{
+                  position: "absolute",
+                  right: 14,
+                  top: "50%",
+                  transform: "translateY(-50%)",
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  padding: 0,
+                  color: "#94A3B8",
+                  display: "flex",
+                  alignItems: "center",
+                }}
+              >
+                {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+              </button>
             </div>
             <div style={{ textAlign: "right", marginTop: 8 }}>
               <Link

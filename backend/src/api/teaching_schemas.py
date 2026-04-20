@@ -419,3 +419,20 @@ class CompleteChunkItemResponse(BaseModel):
     all_study_complete: bool        # True → unlock exam gate
 
 
+# ── Chunks Preview Schemas ─────────────────────────────────────────────────────
+
+class ChunkPreviewItem(BaseModel):
+    heading: str
+    chunk_type: str = "teaching"
+    has_images: bool = False
+    has_mcq: bool = True
+    is_optional: bool = False
+    exam_disabled: bool = False
+    order_index: int
+
+
+class ChunkPreviewResponse(BaseModel):
+    concept_id: str
+    chunks: list[ChunkPreviewItem]
+
+

@@ -18,6 +18,7 @@ from auth import service
 from auth.dependencies import get_current_user
 from auth.models import User
 from auth.schemas import (
+    ChangePasswordRequest,
     ForgotPasswordRequest,
     LoginRequest,
     LoginResponse,
@@ -323,3 +324,44 @@ async def logout(
     await service.logout(db, req.refresh_token)
     await db.commit()
     return {"message": "Logged out successfully"}
+
+
+# ── Change password ─────────────────────────────────────────────────────────
+
+
+@limiter.limit("5/minute")
+@router.post("/change-password")
+async def change_password(
+    request: Request,
+    req: ChangePasswordRequest,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Change the authenticated user's password.
+
+    Verifies the current password before accepting the new one.  The new
+    password is validated against the same complexity rules as registration.
+    All active refresh tokens remain valid — the client is responsible for
+    clearing any locally cached credentials.
+    """
+    # Verify current password against the stored bcrypt hash
+    if not service.pwd_context.verify(req.current_password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Current password is incorrect")
+
+    # Reject if new password is the same as the current one
+    if service.pwd_context.verify(req.new_password, user.password_hash):
+        raise HTTPException(status_code=400, detail="New password must be different from current password")
+
+    # Validate new password complexity (raises ValueError with a readable message)
+    try:
+        service.validate_password(req.new_password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    # Hash and persist the new password
+    user.password_hash = service.pwd_context.hash(req.new_password)
+    db.add(user)
+    await db.commit()
+
+    logger.info("[change-password] user_id=%s password changed", user.id)
+    return {"message": "Password changed successfully"}

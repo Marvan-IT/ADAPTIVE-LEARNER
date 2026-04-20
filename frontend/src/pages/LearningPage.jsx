@@ -3,13 +3,13 @@ import { useTranslation } from "react-i18next";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { useSession } from "../context/SessionContext";
 import { useStudent } from "../context/StudentContext";
-import { useTheme } from "../context/ThemeContext";
+
 import ProgressBar from "../components/learning/ProgressBar";
 import VerticalProgressRail from "../components/learning/VerticalProgressRail";
 import CardLearningView from "../components/learning/CardLearningView";
 import CompletionView from "../components/learning/CompletionView";
 import { trackEvent } from "../utils/analytics";
-import { AlertCircle, LogOut } from "lucide-react";
+import { AlertCircle, LogOut, Lock, Loader } from "lucide-react";
 import { checkConceptReadiness, getAvailableBooks } from "../api/concepts";
 import { getSession, getChunkList } from "../api/sessions";
 import { formatConceptTitle } from "../utils/formatConceptTitle";
@@ -21,6 +21,7 @@ export default function LearningPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const bookSlug = searchParams.get("book_slug") || "prealgebra";
+  const isPreview = searchParams.get("preview") === "true";
   const {
     phase, startLesson, error, reset,
     session, conceptTitle, bookTitle, currentCardIndex,
@@ -30,7 +31,7 @@ export default function LearningPage() {
     startChunk, dispatch, loading,
   } = useSession();
   const { student } = useStudent();
-  const { style: globalStyle } = useTheme();
+
 
   const [resolvedBookTitle, setResolvedBookTitle] = useState("");
   const [prereqWarning, setPrereqWarning] = useState(null);
@@ -38,12 +39,16 @@ export default function LearningPage() {
 
   // Per-chunk picker state
   const [selectedChunkId, setSelectedChunkId] = useState(null);
-  const [chunkStyle, setChunkStyle] = useState(globalStyle || "default");
-  const [chunkInterests, setChunkInterests] = useState([]);
+  const [chunkStyle, setChunkStyle] = useState(student?.preferred_style || "default");
+  const [chunkInterests, setChunkInterests] = useState(student?.interests || []);
   const [chunkInterestInput, setChunkInterestInput] = useState("");
 
   // Track which concept we've already initiated to prevent duplicate starts
   const [startedForConcept, setStartedForConcept] = useState(null);
+
+  // Preview mode: fetch chunks without creating a session
+  const [previewChunks, setPreviewChunks] = useState(null);
+
 
   // Fetch book title from books API so we don't show raw slug
   useEffect(() => {
@@ -57,9 +62,22 @@ export default function LearningPage() {
     }
   }, [bookSlug]);
 
+  // Preview mode: fetch chunk headings without creating a session
+  useEffect(() => {
+    if (!isPreview || !conceptId) return;
+    let cancelled = false;
+    const decoded = decodeURIComponent(conceptId);
+    import("../api/concepts").then(({ getChunksPreview }) => {
+      getChunksPreview(bookSlug, decoded).then(res => {
+        if (!cancelled) setPreviewChunks(res.data.chunks || []);
+      }).catch(() => { if (!cancelled) setPreviewChunks([]); });
+    });
+    return () => { cancelled = true; };
+  }, [isPreview, conceptId, bookSlug]);
+
   // Main lesson initialization — fires once per concept when student is ready
   useEffect(() => {
-    if (!conceptId || !student || startedForConcept === conceptId) return;
+    if (!conceptId || !student || startedForConcept === conceptId || isPreview) return;
 
     // Reset previous session state for new concept
     reset();
@@ -173,6 +191,139 @@ export default function LearningPage() {
     );
   }
 
+  // ── Preview mode: show greyed-out subsection list ──
+  if (isPreview) {
+    if (previewChunks === null) {
+      return (
+        <div style={{ display: "flex", justifyContent: "center", alignItems: "center", height: "60vh" }}>
+          <Loader size={28} style={{ color: "#94A3B8", animation: "spin 1s linear infinite" }} />
+        </div>
+      );
+    }
+
+    const decodedId = decodeURIComponent(conceptId);
+    const sm = decodedId.match(/(\d+)\.(\d+)/);
+    const secNum = sm ? `${sm[1]}.${sm[2]}` : "";
+    const title = formatConceptTitle(decodedId);
+
+    const chNum = sm ? sm[1] : "";
+    const previewTotal = previewChunks.length;
+    const firstExercise = previewChunks.findIndex((c) => c.chunk_type === "exercise" && !c.is_optional);
+
+    return (
+      <div style={{ display: "flex", gap: "24px", padding: "24px 24px 64px", position: "relative" }}>
+        {/* Locked concept banner */}
+        <div style={{ position: "absolute", top: "24px", left: "24px", right: "344px", zIndex: 50, display: "flex", alignItems: "center", gap: "10px", padding: "12px 18px", borderRadius: "12px", background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)" }}>
+          <Lock size={16} style={{ color: "#EF4444", flexShrink: 0 }} />
+          <span style={{ fontSize: "13px", fontWeight: 600, color: "#DC2626" }}>
+            {t("learning.conceptLocked", "This concept is locked — complete prerequisites to start learning.")}
+          </span>
+        </div>
+
+        {/* Left column — greyed out, same structure as SELECTING_CHUNK */}
+        <div style={{ flex: 1, minWidth: 0, opacity: 0.45, pointerEvents: "none", filter: "grayscale(0.3)", paddingTop: "48px" }}>
+          {/* Hero header */}
+          <div style={{ marginBottom: "24px", padding: "28px 24px", background: "linear-gradient(135deg, #FFF7ED 0%, #FFEDD5 50%, #FFF7ED 100%)", borderRadius: "20px", border: "1px solid rgba(249,115,22,0.12)" }}>
+            <h1 style={{ margin: 0, fontSize: "24px", fontWeight: 800, color: "#0f172a", fontFamily: "'Outfit', sans-serif", lineHeight: 1.3 }}>{title}</h1>
+            <p style={{ margin: "6px 0 0", fontSize: "13px", color: "#78716c", fontWeight: 500 }}>
+              {resolvedBookTitle || bookSlug}{chNum && ` · Chapter ${chNum}`}{secNum && ` · Section ${secNum}`}
+            </p>
+            <span style={{ display: "inline-block", marginTop: "12px", padding: "5px 14px", borderRadius: "9999px", fontSize: "12px", fontWeight: 700, color: "#EA580C", background: "rgba(249,115,22,0.1)", border: "1px solid rgba(249,115,22,0.2)" }}>
+              📚 {previewTotal} subsections · ~{previewTotal * 5} min total
+            </span>
+          </div>
+
+          {/* Section label */}
+          <div style={{ marginBottom: "14px", fontSize: "15px", fontWeight: 700, color: "#0f172a" }}>
+            {t("sidebar.subsections", "Subsections")} <span style={{ fontWeight: 400, color: "#94a3b8", fontSize: "13px" }}>· {t("sidebar.chooseToStart", "Choose one to start")}</span>
+          </div>
+
+          {/* Subsection cards — same structure as SELECTING_CHUNK */}
+          <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+            {previewChunks.map((chunk, idx) => {
+              const isGate = chunk.chunk_type === "exercise_gate";
+              const isInfo = chunk.chunk_type === "learning_objective";
+              const isReview = chunk.chunk_type === "chapter_review" || chunk.chunk_type === "section_review";
+              const isOptional = chunk.is_optional;
+              const statusIcon = isGate ? "★" : `${idx + 1}`;
+
+              return (
+                <Fragment key={idx}>
+                  {idx === firstExercise && firstExercise > 0 && (
+                    <div style={{ paddingTop: "10px", paddingBottom: "6px", paddingLeft: "4px", marginTop: "2px", fontSize: "11px", fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: "#94A3B8", borderTop: "1px solid rgba(128,128,128,0.2)" }}>
+                      {t("chunks.exerciseSection", "Exercise Practice")}
+                    </div>
+                  )}
+                  <div style={{ borderRadius: "16px", border: "1.5px solid #e2e8f0", background: "#ffffff", overflow: "hidden", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "14px", padding: "14px 20px" }}>
+                      <div style={{ width: "44px", height: "44px", borderRadius: "50%", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "15px", fontWeight: 700, backgroundColor: "rgba(255,255,255,0.06)", color: "#94A3B8", border: "1.5px solid rgba(255,255,255,0.1)" }}>
+                        {statusIcon}
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: "14px", lineHeight: 1.4, marginBottom: "2px", fontWeight: 600, color: "#94A3B8" }}>{chunk.heading}</div>
+                        <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", alignItems: "center" }}>
+                          {isOptional && <span style={{ fontSize: "11px", fontWeight: 600, padding: "3px 10px", borderRadius: "6px", background: "#FFFBEB", color: "#D97706", border: "1px solid rgba(217,119,6,0.2)" }}>{t("subsectionNav.optional", "Optional")}</span>}
+                          {chunk.exam_disabled && !isGate && !isInfo && <span style={{ fontSize: "11px", fontWeight: 500, padding: "3px 8px", borderRadius: "6px", background: "#FAF5FF", color: "#9333EA", border: "1px solid rgba(147,51,234,0.2)" }}>{t("subsectionNav.noExam", "No exam")}</span>}
+                          {isReview && <span style={{ fontSize: "11px", fontWeight: 600, padding: "3px 10px", borderRadius: "6px", background: "#EFF6FF", color: "#2563EB", border: "1px solid rgba(37,99,235,0.2)" }}>{t("subsectionNav.review", "Review")}</span>}
+                          {isInfo && <span style={{ fontSize: "11px", fontWeight: 600, padding: "3px 10px", borderRadius: "6px", background: "#F0FDF4", color: "#16A34A", border: "1px solid rgba(22,163,74,0.2)" }}>{t("subsectionNav.info", "Info")}</span>}
+                          {isGate && <span style={{ fontSize: "11px", fontWeight: 700, padding: "3px 10px", borderRadius: "6px", background: "#FAF5FF", color: "#7C3AED", border: "1px solid rgba(124,58,237,0.2)" }}>{t("subsectionNav.exam", "Exam")}</span>}
+                          <span style={{ fontSize: "11px", fontWeight: 500, color: "#94a3b8" }}>{t("subsectionNav.lockedSubsection", "Complete previous section first")}</span>
+                        </div>
+                      </div>
+                      <div style={{ width: "34px", height: "34px", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", opacity: 0.35 }}>🔒</div>
+                    </div>
+                  </div>
+                </Fragment>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Right column — same sidebar as SELECTING_CHUNK, greyed out */}
+        <div style={{ width: "280px", flexShrink: 0, position: "sticky", top: "24px", alignSelf: "flex-start", opacity: 0.45, pointerEvents: "none", filter: "grayscale(0.3)" }}>
+          <div style={{ background: "#fff", borderRadius: "16px", border: "1px solid #e2e8f0", padding: "24px" }}>
+            <h3 style={{ margin: "0 0 16px", fontSize: "16px", fontWeight: 700, color: "#0f172a", fontFamily: "'Outfit', sans-serif" }}>{t("sidebar.conceptOverview", "Concept overview")}</h3>
+            <div style={{ display: "flex", justifyContent: "center", marginBottom: "20px" }}>
+              <ProgressRing score={0} size="sm" />
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginBottom: "20px" }}>
+              {[
+                { value: 0, label: t("sidebar.completed", "Completed"), color: "#22C55E" },
+                { value: 0, label: t("sidebar.available", "Available"), color: "#3B82F6" },
+                { value: previewTotal, label: t("sidebar.locked", "Locked"), color: "#94a3b8" },
+                { value: `~${previewTotal * 5}m`, label: t("sidebar.estTime", "Est. time"), color: "#8B5CF6" },
+              ].map(({ value, label, color }, i) => (
+                <div key={i} style={{ textAlign: "center", padding: "10px 8px", borderRadius: "12px", border: "1px solid #f1f5f9" }}>
+                  <div style={{ fontSize: "20px", fontWeight: 800, color, fontFamily: "'Outfit', sans-serif" }}>{value}</div>
+                  <div style={{ fontSize: "11px", color: "#94a3b8", fontWeight: 500, marginTop: "2px" }}>{label}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ marginBottom: "16px", padding: "12px", borderRadius: "12px", background: "#f8fafc" }}>
+              <div style={{ fontSize: "11px", fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "6px" }}>{t("sidebar.prerequisites", "Prerequisites")}</div>
+              <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "13px", color: "#94A3B8" }}>
+                <Lock size={12} style={{ color: "#94A3B8" }} /> {t("map.prereqNeeded", "Prerequisites needed")}
+              </div>
+            </div>
+            <div style={{ marginBottom: "16px", padding: "12px", borderRadius: "12px", background: "#f8fafc" }}>
+              <div style={{ fontSize: "11px", fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "6px" }}>{t("sidebar.rewards", "Rewards")}</div>
+              <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "13px", color: "#334155" }}>
+                <span style={{ fontSize: "16px" }}>⭐</span> {t("sidebar.xpOnMastery", "+50 XP on mastery")}
+              </div>
+            </div>
+            <div style={{ padding: "14px", borderRadius: "12px", background: "linear-gradient(135deg, #fff7ed, #ffedd5)" }}>
+              <div style={{ fontSize: "13px", fontWeight: 700, color: "#92400e", marginBottom: "4px" }}>💡 {t("sidebar.studyTip", "Study tip")}</div>
+              <div style={{ fontSize: "12px", color: "#78350f", lineHeight: 1.5 }}>{t("sidebar.studyTipText", "Take your time with each card. Understanding the basics well makes everything else easier!")}</div>
+            </div>
+          </div>
+          <button onClick={() => navigate(`/map?book_slug=${encodeURIComponent(bookSlug)}`)} style={{ marginTop: "12px", width: "100%", padding: "10px 16px", borderRadius: "12px", border: "1.5px solid #E2E8F0", background: "#fff", cursor: "pointer", fontSize: "13px", fontWeight: 600, color: "#F97316", fontFamily: "inherit", display: "flex", alignItems: "center", justifyContent: "center", gap: "6px", opacity: 1, pointerEvents: "auto", filter: "none" }}>
+            ← {t("learning.backToMap", "Back to Map")}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (phase === "LOADING" || phase === "IDLE") {
     return (
       <div style={{ maxWidth: "1100px", margin: "0 auto", padding: "24px 24px 48px" }}>
@@ -223,8 +374,8 @@ export default function LearningPage() {
         setSelectedChunkId(null); // collapse if already open
       } else {
         setSelectedChunkId(chunkId);
-        setChunkStyle(globalStyle || "default");
-        setChunkInterests([]);
+        setChunkStyle(student?.preferred_style || "default");
+        setChunkInterests(student?.interests || []);
         setChunkInterestInput("");
       }
     };
@@ -261,7 +412,22 @@ export default function LearningPage() {
     const availableCount = totalChunks - completedCount - lockedCount;
 
     return (
-      <div style={{ display: "flex", gap: "24px", padding: "24px 24px 64px" }}>
+      <div style={{ display: "flex", gap: "24px", padding: "24px 24px 64px", position: "relative" }}>
+        {/* Locked concept overlay */}
+        {isPreview && (
+          <div style={{
+            position: "sticky", top: "0", zIndex: 50, marginBottom: "0",
+            display: "flex", alignItems: "center", gap: "10px",
+            padding: "12px 18px", borderRadius: "12px",
+            background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)",
+            position: "absolute", top: "24px", left: "24px", right: "344px",
+          }}>
+            <Lock size={16} style={{ color: "#EF4444", flexShrink: 0 }} />
+            <span style={{ fontSize: "13px", fontWeight: 600, color: "#DC2626" }}>
+              {t("learning.conceptLocked", "This concept is locked — complete prerequisites to start learning.")}
+            </span>
+          </div>
+        )}
         {/* Prerequisite Warning Modal */}
         {prereqWarning && (
           <div style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.6)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", padding: "16px" }}>
@@ -297,7 +463,7 @@ export default function LearningPage() {
         )}
 
         {/* Left column */}
-        <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ flex: 1, minWidth: 0, ...(isPreview ? { opacity: 0.45, pointerEvents: "none", filter: "grayscale(0.3)", paddingTop: "48px" } : {}) }}>
 
         {/* Hero header */}
         {(() => {
@@ -691,7 +857,7 @@ export default function LearningPage() {
         </div>{/* end left column */}
 
         {/* Right column — Concept overview */}
-        <div style={{ width: "280px", flexShrink: 0, position: "sticky", top: "24px", alignSelf: "flex-start" }}>
+        <div style={{ width: "280px", flexShrink: 0, position: "sticky", top: "24px", alignSelf: "flex-start", ...(isPreview ? { opacity: 0.45, pointerEvents: "none", filter: "grayscale(0.3)" } : {}) }}>
           <div style={{ background: "#fff", borderRadius: "16px", border: "1px solid #e2e8f0", padding: "24px" }}>
             <h3 style={{ margin: "0 0 16px", fontSize: "16px", fontWeight: 700, color: "#0f172a", fontFamily: "'Outfit', sans-serif" }}>
               {t("sidebar.conceptOverview")}

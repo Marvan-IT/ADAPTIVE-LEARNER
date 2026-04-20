@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { motion } from "framer-motion";
 import {
   Brain, Map, Clock, Trophy, ChevronsLeft, ChevronsRight,
-  Flame, LayoutDashboard, Award, LogOut, AlertCircle,
+  Flame, LayoutDashboard, Award, Settings, AlertCircle,
 } from "lucide-react";
 import { useStudent } from "../../context/StudentContext";
 import { useAdaptiveStore } from "../../store/adaptiveStore";
@@ -30,7 +30,7 @@ function buildNavItems(t) {
 
 export default function StudentSidebar({ collapsed, onToggleCollapse }) {
   const { t } = useTranslation();
-  const { student, logout } = useStudent();
+  const { student } = useStudent();
   const navigate = useNavigate();
   const location = useLocation();
   const { phase, reset: resetSession } = useSession();
@@ -41,7 +41,7 @@ export default function StudentSidebar({ collapsed, onToggleCollapse }) {
   const displayName = student?.display_name || "Student";
   const NAV_ITEMS = buildNavItems(t);
 
-  const [leaveTarget, setLeaveTarget] = useState(null); // nav path or "logout"
+  const [leaveTarget, setLeaveTarget] = useState(null);
 
   return (
     <>
@@ -58,15 +58,11 @@ export default function StudentSidebar({ collapsed, onToggleCollapse }) {
           <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "12px" }}>
             <AlertCircle size={22} color="#F59E0B" />
             <h3 style={{ margin: 0, fontSize: "16px", fontWeight: 700, color: "#0F172A" }}>
-              {leaveTarget === "__logout__" ? t("confirm.logoutTitle", "Logout?") : t("confirm.leaveSection")}
+              {t("confirm.leaveSection")}
             </h3>
           </div>
           <p style={{ margin: "0 0 20px", fontSize: "14px", color: "#64748B", lineHeight: 1.5 }}>
-            {leaveTarget === "__logout__"
-              ? (isLessonActive && location.pathname.startsWith("/learn/")
-                ? t("confirm.leaveSessionMessage", "Your lesson progress will not be saved. Are you sure you want to logout?")
-                : t("confirm.logoutMessage", "Are you sure you want to logout?"))
-              : t("confirm.leaveSectionMessage")}
+            {t("confirm.leaveSectionMessage")}
           </p>
           <div style={{ display: "flex", gap: "10px", justifyContent: "flex-end" }}>
             <button
@@ -76,19 +72,14 @@ export default function StudentSidebar({ collapsed, onToggleCollapse }) {
               {t("confirm.cancel")}
             </button>
             <button
-              onClick={async () => {
+              onClick={() => {
                 if (isLessonActive) resetSession();
-                if (leaveTarget === "__logout__") {
-                  await logout();
-                  navigate("/login");
-                } else {
-                  navigate(leaveTarget);
-                }
+                navigate(leaveTarget);
                 setLeaveTarget(null);
               }}
               style={{ padding: "8px 16px", borderRadius: "8px", border: "none", backgroundColor: "#EF4444", color: "#FFFFFF", fontSize: "14px", fontWeight: 600, cursor: "pointer" }}
             >
-              {leaveTarget === "__logout__" ? t("nav.logout") : t("common.leave", "Leave")}
+              {t("common.leave", "Leave")}
             </button>
           </div>
         </div>
@@ -273,24 +264,58 @@ export default function StudentSidebar({ collapsed, onToggleCollapse }) {
         ))}
       </nav>
 
-      {/* Bottom: Logout */}
+      {/* Bottom: Settings */}
       <div style={{
         padding: collapsed ? "16px 12px" : "16px 20px",
         borderTop: "1px solid #f1f5f9",
       }}>
-        <button
-          onClick={() => setLeaveTarget("__logout__")}
-          style={{
-            display: "flex", alignItems: "center", gap: "14px",
-            padding: collapsed ? "12px 0" : "12px 16px", borderRadius: "16px",
-            border: "none", background: "transparent", cursor: "pointer",
-            color: "#ef4444", fontSize: "15px", fontWeight: 500, width: "100%",
-            justifyContent: collapsed ? "center" : "flex-start", fontFamily: "inherit",
-          }}
-        >
-          <LogOut size={20} />
-          {!collapsed && <span>{t("nav.logout")}</span>}
-        </button>
+        {(() => {
+          const settingsItem = (
+            <NavLink to="/settings"
+              style={{ textDecoration: "none" }}
+              onClick={(e) => {
+                if (isLessonActive && location.pathname.startsWith("/learn/")) {
+                  e.preventDefault();
+                  setLeaveTarget("/settings");
+                }
+              }}
+              className={({ isActive }) => cn(
+                "flex items-center rounded-2xl font-medium transition-colors",
+                collapsed ? "justify-center" : "",
+                isActive ? "bg-orange-50 text-[#F97316]" : "text-[#475569] hover:bg-slate-50",
+                !collapsed && isActive && "border-s-[3px] border-[#F97316]",
+                !collapsed && !isActive && "border-s-[3px] border-transparent",
+              )}
+            >
+              {({ isActive }) => (
+                <div style={{
+                  display: "flex", alignItems: "center",
+                  gap: collapsed ? "0" : "14px",
+                  padding: collapsed ? "8px 0" : "8px 12px",
+                  width: "100%",
+                  justifyContent: collapsed ? "center" : "flex-start",
+                }}>
+                  <div style={{
+                    width: 30, height: 30, borderRadius: "50%",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    flexShrink: 0,
+                    backgroundColor: isActive ? "#FFF7ED" : "#F1F5F9",
+                    color: isActive ? "#F97316" : "#64748B",
+                    transition: "all 0.15s",
+                  }}>
+                    <Settings size={15} />
+                  </div>
+                  {!collapsed && (
+                    <span style={{ fontSize: "13px", fontFamily: "'DM Sans', sans-serif" }}>{t("nav.settings")}</span>
+                  )}
+                </div>
+              )}
+            </NavLink>
+          );
+          return collapsed
+            ? <Tooltip content={t("nav.settings")} position="right">{settingsItem}</Tooltip>
+            : settingsItem;
+        })()}
       </div>
     </motion.aside>
     </>

@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { Brain, LayoutDashboard, BookOpen, Users, MessageSquare, BarChart3, Settings, LogOut, AlertCircle } from "lucide-react";
+import { Brain, LayoutDashboard, BookOpen, Users, MessageSquare, BarChart3, Settings, LogOut, AlertCircle, MessageCircle } from "lucide-react";
 import { useAuth } from "../../context/AuthContext";
+import { getAdminUnreadCount } from "../../api/support";
 
 function getNavGroups(t) {
   return [
@@ -23,6 +24,7 @@ function getNavGroups(t) {
       items: [
         { to: "/admin/students", icon: Users, label: t("admin.nav.students", "Students"), bg: "#DCFCE7", color: "#16A34A" },
         { to: "/admin/sessions", icon: MessageSquare, label: t("admin.nav.sessions", "Sessions"), bg: "#CFFAFE", color: "#0891B2" },
+        { to: "/admin/support", icon: MessageCircle, label: t("admin.nav.support", "Support"), bg: "#FEF3C7", color: "#D97706" },
       ],
     },
     {
@@ -45,7 +47,23 @@ export default function AdminSidebar() {
   const navigate = useNavigate();
   const { logout } = useAuth();
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+  const [supportUnread, setSupportUnread] = useState(0);
+  const intervalRef = useRef(null);
   const NAV_GROUPS = getNavGroups(t);
+
+  // Poll unread support count every 30s
+  useEffect(() => {
+    let active = true;
+    const fetchUnread = async () => {
+      try {
+        const res = await getAdminUnreadCount();
+        if (active) setSupportUnread(res.data.count || 0);
+      } catch { /* ignore */ }
+    };
+    fetchUnread();
+    intervalRef.current = setInterval(fetchUnread, 30000);
+    return () => { active = false; clearInterval(intervalRef.current); };
+  }, []);
 
   return (
     <>
@@ -118,7 +136,12 @@ export default function AdminSidebar() {
                   <div style={{ width: "32px", height: "32px", borderRadius: "50%", backgroundColor: item.bg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                     <Icon size={16} color={item.color} />
                   </div>
-                  <span>{item.label}</span>
+                  <span style={{ flex: 1 }}>{item.label}</span>
+                  {item.to === "/admin/support" && supportUnread > 0 && (
+                    <span style={{ minWidth: "20px", height: "20px", borderRadius: "9999px", backgroundColor: "#EF4444", color: "#fff", fontSize: "11px", fontWeight: 700, display: "inline-flex", alignItems: "center", justifyContent: "center", padding: "0 5px", flexShrink: 0 }}>
+                      {supportUnread > 99 ? "99+" : supportUnread}
+                    </span>
+                  )}
                 </NavLink>
               );
             })}

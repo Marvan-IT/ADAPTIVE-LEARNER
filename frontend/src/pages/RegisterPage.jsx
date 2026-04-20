@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { motion, AnimatePresence } from "framer-motion";
-import { User, Mail, Lock, AlertCircle } from "lucide-react";
+import { User, Mail, Lock, AlertCircle, Eye, EyeOff } from "lucide-react";
 import { registerUser } from "../api/auth";
 import { StrengthBar, passwordStrength } from "../components/ui";
 
@@ -114,9 +114,13 @@ function InputField({
   onFocus,
   onBlur,
   required,
+  showPasswordToggle,
   children,
 }) {
+  const [showPw, setShowPw] = useState(false);
   const isFocused = focusedField === id;
+  const isPassword = type === "password";
+  const effectiveType = isPassword && showPasswordToggle && showPw ? "text" : type;
   return (
     <div style={{ marginBottom: 12 }}>
       <label htmlFor={id} style={compactLabel}>
@@ -132,7 +136,7 @@ function InputField({
         )}
         <input
           id={id}
-          type={type}
+          type={effectiveType}
           autoComplete={autoComplete}
           value={value}
           onChange={onChange}
@@ -140,8 +144,33 @@ function InputField({
           onBlur={onBlur}
           placeholder={placeholder}
           required={required}
-          style={isFocused ? compactInputFocused : compactInput}
+          style={{
+            ...(isFocused ? compactInputFocused : compactInput),
+            ...(isPassword && showPasswordToggle ? { paddingRight: 40 } : {}),
+          }}
         />
+        {isPassword && showPasswordToggle && (
+          <button
+            type="button"
+            onClick={() => setShowPw((p) => !p)}
+            aria-label={showPw ? "Hide password" : "Show password"}
+            style={{
+              position: "absolute",
+              right: 12,
+              top: "50%",
+              transform: "translateY(-50%)",
+              background: "none",
+              border: "none",
+              cursor: "pointer",
+              padding: 0,
+              color: "#94A3B8",
+              display: "flex",
+              alignItems: "center",
+            }}
+          >
+            {showPw ? <EyeOff size={15} /> : <Eye size={15} />}
+          </button>
+        )}
       </div>
       {children}
     </div>
@@ -328,6 +357,7 @@ export default function RegisterPage() {
             onFocus={() => setFocusedField("reg-password")}
             onBlur={() => setFocusedField(null)}
             required
+            showPasswordToggle
           >
             <StrengthBar password={password} />
           </InputField>
@@ -346,6 +376,7 @@ export default function RegisterPage() {
             onFocus={() => setFocusedField("reg-confirm")}
             onBlur={() => setFocusedField(null)}
             required
+            showPasswordToggle
           >
             {confirmPassword && password !== confirmPassword && (
               <p

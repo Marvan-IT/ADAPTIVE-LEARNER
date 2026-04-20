@@ -331,7 +331,7 @@ export default function ConceptMapPage() {
               blinkNodes={blinkNodes} selectedPrereqs={selectedPrereqs}
               reviewDueConcepts={reviewDueConcepts} bookTitle={bookTitle}
               onNodeSelect={handleNodeSelect} onClearSelection={() => setSelectedNode(null)}
-              onStartLesson={startLesson} t={t}
+              onStartLesson={startLesson} onViewLesson={(cid) => navigate(`/learn/${encodeURIComponent(cid)}?book_slug=${encodeURIComponent(selectedBook)}&preview=true`)} t={t}
             />
           </motion.div>
         )}
@@ -656,8 +656,9 @@ function BookGrid({ subject, books, bookGraphStats, statsLoading, subjectStats, 
 function GraphView({
   loading, error, nodes, edges, nodeStatuses, selectedNode, selectedNodeData,
   readyNodes, masteredNodes, lockedNodes, blinkNodes, selectedPrereqs,
-  reviewDueConcepts, bookTitle, onNodeSelect, onClearSelection, onStartLesson, t,
+  reviewDueConcepts, bookTitle, onNodeSelect, onClearSelection, onStartLesson, onViewLesson, t,
 }) {
+
   if (loading) return <CenterMsg icon={<Loader size={32} className="text-[var(--color-primary)] animate-spin" />} text={t("map.loadingDashboard", "Loading concept map...")} />;
   if (error === "not_ready") return <CenterMsg icon={<span style={{ fontSize: "48px" }}>📚</span>} text={t("map.bookProcessing", "Textbook content is being prepared")} sub={t("map.bookProcessingDesc", "The extraction pipeline is still running.")} />;
   if (error) return <CenterMsg icon={null} text={t("map.errorDashboard", "Error loading map")} sub={error} danger />;
@@ -751,6 +752,25 @@ function GraphView({
                     </div>
                   ) : <p style={{ fontSize: "12px", color: "var(--color-text-muted)" }}>{t("map.completePrereq", "Complete prerequisites to unlock")}</p>}
                   <p style={{ fontSize: "11px", color: "var(--color-text-muted)", marginTop: "8px", fontStyle: "italic", textAlign: "center" }}>{t("map.prereqBlinking", "Prerequisites are highlighted on the map")}</p>
+
+
+                  {/* View Lesson (preview mode) */}
+                  <button
+                    onClick={() => onViewLesson(selectedNode)}
+                    style={{
+                      marginTop: "10px", width: "100%", padding: "10px 14px",
+                      borderRadius: "10px", fontSize: "13px", fontWeight: 600,
+                      border: "none",
+                      background: "var(--color-bg)",
+                      color: "var(--color-text-muted)",
+                      cursor: "pointer",
+                      fontFamily: "inherit", transition: "all 0.15s",
+                      display: "flex", alignItems: "center", justifyContent: "center", gap: "6px",
+                    }}
+                  >
+                    <BookOpen size={14} />
+                    {t("map.viewLesson", "View Lesson")}
+                  </button>
                 </div>
               )}
             </motion.div>

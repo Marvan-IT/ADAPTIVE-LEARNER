@@ -95,6 +95,9 @@ class Student(Base):
     badges: Mapped[list["StudentBadge"]] = relationship(
         back_populates="student", cascade="all, delete-orphan"
     )
+    support_tickets: Mapped[list["SupportTicket"]] = relationship(
+        back_populates="student", cascade="all, delete-orphan"
+    )
 
 
 class TeachingSession(Base):
@@ -491,6 +494,79 @@ class StudentBadge(Base):
     )
 
     student: Mapped["Student"] = relationship(back_populates="badges")
+
+
+class SupportTicket(Base):
+    """A help/support request raised by a student.
+
+    Messages are threaded under a ticket and may be authored by either
+    the student or an admin.  Tickets start in 'open' status and are
+    manually closed by an admin once resolved.
+    """
+
+    __tablename__ = "support_tickets"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    student_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("students.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    subject: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="open", server_default="open")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    student: Mapped["Student"] = relationship(back_populates="support_tickets")
+    messages: Mapped[list["SupportMessage"]] = relationship(
+        back_populates="ticket",
+        cascade="all, delete-orphan",
+        order_by="SupportMessage.created_at",
+    )
+
+
+class SupportMessage(Base):
+    """A single message within a support ticket thread.
+
+    sender_id is nullable so that messages survive if the sender's user
+    account is deleted (SET NULL).  sender_role records who wrote the
+    message ('student' or 'admin') independently of the FK.
+    """
+
+    __tablename__ = "support_messages"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    ticket_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("support_tickets.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    sender_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    sender_role: Mapped[str] = mapped_column(String(20), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    is_read: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+
+    ticket: Mapped["SupportTicket"] = relationship(back_populates="messages")
+    sender: Mapped["User | None"] = relationship()
 
 
 # Register auth tables with Base.metadata so Alembic autogenerate and

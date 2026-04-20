@@ -22,6 +22,7 @@ import AdminTrackPage from "./pages/AdminTrackPage";
 import AdminReviewPage from "./pages/AdminReviewPage";
 import AdminAnalyticsPage from "./pages/AdminAnalyticsPage";
 import AdminSettingsPage from "./pages/AdminSettingsPage";
+import AdminSupportPage from "./pages/AdminSupportPage";
 import AdminStudentsPage from "./pages/AdminStudentsPage";
 import AdminStudentDetailPage from "./pages/AdminStudentDetailPage";
 import AdminSessionsPage from "./pages/AdminSessionsPage";
@@ -180,6 +181,7 @@ export default function App() {
                     <Route path="/admin/books/:slug/review" element={<AdminReviewPage />} />
                     <Route path="/admin/books/:slug/content" element={<AdminBookContentPage />} />
                     <Route path="/admin/analytics" element={<AdminAnalyticsPage />} />
+                    <Route path="/admin/support" element={<AdminSupportPage />} />
                     <Route path="/admin/settings" element={<AdminSettingsPage />} />
                     <Route path="/admin/students" element={<AdminStudentsPage />} />
                     <Route path="/admin/students/:id" element={<AdminStudentDetailPage />} />

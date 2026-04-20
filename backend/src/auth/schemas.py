@@ -62,3 +62,8 @@ class ResetPasswordRequest(BaseModel):
 class ResendOtpRequest(BaseModel):
     email: EmailStr
     purpose: str = Field(..., pattern="^(email_verify|password_reset)$")
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(..., min_length=8, max_length=128)
