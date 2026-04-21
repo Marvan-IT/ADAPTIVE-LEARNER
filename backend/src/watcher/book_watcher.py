@@ -28,15 +28,18 @@ _pdf_queue: queue.Queue = queue.Queue()
 def _queue_worker() -> None:
     """Single worker — blocks until one pipeline finishes before starting the next."""
     while True:
-        pdf_path, subject = _pdf_queue.get()
+        pdf_path, subject, slug_override = _pdf_queue.get()
         try:
-            logger.info("Processing: %s (subject=%s, remaining=%d)",
-                        pdf_path.name, subject, _pdf_queue.qsize())
-            proc = subprocess.run([
+            logger.info("Processing: %s (subject=%s, slug=%s, remaining=%d)",
+                        pdf_path.name, subject, slug_override or "(auto)", _pdf_queue.qsize())
+            cmd = [
                 sys.executable, "-m", "src.watcher.pipeline_runner",
                 "--pdf", str(pdf_path),
                 "--subject", subject,
-            ])
+            ]
+            if slug_override:
+                cmd.extend(["--slug", slug_override])
+            proc = subprocess.run(cmd)
             if proc.returncode != 0:
                 logger.error("Pipeline failed for %s (exit %d)", pdf_path.name, proc.returncode)
         except Exception:
@@ -45,10 +48,10 @@ def _queue_worker() -> None:
             _pdf_queue.task_done()
 
 
-def _enqueue(pdf_path: Path, subject: str) -> None:
+def _enqueue(pdf_path: Path, subject: str, slug_override: str | None = None) -> None:
     logger.info("Queued: %s (subject=%s, queue_size=%d)",
                 pdf_path.name, subject, _pdf_queue.qsize())
-    _pdf_queue.put((pdf_path, subject))
+    _pdf_queue.put((pdf_path, subject, slug_override))
 
 
 def _subject_from_path(pdf: Path) -> str:
@@ -88,18 +91,25 @@ def _rescan_incomplete() -> None:
     """Re-enqueue any PDFs that are not yet registered or have no graph.json."""
     yaml_path = BACKEND_DIR / "books.yaml"
     registered: set[str] = set()
+    # Build a filename→slug mapping from books.yaml for title-based slug lookup
+    filename_to_slug: dict[str, str] = {}
     if yaml_path.exists():
         try:
-            registered = {b["book_slug"] for b in (_yaml.safe_load(yaml_path.read_text()) or {}).get("books", [])}
+            books_list = (_yaml.safe_load(yaml_path.read_text()) or {}).get("books", [])
+            registered = {b["book_slug"] for b in books_list}
+            for b in books_list:
+                if b.get("pdf_filename"):
+                    filename_to_slug[b["pdf_filename"]] = b["book_slug"]
         except Exception:
             logger.warning("Could not read books.yaml for rescan check")
     for pdf in DATA_DIR.rglob("*.pdf"):
-        slug = derive_slug(pdf.name)
+        # Prefer slug from Book table (title-based), fall back to filename-derived
+        slug = filename_to_slug.get(pdf.name) or derive_slug(pdf.name)
         graph_ok = (OUTPUT_DIR / slug / "graph.json").exists()
         if slug not in registered or not graph_ok:
             subject = _subject_from_path(pdf)
             logger.info("Rescan: re-enqueuing incomplete PDF %s (slug=%s)", pdf.name, slug)
-            _enqueue(pdf, subject)
+            _enqueue(pdf, subject, slug_override=slug)
 
 
 def start_watcher() -> None:

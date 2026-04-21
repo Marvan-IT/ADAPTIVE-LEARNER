@@ -201,7 +201,19 @@ async def upload_book(
     safe_filename = Path(file.filename).name
     if not safe_filename or safe_filename.startswith('.') or '/' in file.filename or '\\' in file.filename:
         raise HTTPException(400, "Invalid filename")
-    slug = derive_slug(safe_filename)
+    # Derive slug from user-given title (not PDF filename)
+    slug = derive_slug(title)
+    if not slug:
+        raise HTTPException(400, "Title must contain at least one alphanumeric character")
+    # Ensure slug uniqueness — append _2, _3, … if taken by a different book
+    base_slug = slug
+    counter = 1
+    while True:
+        dup = (await db.execute(select(Book).where(Book.book_slug == slug))).scalar_one_or_none()
+        if dup is None or dup.title == title:
+            break
+        counter += 1
+        slug = f"{base_slug}_{counter}"
     dest_dir = DATA_DIR / subject
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest_path = dest_dir / safe_filename
@@ -250,6 +262,7 @@ async def upload_book(
         sys.executable, "-m", "src.watcher.pipeline_runner",
         "--pdf", str(dest_path),
         "--subject", subject,
+        "--slug", slug,
     ], cwd=str(BACKEND_DIR))
     logger.info("[upload] Spawned pipeline for '%s' (subject=%s)", slug, subject)
     return {"slug": slug, "title": title, "subject": subject, "status": "PROCESSING"}
@@ -410,11 +423,21 @@ async def get_book_status(
 
 
 def _section_sort_key(section_str: str):
-    """Parse 'X.Y.Z' into a numeric tuple for correct section ordering.
+    """Parse 'X.Y[a]' or 'X.Y.Z' into a numeric tuple for correct section ordering.
     Handles letter suffixes: '1.1b' sorts between '1.1' and '1.2'.
+    Strips trailing title text: '3.0 Chapter 3 Introduction' uses just '3.0'.
     """
+    s = section_str or ""
+    # Extract leading section number (multi-level + optional letter suffix).
+    # Without this, '3.0 Chapter 3 Introduction' parses '0 Chapter 3 Introduction'
+    # as inf, making (3, 0, inf, 0) sort AFTER promoted '3.1b' (3, 0, 1, 2).
+    # Pattern handles: '3.1', '3.1b', '3.1.5', '3.1.5b' (multi-level supported).
+    m_lead = re.match(r"^(\d+(?:\.\d+)+[a-z]?)", s)
+    if m_lead:
+        s = m_lead.group(1)
+
     parts = []
-    for p in (section_str or "").split("."):
+    for p in s.split("."):
         try:
             parts.extend([int(p), 0])
             continue
@@ -470,7 +493,12 @@ async def get_book_sections(
         )
         .where(ConceptChunk.book_slug == slug)
         .group_by(ConceptChunk.concept_id, ConceptChunk.book_slug)
-        .order_by(func.min(ConceptChunk.section))
+        # Order by MMD position (order_index) not text section. `order_index` is
+        # globally sequential, so min() per concept_id reflects the section's
+        # earliest position in the book — matching MMD order. Using text
+        # ordering on `section` caused promoted sections with empty/text labels
+        # to sort to the top.
+        .order_by(func.min(ConceptChunk.order_index))
     )).all()
 
     chapters: dict = {}
@@ -723,11 +751,24 @@ async def retrigger_book(
     book.status = "PROCESSING"
     book.published_at = None
     await db.commit()
+    # Find the PDF using the stored filename from the Book table
     pdf_matches = list(DATA_DIR.rglob("*.pdf"))
-    matched = [p for p in pdf_matches if derive_slug(p.name) == slug]
+    matched = [p for p in pdf_matches if p.name == book.pdf_filename] if book.pdf_filename else []
+    if not matched:
+        # Fallback 1: try legacy slug-based lookup
+        matched = [p for p in pdf_matches if derive_slug(p.name) == slug]
+    if not matched:
+        # Fallback 2: fuzzy match by book title keywords
+        title_words = [w.lower() for w in (book.title or "").split() if len(w) > 2]
+        if title_words:
+            matched = [p for p in pdf_matches if all(w in p.stem.lower() for w in title_words)]
     if not matched:
         raise HTTPException(404, f"No PDF found for slug '{slug}' in data/")
     pdf_path = matched[0]
+    # Self-healing: update stored filename if found via fallback
+    if pdf_path.name != book.pdf_filename:
+        book.pdf_filename = pdf_path.name
+        await db.commit()
     subject = pdf_path.parent.name.lower()
     if subject == "maths":
         subject = "mathematics"
@@ -735,6 +776,7 @@ async def retrigger_book(
         sys.executable, "-m", "src.watcher.pipeline_runner",
         "--pdf", str(pdf_path),
         "--subject", subject,
+        "--slug", slug,
     ], cwd=str(BACKEND_DIR))
     logger.info("[retrigger] Re-queued '%s' (subject=%s)", slug, subject)
     return {"status": "retriggered", "book_slug": slug, "pdf": pdf_path.name}
@@ -2500,17 +2542,17 @@ async def promote_subsection_to_section(
     chunks_to_move = [c for c in chunks if c.order_index >= target_order]
     chunks_to_keep = [c for c in chunks if c.order_index < target_order]
 
-    # ── 6. Persist the move + re-index in a single transaction ───────────────
-    # Re-index old section: 0, 1, 2, …
-    for new_idx, chunk in enumerate(chunks_to_keep):
+    # ── 6. Persist the move in a single transaction ──────────────────────────
+    # IMPORTANT: do NOT reset order_index. It is globally sequential across the
+    # entire book and reflects MMD position. Admin listing orders sections by
+    # min(order_index) per concept_id, so preserving the original values keeps
+    # the promoted section in its correct MMD position within the chapter.
+    for chunk in chunks_to_keep:
         chunk.concept_id = concept_id       # unchanged, but explicit for clarity
-        chunk.order_index = new_idx
 
-    # Re-index new section: 0, 1, 2, …
-    for new_idx, chunk in enumerate(chunks_to_move):
+    for chunk in chunks_to_move:
         chunk.concept_id = new_concept_id
         chunk.section = section_label
-        chunk.order_index = new_idx
         chunk.is_hidden = False
 
     await db.flush()

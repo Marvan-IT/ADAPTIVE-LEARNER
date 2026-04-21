@@ -147,7 +147,7 @@ _NON_INSTRUCTIONAL_TITLE_WORDS: frozenset[str] = frozenset({
 })
 
 # Adaptive TOC expansion constants
-_DENSITY_THRESHOLD = 2   # minimum _SECTION_NUMBER_RE matches per 500-char expansion chunk
+_DENSITY_THRESHOLD = 1   # min matches per 500-char expansion chunk; tolerates boundary-split TOC entries (0 matches still ends expansion)
 _EXPANSION_STEP = 500    # characters per expansion step
 
 # ---------------------------------------------------------------------------

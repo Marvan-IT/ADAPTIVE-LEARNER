@@ -16,3 +16,4 @@ venv/
 .git/
 .claude/
 alembic/versions/__pycache__/
+tests/

@@ -81,13 +81,13 @@ concept_id.txt
 # ── Playwright test artifacts ───────────────────────────────────────
 frontend/test-results/
 frontend/playwright-report/
+.playwright-mcp/
 
 # ── Internal Claude agent memory (not project code) ────────────────
 backend/src/.claude/
 
-# ── Claude Code per-machine settings (not project code) ────────────
-.claude/settings.json
-.claude/worktrees/
+# ── Claude Code per-machine settings and agent memory (not project code) ──
+.claude/
 
 # ── Line ending normalisation ───────────────────────────────────────
 # (handled by .gitattributes)

@@ -67,12 +67,12 @@ def run_mathpix_extraction(book_code: str, force: bool = False, pdf_id: str | No
     mmd_cache = out_dir / "book.mmd"
     image_dir = out_dir / "mathpix_extracted"
 
-    if not pdf_path.exists():
-        raise FileNotFoundError(f"PDF not found: {pdf_path}")
-
     if mmd_cache.exists() and not force:
         logger.info("Using cached MMD: %s (skip Mathpix)", mmd_cache)
         return
+
+    if not pdf_path.exists():
+        raise FileNotFoundError(f"PDF not found: {pdf_path}")
 
     if pdf_id:
         logger.info("Using supplied pdf_id: %s", pdf_id)

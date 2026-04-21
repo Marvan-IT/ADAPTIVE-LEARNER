@@ -161,8 +161,54 @@ def _normalize_heading(heading: str) -> str:
     h = re.sub(r"^[^\w(]+", "", h)
     # Collapse whitespace
     h = re.sub(r"\s+", " ", h).strip()
+    # OCR fix: "Stats hab" → "Stats Lab" (consistent OCR misread in statistics book)
+    h = re.sub(r"^Stats\s+[Hh]ab\b", "Stats Lab", h)
     return h
 
+
+# ── Exercise / back-matter heading bypass list ──────────────────────────────
+# These headings appear in both the noise pattern list AND exercise/back-matter
+# zones.  When they appear in an exercise zone or chapter-end region, they must
+# NOT be filtered as noise — they become real chunks.  The noise-filter loop
+# checks this set before discarding a heading.
+_EXERCISE_BYPASS_PATTERN = re.compile(
+    r"^(?:self check"
+    r"|writing exercises?"
+    r"|everyday math"
+    r"|mixed practice"
+    r"|review exercises?"
+    r"|practice test"
+    r"|key terms?"
+    r"|key concepts?"
+    r"|key equations?"
+    r"|chapter review"
+    r"|formula review"
+    r"|practice"
+    r"|homework"
+    r"|solutions"  # plural only — singular "Solution" stays as noise (inline example)
+    r"|references?"
+    r"|bringing it together"
+    r"|verbal"
+    r"|algebraic"
+    r"|numeric"
+    r"|graphical"
+    r"|real-world applications?"
+    r"|technology"
+    r"|extensions?"
+    r"|check your understanding"
+    r"|review questions?"
+    r"|reflection questions?"
+    r"|competency-based"
+    r"|assessments?"
+    r"|lesson summary"
+    r"|lesson overview"
+    r"|complete the following questions"
+    r"|stats\s+[hl]ab"
+    r"|student learning outcomes?"
+    r"|discussion questions?"
+    r")\b",
+    re.IGNORECASE,
+)
 
 # ── Section exercise zone patterns ───────────────────────────────────────────
 
@@ -224,6 +270,12 @@ def _classify_chunk(raw_heading: str, in_exercises_zone: bool, section_label: st
     ]
     if any(re.search(p, sl, re.IGNORECASE) or re.search(p, h, re.IGNORECASE) for p in _OPTIONAL_PATTERNS):
         is_opt = True
+
+    # Group-tagged headings from exercise zone tagging step
+    if raw_heading.endswith(" (ChapterReview)"):
+        return "chapter_review", True
+    if raw_heading.endswith(" (Lab)"):
+        return "lab", is_opt
 
     if in_exercises_zone or _EXERCISE_HEADING_PATTERN.match(h):
         is_writing = bool(re.match(r"^writing exercises?", h, re.IGNORECASE))
@@ -407,7 +459,7 @@ def _build_parse_config(profile, corrected_headings: dict | None) -> dict:
       max_sections_per_chapter — int cap (bypassed when toc_sections present)
     """
     base_noise = list(_NOISE_HEADING_PATTERNS)  # copy so we can extend
-    compiled_exercise_markers: list[tuple[re.Pattern, str]] = []
+    compiled_exercise_markers: list[tuple[re.Pattern, str, str]] = []  # (pattern, behavior, group)
     subsection_signals: list[re.Pattern] = [_H2_PATTERN]  # default: ## headings only
     min_body_words = MIN_SECTION_BODY_WORDS
     max_chunk_words = 800  # default: split chunks exceeding 800 words at paragraph boundaries
@@ -432,7 +484,7 @@ def _build_parse_config(profile, corrected_headings: dict | None) -> dict:
         for marker in profile.exercise_markers:
             try:
                 compiled_exercise_markers.append(
-                    (re.compile(marker.pattern, re.IGNORECASE), marker.behavior)
+                    (re.compile(marker.pattern, re.IGNORECASE), marker.behavior, getattr(marker, "group", ""))
                 )
             except re.error as exc:
                 logger.warning("Invalid exercise_marker pattern %r in profile: %s", marker.pattern, exc)
@@ -668,6 +720,59 @@ def _find_sections(mmd_text: str, book_slug: str, config: dict) -> list[dict]:
     return section_matches
 
 
+# Back-matter heading patterns — used by chapter intro detection to skip past
+# the previous chapter's Review Exercises / Practice Test / Chapter Review when
+# inferring where the next chapter actually starts.
+_BACK_MATTER_PAT = re.compile(
+    r"^##\s+(?:Practice\s+Test|Review\s+Exercises?|Chapter\s+Review"
+    r"|Key\s+Terms?|Key\s+Concepts?|Key\s+Equations?|Practice\s+Final\s+Exam)\b",
+    re.MULTILINE | re.IGNORECASE,
+)
+
+
+def _skip_past_back_matter(
+    intro_pos: int, prev_end: int, region: str, sec_start: int
+) -> int:
+    """
+    If intro_pos lands inside or before back-matter of the previous chapter
+    (Review Exercises, Practice Test, etc.), advance it to the next ## heading
+    after the LAST back-matter marker found in region.
+
+    Guarantees returned value < sec_start. Returns original intro_pos unchanged
+    if no back-matter is at or after the relative offset, or if advancing would
+    overshoot sec_start.
+    """
+    rel = intro_pos - prev_end  # region-relative offset
+
+    # Find the LAST back-matter marker that starts at or after rel
+    last_bm = None
+    for m in _BACK_MATTER_PAT.finditer(region):
+        if m.start() >= rel:
+            last_bm = m
+
+    if last_bm is None:
+        return intro_pos  # no back-matter after intro_pos — safe as-is
+
+    # Find the next ## heading after the end of the last back-matter marker
+    next_heading = re.search(r"^##\s+", region[last_bm.end():], re.MULTILINE)
+    if next_heading:
+        new_rel = last_bm.end() + next_heading.start()
+    else:
+        new_rel = last_bm.end()
+
+    new_abs = prev_end + new_rel
+    if new_abs < sec_start:
+        logger.info(
+            "Chapter intro_pos advanced from %d to %d to skip past back-matter (%s)",
+            intro_pos,
+            new_abs,
+            last_bm.group(0).strip(),
+        )
+        return new_abs
+
+    return intro_pos
+
+
 def _find_chapter_intros(mmd_text: str, sections: list[dict] | None = None) -> dict[int, int]:
     """
     Universal chapter heading detection with TOC-driven inference fallback.
@@ -736,8 +841,10 @@ def _find_chapter_intros(mmd_text: str, sections: list[dict] | None = None) -> d
                 line_start = region.rfind("\n", 0, fig_match.start())
                 intro_pos = prev_end + max(0, line_start)
 
-            # Check for ## Introduction heading
-            intro_heading = re.search(r"^##\s+Introduction", region, re.MULTILINE | re.IGNORECASE)
+            # Check for ## Introduction heading.
+            # Anchor to end-of-line so back-references like "## Introduction to
+            # Whole Numbers" (a Review Exercises subref) don't false-match.
+            intro_heading = re.search(r"^##\s+Introduction\s*$", region, re.MULTILINE | re.IGNORECASE)
             if intro_heading:
                 candidate = prev_end + intro_heading.start()
                 if intro_pos is None or candidate < intro_pos:
@@ -752,6 +859,8 @@ def _find_chapter_intros(mmd_text: str, sections: list[dict] | None = None) -> d
 
             # Fallback: if we found any intro marker, use it
             if intro_pos is not None:
+                # Skip past previous chapter's back-matter if intro_pos lands inside it
+                intro_pos = _skip_past_back_matter(intro_pos, prev_end, region, sec_start)
                 chapter_intro_pos[ch_num] = intro_pos
                 logger.info(
                     "Chapter %d: no explicit heading — inferred intro at char %d from section %d.1 backward scan",
@@ -759,12 +868,13 @@ def _find_chapter_intros(mmd_text: str, sections: list[dict] | None = None) -> d
                 )
             else:
                 # Last resort: use the previous chapter end as intro start
-                # (captures any orphan content between chapters)
+                # (captures any orphan content between chapters), then skip back-matter
                 if prev_end > 0 and prev_end < sec_start - 100:
-                    chapter_intro_pos[ch_num] = prev_end
+                    fallback_pos = _skip_past_back_matter(prev_end, prev_end, region, sec_start)
+                    chapter_intro_pos[ch_num] = fallback_pos
                     logger.info(
-                        "Chapter %d: no markers found — using previous chapter end as intro start (char %d)",
-                        ch_num, prev_end,
+                        "Chapter %d: no markers found — using char %d as intro start (after back-matter skip)",
+                        ch_num, fallback_pos,
                     )
 
     return chapter_intro_pos
@@ -854,14 +964,41 @@ def _build_section_chunks(
         all_candidates.sort(key=lambda t: t[0])
 
         # ── Noise filtering ───────────────────────────────────────────────────
+        # Exercise/back-matter headings bypass noise filters so they can be
+        # tagged in the exercise-zone step that follows.
         meaningful_subs: list[tuple[int, int, str]] = []
         for (sh_start, sh_end, heading_text) in all_candidates:
             if re.match(r"^\d+\.\d+\s", heading_text):
                 continue  # section headings leaked into body — skip
-            if _is_noise_heading(heading_text):
-                continue
-            if noise_patterns and _is_noise_heading_profile(heading_text, noise_patterns):
-                continue
+            # Check if this heading matches an exercise/back-matter marker
+            # BEFORE applying noise filters — exercise headings must survive.
+            _norm_for_noise = _normalize_heading(heading_text)
+            _is_exercise_related = False
+            if _EXERCISE_BYPASS_PATTERN.match(_norm_for_noise):
+                _is_exercise_related = True
+            elif exercise_markers:
+                _ex_result = _match_exercise_marker(_norm_for_noise, exercise_markers)
+                if _ex_result is not None:
+                    ex_behavior, ex_group = _ex_result
+                    # Only bypass noise for markers with an explicit vocabulary group
+                    # (new system) or legacy zone markers (real section boundaries).
+                    # Legacy inline_single with empty group is typically a feature box
+                    # (TRY IT, HOW TO, EXAMPLE) and must stay noise-filtered.
+                    if ex_group in ("zone_divider", "standalone_exercise", "pmp_topic",
+                                    "back_matter", "chapter_pool", "lab"):
+                        _is_exercise_related = True
+                    elif ex_behavior in ("zone_section_end", "zone_chapter_end"):
+                        _is_exercise_related = True
+            if not _is_exercise_related:
+                if _EXERCISE_ZONE_PATTERN.match(_norm_for_noise):
+                    _is_exercise_related = True
+                elif _EXERCISE_HEADING_PATTERN.match(_norm_for_noise):
+                    _is_exercise_related = True
+            if not _is_exercise_related:
+                if _is_noise_heading(heading_text):
+                    continue
+                if noise_patterns and _is_noise_heading_profile(heading_text, noise_patterns):
+                    continue
             meaningful_subs.append((sh_start, sh_end, heading_text))
 
         # ── Detect Chapter Review zone within body ────────────────────────────
@@ -879,22 +1016,42 @@ def _build_section_chunks(
         # Also check profile exercise markers against section label
         if exercise_markers:
             _norm_label = _normalize_heading(sec["section_label"])
-            beh = _match_exercise_marker(_norm_label, exercise_markers)
-            if beh in ("zone_section_end", "zone_chapter_end"):
-                in_exercises_zone = True
+            _label_result = _match_exercise_marker(_norm_label, exercise_markers)
+            if _label_result is not None:
+                _label_beh, _label_grp = _label_result
+                if _label_beh in ("zone_section_end", "zone_chapter_end"):
+                    in_exercises_zone = True
 
         tagged_subs: list[tuple[int, int, str]] = []
         for (sh_start, sh_end, heading_text) in meaningful_subs:
             _norm = _normalize_heading(heading_text)
 
             if exercise_markers:
-                ex_behavior = _match_exercise_marker(_norm, exercise_markers)
-                if ex_behavior in ("zone_section_end", "zone_chapter_end"):
-                    in_exercises_zone = True
-                    continue  # organizational divider — no chunk
-                elif ex_behavior == "inline_single":
-                    tagged_subs.append((sh_start, sh_end, heading_text + " (Exercises)"))
-                    continue
+                _ex_result = _match_exercise_marker(_norm, exercise_markers)
+                if _ex_result is not None:
+                    ex_behavior, ex_group = _ex_result
+                    if ex_behavior in ("zone_section_end", "zone_chapter_end") and ex_group == "zone_divider":
+                        in_exercises_zone = True
+                        continue  # organizational divider — no chunk
+                    elif ex_group == "back_matter":
+                        # Back matter headings become chapter_review chunks
+                        tagged_subs.append((sh_start, sh_end, heading_text + " (ChapterReview)"))
+                        continue
+                    elif ex_group == "standalone_exercise":
+                        tagged_subs.append((sh_start, sh_end, heading_text + " (Exercises)"))
+                        continue
+                    elif ex_group == "chapter_pool":
+                        tagged_subs.append((sh_start, sh_end, heading_text + " (Exercises)"))
+                        continue
+                    elif ex_group == "lab":
+                        tagged_subs.append((sh_start, sh_end, heading_text + " (Lab)"))
+                        continue
+                    elif ex_behavior in ("zone_section_end", "zone_chapter_end"):
+                        in_exercises_zone = True
+                        continue  # organizational divider — no chunk
+                    elif ex_behavior == "inline_single":
+                        tagged_subs.append((sh_start, sh_end, heading_text + " (Exercises)"))
+                        continue
             # Fallback: hardcoded exercise zone pattern
             if _EXERCISE_ZONE_PATTERN.match(_norm):
                 in_exercises_zone = True
@@ -956,16 +1113,17 @@ def _build_section_chunks(
                 continue
 
             # Apply OCR correction to subsection heading
-            _exercises_suffix = ""
-            if heading_text.endswith(" (Exercises)"):
-                _exercises_suffix = " (Exercises)"
-                _bare_heading = heading_text[: -len(" (Exercises)")]
-            else:
-                _bare_heading = heading_text
+            # Strip group suffix for correction lookup, then re-attach
+            _group_suffix = ""
+            for _sfx in (" (Exercises)", " (ChapterReview)", " (Lab)"):
+                if heading_text.endswith(_sfx):
+                    _group_suffix = _sfx
+                    break
+            _bare_heading = heading_text[: -len(_group_suffix)] if _group_suffix else heading_text
             _corrected_bare = corrections.get(_bare_heading, _bare_heading)
-            heading_text = _corrected_bare + _exercises_suffix
+            heading_text = _corrected_bare + _group_suffix
 
-            _in_zone = heading_text.endswith(" (Exercises)")
+            _in_zone = heading_text.endswith(" (Exercises)") or heading_text.endswith(" (ChapterReview)") or heading_text.endswith(" (Lab)")
             _ctype, _opt = _classify_chunk(heading_text, _in_zone, sec["section_label"])
 
             # Chapter Review zone → override to chapter_review type + optional
@@ -979,12 +1137,20 @@ def _build_section_chunks(
             _images = _extract_image_urls(chunk_text)
             _captions = _extract_image_captions(chunk_text, len(_images))
             _latex = _extract_latex(chunk_text)
+            # Strip internal-only group suffixes from heading before storing.
+            # Keep "(Exercises)" so PMP topics are visually distinct from teaching
+            # topics that share the same title (e.g., "Use Subtraction Notation").
+            _display_heading = heading_text
+            for _sfx in (" (ChapterReview)", " (Lab)"):
+                if _display_heading.endswith(_sfx):
+                    _display_heading = _display_heading[: -len(_sfx)]
+                    break
             raw_chunks.append(ParsedChunk(
                 book_slug=book_slug,
                 concept_id=sec["concept_id"],
                 section=sec["section_label"],
                 order_index=global_order,
-                heading=heading_text,
+                heading=_display_heading,
                 text=_clean_chunk_text(chunk_text),
                 latex=_latex,
                 image_urls=_images,
@@ -1015,10 +1181,49 @@ def _postprocess_chunks(
     """
     max_chunk_words = config["max_chunk_words"]
 
-    # ── Step 1: 3-copy deduplication ─────────────────────────────────────────
-    seen: dict[tuple[str, str], ParsedChunk] = {}
+    # ── Step 0: Re-assign chapter back matter to last regular section ────────
+    # Chunks with chunk_type "chapter_review" that have their own concept_id
+    # (e.g., a "Chapter Review" section) should be re-assigned to the last
+    # regular teaching section in the same chapter so they appear as subsections
+    # of that section in the admin UI.
+    _last_section_per_chapter: dict[int, str] = {}  # chapter_num → concept_id
+    _last_section_label_per_chapter: dict[int, str] = {}
     for chunk in raw_chunks:
-        key = (chunk.concept_id, chunk.heading)
+        # Extract chapter number from concept_id (e.g., "prealgebra_1.5" → chapter 1)
+        # Anchor to end so compound slugs like "prealgebra2e_0qbw93r_(1)_1.3" work
+        _cid_match = re.search(r"_(\d+)\.\d+$", chunk.concept_id)
+        if _cid_match and chunk.chunk_type == "teaching":
+            ch_num = int(_cid_match.group(1))
+            _last_section_per_chapter[ch_num] = chunk.concept_id
+            _last_section_label_per_chapter[ch_num] = chunk.section
+
+    _reassigned = 0
+    for chunk in raw_chunks:
+        if chunk.chunk_type != "chapter_review":
+            continue
+        # Anchor to end so compound slugs like "prealgebra2e_0qbw93r_(1)_1.3" work
+        _cid_match = re.search(r"_(\d+)\.\d+$", chunk.concept_id)
+        if not _cid_match:
+            continue
+        ch_num = int(_cid_match.group(1))
+        target_cid = _last_section_per_chapter.get(ch_num)
+        target_label = _last_section_label_per_chapter.get(ch_num)
+        if target_cid and target_cid != chunk.concept_id:
+            chunk.concept_id = target_cid
+            chunk.section = target_label
+            _reassigned += 1
+
+    if _reassigned:
+        logger.info(
+            "Re-assigned %d chapter_review chunks to last section per chapter",
+            _reassigned,
+        )
+
+    # ── Step 1: 3-copy deduplication ─────────────────────────────────────────
+    # Include chunk_type in key so teaching + exercise chunks with same heading coexist
+    seen: dict[tuple[str, str, str], ParsedChunk] = {}
+    for chunk in raw_chunks:
+        key = (chunk.concept_id, chunk.heading, chunk.chunk_type)
         existing = seen.get(key)
         if existing is None or _word_count(chunk.text) > _word_count(existing.text):
             seen[key] = chunk
@@ -1360,22 +1565,28 @@ def _fuzzy_recover_section(
 
 def _match_exercise_marker(
     normalized_heading: str,
-    compiled_markers: list[tuple[re.Pattern, str]],
-) -> str | None:
-    """Return the behavior string of the first matching exercise marker, or None."""
-    for pat, behavior in compiled_markers:
+    compiled_markers: list[tuple[re.Pattern, str, str]],
+) -> tuple[str, str] | None:
+    """Return (behavior, group) of the first matching exercise marker, or None."""
+    for item in compiled_markers:
+        pat = item[0]
+        behavior = item[1]
+        group = item[2] if len(item) > 2 else ""
         if pat.search(normalized_heading):
-            return behavior
+            return (behavior, group)
     return None
 
 
 def _check_is_exercise_section_profile(
     section_label: str,
-    compiled_markers: list[tuple[re.Pattern, str]],
+    compiled_markers: list[tuple[re.Pattern, str, str]],
 ) -> bool:
     """Return True if the section label itself signals an exercise section."""
     _norm = _normalize_heading(section_label)
-    behavior = _match_exercise_marker(_norm, compiled_markers)
+    result = _match_exercise_marker(_norm, compiled_markers)
+    if result is None:
+        return False
+    behavior, _group = result
     return behavior in ("zone_section_end", "zone_chapter_end")
 
 

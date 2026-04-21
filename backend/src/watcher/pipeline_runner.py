@@ -72,13 +72,13 @@ def _setup_file_log(slug: str) -> None:
     logging.getLogger().addHandler(fh)
 
 
-async def run_pipeline(pdf_path: Path, subject: str) -> None:
+async def run_pipeline(pdf_path: Path, subject: str, slug_override: str | None = None) -> None:
     from src.pipeline import run_mathpix_extraction
     from src.extraction.chunk_builder import build_chunks, validate_and_clean_images
     from src.db.connection import async_session_factory
     from src.validators.post_parse_validator import PipelineValidationError
 
-    slug = derive_slug(pdf_path.name)
+    slug = slug_override or derive_slug(pdf_path.name)
     code = derive_code(slug)  # may collide; resolved from books.yaml after Stage 1
     _setup_file_log(slug)
 
@@ -127,8 +127,16 @@ async def run_pipeline(pdf_path: Path, subject: str) -> None:
         # Stage 3 — Chunk pipeline (universal parser + embed + persist + image validation)
         logger.info("[%s] Stage 3/6: Building chunks & embeddings...", slug)
         mmd_path = OUTPUT_DIR / slug / "book.mmd"
+        # Load book profile so exercise vocabulary groups are used (not just hardcoded math defaults)
+        from src.extraction.book_profiler import load_or_create_profile
+        from src.extraction.ocr_validator import validate_and_analyze
+        _mmd_text = mmd_path.read_text(encoding="utf-8")
+        _quality = validate_and_analyze(_mmd_text, slug)
+        _profile = await load_or_create_profile(_mmd_text, slug, _quality)
+        logger.info("[%s] Loaded book profile (subject=%s, exercise_markers=%d)",
+                     slug, _profile.subject, len(_profile.exercise_markers))
         async with async_session_factory() as db:
-            await build_chunks(slug, mmd_path, db, rebuild=False)
+            await build_chunks(slug, mmd_path, db, rebuild=False, profile=_profile)
             removed = await validate_and_clean_images(slug, db)
         logger.info("[%s] Stage 3/6: Done. Removed %d orphan image rows.", slug, removed)
 
@@ -223,8 +231,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run full pipeline for a single PDF")
     parser.add_argument("--pdf", required=True, type=Path, help="Path to the PDF file")
     parser.add_argument("--subject", required=True, help="Subject name (from folder name)")
+    parser.add_argument("--slug", required=False, default=None, help="Pre-derived slug (from upload title)")
     args = parser.parse_args()
-    asyncio.run(run_pipeline(args.pdf, args.subject))
+    asyncio.run(run_pipeline(args.pdf, args.subject, slug_override=args.slug))
 
 
 if __name__ == "__main__":

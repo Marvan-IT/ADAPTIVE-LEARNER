@@ -68,6 +68,9 @@ class ExerciseMarker(BaseModel):
 
     pattern: str    # the heading text or regex
     behavior: str   # "zone_section_end" | "zone_chapter_end" | "inline_single"
+    group: str = ""  # vocabulary group: "zone_divider" | "pmp_topic" |
+                     # "standalone_exercise" | "chapter_pool" | "back_matter" |
+                     # "lab" — empty string = legacy (no group assigned)
 
 
 class BookProfile(BaseModel):
@@ -759,20 +762,43 @@ def legacy_profile_from_config(book_config: dict) -> BookProfile:
         exercise_zone_patterns.insert(0, custom_exercise)
 
     exercise_markers: list[ExerciseMarker] = [
-        ExerciseMarker(pattern=p, behavior="zone_section_end")
+        ExerciseMarker(pattern=p, behavior="zone_section_end", group="zone_divider")
         for p in exercise_zone_patterns
     ]
 
     # _EXERCISE_HEADING_PATTERN alternatives — inline exercise headings
     inline_exercise_patterns = [
         r"^practice makes perfect?",
+    ]
+    exercise_markers += [
+        ExerciseMarker(pattern=p, behavior="inline_single", group="zone_divider")
+        for p in inline_exercise_patterns
+    ]
+
+    # Standalone exercise groups (become subsections directly)
+    standalone_exercise_patterns = [
         r"^mixed practice",
         r"^everyday math",
         r"^writing exercises?",
+        r"^self check\b",
     ]
     exercise_markers += [
-        ExerciseMarker(pattern=p, behavior="inline_single")
-        for p in inline_exercise_patterns
+        ExerciseMarker(pattern=p, behavior="inline_single", group="standalone_exercise")
+        for p in standalone_exercise_patterns
+    ]
+
+    # Chapter back matter (attached to last section)
+    back_matter_patterns = [
+        r"^key terms?\b",
+        r"^key concepts?\b",
+        r"^key equations?\b",
+        r"^review exercises?\b",
+        r"^practice test\b",
+        r"^chapter review\b",
+    ]
+    exercise_markers += [
+        ExerciseMarker(pattern=p, behavior="zone_chapter_end", group="back_matter")
+        for p in back_matter_patterns
     ]
 
     # ── Heading hierarchy (OpenStax math book standard) ───────────────────────
