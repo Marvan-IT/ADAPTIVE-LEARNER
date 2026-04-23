@@ -122,3 +122,9 @@ export const deleteGraphOverride = (bookSlug, id) =>
 // ── Progress Reports ──────────────────────────────────────────────
 export const getStudentProgressReport = (studentId, period = "week") =>
   api.get(`/api/admin/students/${studentId}/progress-report`, { params: { period } });
+
+// ── Audit / Undo-Redo ─────────────────────────────────────────────
+export const getChanges = (params = {}) =>
+  api.get("/api/admin/changes", { params });
+export const undoChange = (id) => api.post(`/api/admin/changes/${id}/undo`);
+export const redoChange = (id) => api.post(`/api/admin/changes/${id}/redo`);

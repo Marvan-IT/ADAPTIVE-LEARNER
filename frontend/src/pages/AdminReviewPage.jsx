@@ -305,6 +305,38 @@ export default function AdminReviewPage() {
     if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
   }, []);
 
+  // ── Listen for undo/redo performed from AdminTopBar ────────────────────
+
+  useEffect(() => {
+    const handleAuditChanged = () => {
+      // Refetch sections list so sidebar reflects server state after undo/redo
+      getBookSections(slug).then((secRes) => {
+        const chaptersArr = secRes.data?.chapters || secRes.data || [];
+        setSections(chaptersArr);
+        const concepts = [];
+        chaptersArr.forEach((ch) =>
+          ch.sections.forEach((s) =>
+            concepts.push({
+              concept_id: s.concept_id,
+              label: s.section && s.heading && s.heading !== s.section
+                ? `${s.section} — ${s.heading}`
+                : (s.section || s.concept_id),
+            })
+          )
+        );
+        setAllConcepts(concepts);
+      }).catch((e) => { console.error("[admin] failed to refetch sections after audit change", e); });
+      // Refetch chunks for the currently selected section
+      if (selectedConcept) {
+        loadChunks(selectedConcept);
+      }
+      toast({ variant: "info", title: "Content updated", description: "Re-fetched from server." });
+    };
+
+    window.addEventListener("admin:audit-changed", handleAuditChanged);
+    return () => window.removeEventListener("admin:audit-changed", handleAuditChanged);
+  }, [slug, selectedConcept, loadChunks]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Scroll-sync: observe which chunk is in view and highlight in left panel
   useEffect(() => {
     const container = centerRef.current;

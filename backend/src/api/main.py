@@ -236,6 +236,19 @@ async def lifespan(app: FastAPI):
             except Exception:
                 logger.exception("Failed to mount image dir for %s", _bslug)
 
+    # ── Nightly audit log retention task ─────────────────────────────────────
+    from tasks.audit_cleanup import run_cleanup as _run_audit_cleanup
+
+    async def _nightly_audit_cleanup():
+        while True:
+            await asyncio.sleep(86400)   # 24 hours
+            try:
+                await _run_audit_cleanup()
+            except Exception:
+                logger.exception("[audit_cleanup] Nightly purge failed")
+
+    asyncio.create_task(_nightly_audit_cleanup())
+
     logger.info("Services loaded. API ready.")
     yield
     _save_translation_cache()

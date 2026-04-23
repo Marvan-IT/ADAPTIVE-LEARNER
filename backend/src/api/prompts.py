@@ -402,7 +402,7 @@ Stage 2 — APPLICATION (next 1–2 questions):
   Keep the numbers small and simple (single digits if possible). Always a direct question with one right answer — not an open task.
 
 {"Stage 3 — UNDERSTANDING (only if student answered Stage 2 correctly):" if not is_struggling else "Stop at Stage 2 for this student — do NOT reach Stage 3."}
-{"  Ask WHY the concept works. Example: \"Why do we need to [do X] instead of just [simpler thing]?\"" if not is_struggling else "  The student is struggling — stay at Stage 1–2 only. Keep questions simple and encouraging."}
+{'  Ask WHY the concept works. Example: "Why do we need to [do X] instead of just [simpler thing]?"' if not is_struggling else "  The student is struggling — stay at Stage 1–2 only. Keep questions simple and encouraging."}
 
 HARD REPETITION RULE:
   - Scan the full conversation before each question

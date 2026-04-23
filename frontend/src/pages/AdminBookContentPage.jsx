@@ -222,8 +222,33 @@ export default function AdminBookContentPage() {
     splitDraftChunk,
     saveDraft,
     discardDraft,
+    clear: clearDraft,
     saveStatus,
   } = useDraftMode(slug, selectedConcept, serverChunks);
+
+  // ── Listen for undo/redo performed from AdminTopBar ────────────────────
+
+  useEffect(() => {
+    const handleAuditChanged = () => {
+      // Drop any pending draft edits — the server state just changed via undo/redo
+      clearDraft();
+      // Refetch sections list
+      getBookSections(slug).then((secRes) => {
+        const secData = secRes.data;
+        const chaptersArr = secData?.chapters || secData || [];
+        setSections(chaptersArr);
+        if (secData?.title) setBookTitle(secData.title);
+      }).catch((e) => { console.error("[admin] failed to refetch sections after audit change", e); });
+      // Refetch chunks for the currently selected section
+      if (selectedConcept) {
+        loadChunks(selectedConcept);
+      }
+      toast({ variant: "info", title: "Content updated", description: "Unsaved drafts cleared. Content re-fetched from server." });
+    };
+
+    window.addEventListener("admin:audit-changed", handleAuditChanged);
+    return () => window.removeEventListener("admin:audit-changed", handleAuditChanged);
+  }, [slug, selectedConcept, clearDraft, loadChunks]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Initial load ───────────────────────────────────────────────────────
 

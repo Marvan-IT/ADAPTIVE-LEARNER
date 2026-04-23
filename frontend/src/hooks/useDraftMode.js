@@ -199,6 +199,15 @@ export default function useDraftMode(slug, conceptId, serverChunks) {
     setSaveStatus(null);
   }, [slug, conceptId]);
 
+  // ── Clear all draft state (used after server-side undo/redo) ──────────
+
+  const clear = useCallback(() => {
+    setDraftChunks([]);
+    setPendingStructural([]);
+    clearFromStorage(slug, conceptId);
+    setSaveStatus(null);
+  }, [slug, conceptId]);
+
   // ── Save draft: execute structural ops then update modified chunks ─────
 
   const saveDraft = useCallback(async (apiCallbacks) => {
@@ -300,6 +309,7 @@ export default function useDraftMode(slug, conceptId, serverChunks) {
     splitDraftChunk,
     saveDraft,
     discardDraft,
+    clear,
     saveStatus,
   };
 }

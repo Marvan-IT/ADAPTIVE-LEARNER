@@ -1,7 +1,9 @@
+import { useCallback } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { ArrowLeft } from "lucide-react";
 import { Breadcrumb } from "../ui";
+import { UndoRedoControls } from "../admin/UndoRedoControls";
 
 function getBreadcrumbs(pathname, t) {
   const base = { label: t("admin.nav.adminBadge", "Admin"), href: "/admin" };
@@ -48,6 +50,18 @@ function getBackTarget(pathname, t) {
   return { label: t("admin.nav.backToDashboard", "Back to Dashboard"), path: "/admin" };
 }
 
+// Routes on which the Undo/Redo controls should be visible
+const UNDO_REDO_PATTERN = /^\/admin\/books\/([^/]+)\/(review|content)$/;
+
+/**
+ * Extracts the book slug from the current path if it matches a content/review route.
+ * Returns null on non-matching routes.
+ */
+function getBookSlugFromPath(pathname) {
+  const m = pathname.match(UNDO_REDO_PATTERN);
+  return m ? m[1] : null;
+}
+
 export default function AdminTopBar() {
   const location = useLocation();
   const navigate = useNavigate();
@@ -55,6 +69,15 @@ export default function AdminTopBar() {
 
   const isAdminHome = location.pathname === "/admin";
   const back = getBackTarget(location.pathname, t);
+
+  // Determine whether to render Undo/Redo controls and which book to filter by
+  const undoRedoBookSlug = getBookSlugFromPath(location.pathname);
+  const showUndoRedo = undoRedoBookSlug !== null;
+
+  // Emit a custom event that AdminBookContentPage listens to for refreshing its data
+  const handleAfterUndoRedo = useCallback(() => {
+    window.dispatchEvent(new CustomEvent("admin:audit-changed"));
+  }, []);
 
   return (
     <header style={{
@@ -84,6 +107,15 @@ export default function AdminTopBar() {
           <div style={{ width: "1px", height: "20px", background: "#E2E8F0" }} />
           <Breadcrumb items={getBreadcrumbs(location.pathname, t)} />
         </div>
+      )}
+
+      {/* Right: Undo/Redo — only on book review/content routes */}
+      {showUndoRedo && (
+        <UndoRedoControls
+          bookSlug={undoRedoBookSlug}
+          onAfterUndo={handleAfterUndoRedo}
+          onAfterRedo={handleAfterUndoRedo}
+        />
       )}
     </header>
   );

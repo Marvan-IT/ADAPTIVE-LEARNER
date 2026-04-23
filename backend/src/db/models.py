@@ -569,6 +569,51 @@ class SupportMessage(Base):
     sender: Mapped["User | None"] = relationship()
 
 
+class AdminAuditLog(Base):
+    """Immutable audit record for every admin mutation that supports undo/redo.
+
+    Rows are never deleted by application code; only the retention background
+    task (purge_old_audits_per_admin) prunes old rows beyond the keep limit.
+    The self-referential ``redo_of`` FK forms a singly-linked redo chain.
+    """
+
+    __tablename__ = "admin_audit_logs"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    admin_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    action_type: Mapped[str] = mapped_column(Text, nullable=False)
+    resource_type: Mapped[str] = mapped_column(Text, nullable=False)
+    resource_id: Mapped[str] = mapped_column(Text, nullable=False)
+    book_slug: Mapped[str] = mapped_column(Text, nullable=False)
+    old_value: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    new_value: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    affected_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="1"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    undone_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    undone_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    redo_of: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("admin_audit_logs.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
+
 # Register auth tables with Base.metadata so Alembic autogenerate and
 # SQLAlchemy relationship resolution both see them.  This import must come
 # AFTER the Base class is defined above.
