@@ -1807,6 +1807,7 @@ async def update_chunk(
     # Capture pre-mutation snapshot for audit
     old_snapshot = await audit_service.snapshot_chunk(db, chunk_uuid)
     book_slug_for_audit = chunk.book_slug
+    old_heading = chunk.heading
 
     body = await request.json()
     _allowed = {"heading", "text", "chunk_type", "is_optional", "is_hidden", "exam_disabled", "chunk_type_locked"}
@@ -1820,6 +1821,29 @@ async def update_chunk(
 
     await db.flush()
     new_snapshot = await audit_service.snapshot_chunk(db, chunk_uuid)
+
+    # ── Auto-translate updated heading into all 12 non-English locales ─────
+    new_heading = chunk.heading
+    if "heading" in body and new_heading and new_heading != old_heading:
+        try:
+            from api.translation_helper import translate_one_string
+            async with asyncio.timeout(10.0):
+                translations = await translate_one_string(str(new_heading))
+            if translations:
+                await db.execute(
+                    text("UPDATE concept_chunks SET heading_translations = :t WHERE id = :id"),
+                    {"t": json.dumps(translations), "id": chunk_uuid},
+                )
+                logger.info(
+                    "[admin] heading_translations populated for chunk=%s (%d langs)",
+                    chunk_id, max(len(translations) - 1, 0),
+                )
+        except Exception:
+            logger.warning(
+                "[admin] heading translation failed for chunk %s — English-only until re-trigger",
+                chunk_id,
+            )
+    # ── End translation block ────────────────────────────────────────────────
 
     try:
         await audit_service.log_action(
@@ -2069,6 +2093,27 @@ async def merge_chunks(
     await db.delete(chunk2)
     await db.flush()
 
+    # ── Auto-translate the merged heading into all 12 non-English locales ───
+    try:
+        from api.translation_helper import translate_one_string
+        async with asyncio.timeout(10.0):
+            translations = await translate_one_string(str(new_heading))
+        if translations:
+            await db.execute(
+                text("UPDATE concept_chunks SET heading_translations = :t WHERE id = :id"),
+                {"t": json.dumps(translations), "id": chunk1.id},
+            )
+            logger.info(
+                "[admin] heading_translations populated post-merge chunk=%s (%d langs)",
+                surviving_id, max(len(translations) - 1, 0),
+            )
+    except Exception:
+        logger.warning(
+            "[admin] heading translation failed post-merge for chunk %s — English-only",
+            surviving_id,
+        )
+    # ── End translation block ────────────────────────────────────────────────
+
     # Re-index remaining chunks for this concept so order_index is sequential
     remaining = (
         await db.execute(
@@ -2240,6 +2285,27 @@ async def split_chunk(
 
     new_chunk_id = str(new_chunk.id)
     original_chunk_id = str(chunk.id)
+
+    # ── Auto-translate the new "(cont.)" heading into all 12 non-English locales ──
+    try:
+        from api.translation_helper import translate_one_string
+        async with asyncio.timeout(10.0):
+            translations = await translate_one_string(str(new_chunk.heading))
+        if translations:
+            await db.execute(
+                text("UPDATE concept_chunks SET heading_translations = :t WHERE id = :id"),
+                {"t": json.dumps(translations), "id": new_chunk.id},
+            )
+            logger.info(
+                "[admin] heading_translations populated post-split chunk=%s (%d langs)",
+                new_chunk_id, max(len(translations) - 1, 0),
+            )
+    except Exception:
+        logger.warning(
+            "[admin] heading translation failed post-split for chunk %s — English-only",
+            new_chunk_id,
+        )
+    # ── End translation block ────────────────────────────────────────────────
 
     # Migrate active session chunk_progress: copy original chunk entry to new chunk
     active_sessions = (
