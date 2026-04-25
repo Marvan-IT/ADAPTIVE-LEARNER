@@ -108,6 +108,25 @@ async def create_subject(
         raise HTTPException(409, f"Subject '{slug}' already exists")
     subj = Subject(slug=slug, label=label)
     db.add(subj)
+    await db.flush()
+
+    # ── Auto-translate the new subject label into all 12 non-English locales ──
+    try:
+        from api.translation_helper import translate_one_string
+        async with asyncio.timeout(10.0):
+            translations = await translate_one_string(label)
+        if translations:
+            subj.label_translations = translations
+            logger.info(
+                "[admin] subject.label_translations populated for slug=%s (%d langs)",
+                slug, max(len(translations) - 1, 0),
+            )
+    except Exception:
+        logger.warning(
+            "[admin] subject label translation failed for slug=%s — English-only", slug,
+        )
+    # ── End translation block ────────────────────────────────────────────────
+
     await db.commit()
     await db.refresh(subj)
     return {"slug": subj.slug, "label": subj.label}
@@ -129,8 +148,29 @@ async def update_subject(
     subj = (await db.execute(select(Subject).where(Subject.slug == slug))).scalar_one_or_none()
     if not subj:
         raise HTTPException(404, f"Subject '{slug}' not found")
+    old_label = subj.label
     subj.label = label
     db.add(subj)
+    await db.flush()
+
+    # ── Auto-translate the updated subject label into all 12 non-English locales ──
+    if label != old_label:
+        try:
+            from api.translation_helper import translate_one_string
+            async with asyncio.timeout(10.0):
+                translations = await translate_one_string(label)
+            if translations:
+                subj.label_translations = translations
+                logger.info(
+                    "[admin] subject.label_translations updated for slug=%s (%d langs)",
+                    slug, max(len(translations) - 1, 0),
+                )
+        except Exception:
+            logger.warning(
+                "[admin] subject label translation failed for slug=%s — English-only", slug,
+            )
+    # ── End translation block ────────────────────────────────────────────────
+
     await db.commit()
     await db.refresh(subj)
     logger.info("[admin] Subject updated: slug=%s new_label=%s by admin=%s", slug, label, str(_user.id))
@@ -335,7 +375,28 @@ async def rename_book(
     book = (await db.execute(select(Book).where(Book.book_slug == slug))).scalar_one_or_none()
     if not book:
         raise HTTPException(404, f"Book '{slug}' not found")
+    old_title = book.title
     book.title = title
+    await db.flush()
+
+    # ── Auto-translate the new title into all 12 non-English locales ───────
+    if title != old_title:
+        try:
+            from api.translation_helper import translate_one_string
+            async with asyncio.timeout(10.0):
+                translations = await translate_one_string(title)
+            if translations:
+                book.title_translations = translations
+                logger.info(
+                    "[admin] book.title_translations populated for slug=%s (%d langs)",
+                    slug, max(len(translations) - 1, 0),
+                )
+        except Exception:
+            logger.warning(
+                "[admin] book title translation failed for slug=%s — English-only", slug,
+            )
+    # ── End translation block ────────────────────────────────────────────────
+
     await db.commit()
     logger.info("[admin] Book renamed: slug=%s title=%s by admin=%s", slug, title, str(_user.id))
     return {"slug": book.book_slug, "title": book.title}
