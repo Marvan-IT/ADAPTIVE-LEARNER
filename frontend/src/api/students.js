@@ -51,3 +51,6 @@ export const getFeatureFlags = () =>
 
 export const getStudentAnalytics = (studentId) =>
   api.get(`/api/v2/students/${studentId}/analytics`);
+
+export const validateCustomInterest = (studentId, text, language) =>
+  api.post(`/api/v2/students/${studentId}/custom-interests/validate`, { text, language });

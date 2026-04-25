@@ -69,7 +69,21 @@ function LogoMark({ light = false }) {
 // ── Main layout ───────────────────────────────────────────────────────────────
 export default function AuthLayout() {
   const location = useLocation();
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+
+  // Auth screens are always English — student's preferred language syncs
+  // from their profile after login (StudentContext). Clears localStorage
+  // so refresh stays English; user can still switch via the selector.
+  useEffect(() => {
+    if (i18n.language !== "en") {
+      i18n.changeLanguage("en");
+    }
+    try {
+      localStorage.removeItem("ada_language");
+    } catch {
+      // ignore storage errors
+    }
+  }, [i18n]);
 
   // Tagline rotation
   const taglines = [

@@ -11,12 +11,9 @@ import {
   completeChunk,
   completeChunkItem as completeChunkItemAPI,
   evaluateChunkAnswers,
-  switchStyle,
-  updateSessionInterests,
 } from "../api/sessions";
 import { useAdaptiveStore } from '../store/adaptiveStore';
 import { useStudent } from "./StudentContext";
-import { useTheme } from "./ThemeContext";
 import { trackEvent } from "../utils/analytics";
 
 const SessionContext = createContext();
@@ -143,7 +140,7 @@ function sessionReducer(state, action) {
         ...state,
         assistMessages: [
           ...state.assistMessages,
-          { role: "user", content: action.payload },
+          { role: "user", content: action.payload, isSystemPrompt: action.isSystemPrompt ?? false },
         ],
         assistLoading: true,
       };
@@ -385,6 +382,7 @@ function sessionReducer(state, action) {
 
     case "LANGUAGE_CHANGED":
       // Replace chunk headings by index from translated_headings, clear card cache
+      // Keep currentCardIndex, maxReachedIndex, cardAnswers — positional answers are valid across languages
       return {
         ...state,
         chunkList: state.chunkList.map((chunk, i) => ({
@@ -392,9 +390,6 @@ function sessionReducer(state, action) {
           heading: action.payload.headings[i] ?? chunk.heading,
         })),
         cards: [],
-        currentCardIndex: 0,
-        maxReachedIndex: 0,
-        cardAnswers: {},
       };
 
     case "CHUNK_ITEM_COMPLETE":
@@ -431,7 +426,6 @@ function sessionReducer(state, action) {
 export function SessionProvider({ children }) {
   const [state, dispatch] = useReducer(sessionReducer, initialState);
   const { student, refreshMastery } = useStudent();
-  const { style } = useTheme();
 
   const friendlyError = (err) => {
     console.error("[AL] API error:", err.code, err.response?.status, err.message);
@@ -457,12 +451,11 @@ export function SessionProvider({ children }) {
   };
 
   const startLesson = useCallback(
-    async (conceptId, lessonStyle, lessonInterests = []) => {
+    async (conceptId) => {
       if (!student) return;
       dispatch({ type: "START_LOADING" });
       try {
-        const effectiveStyle = lessonStyle || style;
-        const sessionRes = await startSession(student.id, conceptId, effectiveStyle, lessonInterests);
+        const sessionRes = await startSession(student.id, conceptId);
         dispatch({ type: "SESSION_CREATED", payload: sessionRes.data });
 
         // Check for chunk list — if the concept has chunks, use chunk flow
@@ -490,23 +483,14 @@ export function SessionProvider({ children }) {
         dispatch({ type: "ERROR", payload: friendlyError(err) });
       }
     },
-    [student, style]
+    [student]
   );
 
   const startChunk = useCallback(
-    async (chunkId, chunkStyle, chunkInterests = []) => {
+    async (chunkId) => {
       if (!state.session?.id) return;
       dispatch({ type: "CHUNK_LOADING" });
       try {
-        if (chunkStyle) {
-          try {
-            await switchStyle(state.session.id, chunkStyle);
-          } catch (styleErr) {
-            // 409 = session already past PRESENTING phase; non-blocking, card load continues
-            console.error("[startChunk] switchStyle failed (non-blocking):", styleErr?.response?.status ?? styleErr);
-          }
-        }
-        if (chunkInterests.length) await updateSessionInterests(state.session.id, chunkInterests);
         const res = await generateChunkCards(state.session.id, chunkId);
         if (!res?.cards?.length) {
           dispatch({ type: "ERROR", payload: i18n.t("learning.noCardsError") });
@@ -626,13 +610,13 @@ export function SessionProvider({ children }) {
   }, []);
 
   const sendAssistMessage = useCallback(
-    async (message, trigger = "user") => {
+    async (message, trigger = "user", options = {}) => {
       if (!state.session) return;
       if (trigger === "idle") {
         dispatch({ type: "IDLE_TRIGGERED" });
       }
       if (trigger === "user" && message) {
-        dispatch({ type: "ASSIST_SENT", payload: message });
+        dispatch({ type: "ASSIST_SENT", payload: message, isSystemPrompt: options.isSystemPrompt ?? false });
       }
       try {
         const res = await assistStudent(

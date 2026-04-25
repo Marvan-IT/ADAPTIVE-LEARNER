@@ -29,7 +29,7 @@ const STAT_COLORS = [
 ];
 
 export default function DashboardPage() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const navigate = useNavigate();
 
   function getGreeting() {
@@ -38,7 +38,7 @@ export default function DashboardPage() {
     if (h < 17) return t("dashboard.greetingAfternoon", "Good afternoon");
     return t("dashboard.greetingEvening", "Good evening");
   }
-  const { student, masteredConcepts } = useStudent();
+  const { student, masteredConcepts, isHydrated } = useStudent();
   const xp = useAdaptiveStore((s) => s.xp);
   const level = useAdaptiveStore((s) => s.level);
   const dailyStreak = useAdaptiveStore((s) => s.dailyStreak);
@@ -72,7 +72,7 @@ export default function DashboardPage() {
         .then((res) => setStudyTimeSec(res.data?.total_study_time_sec || 0))
         .catch((err) => console.error("[Dashboard] analytics fetch failed:", err));
     }
-  }, [student?.id]);
+  }, [student?.id, i18n.language]);
 
   // Fetch real subjects with progress + last session info
   useEffect(() => {
@@ -148,11 +148,11 @@ export default function DashboardPage() {
         console.error("[Subjects] Failed to load subjects:", err);
       }
     })();
-  }, [student?.id, masteredConcepts]);
+  }, [student?.id, masteredConcepts, i18n.language]);
 
   const stats = [
     { icon: Flame, label: t("dashboard.dayStreak", "Day Streak"), value: dailyStreak || 0, color: "bg-orange-50 text-orange-500" },
-    { icon: Star, label: t("dashboard.toNextLevel", { xp: 100 - (xp % 100), level: level + 1 }), value: `${xp} XP`, color: "bg-amber-50 text-amber-500" },
+    { icon: Star, label: isHydrated ? t("dashboard.toNextLevel", { xp: 100 - (xp % 100), level: level + 1 }) : "—", value: isHydrated ? `${xp} XP` : "—", color: "bg-amber-50 text-amber-500" },
     { icon: CheckCircle2, label: t("dashboard.conceptsMastered", "Concepts Mastered"), value: masteredConcepts?.length || 0, color: "bg-emerald-50 text-emerald-500" },
     { icon: Clock, label: t("dashboard.studyTime", "Study Time"), value: formatStudyTime(studyTimeSec), color: "bg-violet-50 text-violet-500" },
   ];
@@ -189,10 +189,10 @@ export default function DashboardPage() {
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <p style={{ fontSize: "14px", fontWeight: 600, color: "#0F172A", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {formatConceptTitle(resumeSession.concept_id) || t("dashboard.continueLearning", "Continue Learning")}
+                {resumeSession.concept_title || formatConceptTitle(resumeSession.concept_id, t) || t("dashboard.continueLearning", "Continue Learning")}
               </p>
               <p style={{ fontSize: "12px", color: "#94A3B8" }}>
-                {displayBookTitle(resumeSession.book_slug) || t("subjects.mathematics")} &middot; {resumeSession.phase}
+                {resumeSession.book_title || displayBookTitle(resumeSession.book_slug) || t("subjects.mathematics")} &middot; {resumeSession.phase}
               </p>
             </div>
             <button
@@ -280,7 +280,7 @@ export default function DashboardPage() {
                       <p style={{ fontSize: "12px", color: "#64748B", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                         {subj.lastBookTitle && <span style={{ fontWeight: 600 }}>{subj.lastBookTitle}</span>}
                         {subj.lastBookTitle && " · "}
-                        {formatConceptTitle(ls.concept_id)}
+                        {ls.concept_title || formatConceptTitle(ls.concept_id, t)}
                       </p>
                       <p style={{ fontSize: "11px", color: "#94A3B8", marginTop: "2px" }}>
                         {ls.phase === "COMPLETED"
@@ -359,11 +359,15 @@ export default function DashboardPage() {
               )}
               <div style={{ flex: 1, minWidth: 0 }}>
                 <p style={{ fontSize: "14px", fontWeight: 500, color: "#0F172A", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {formatConceptTitle(session.concept_id) || t("dashboard.studySession", "Study session")}
+                  {session.concept_title || formatConceptTitle(session.concept_id, t) || t("dashboard.studySession", "Study session")}
                 </p>
                 <p style={{ fontSize: "11px", color: "#94A3B8" }}>
-                  {session.phase === "COMPLETED" ? t("dashboard.completed", "Completed") : t("dashboard.inProgress", "In progress")}
-                  {session.book_slug && ` · ${displayBookTitle(session.book_slug)}`}
+                  {session.phase === "COMPLETED"
+                    ? t("dashboard.completed", "Completed")
+                    : session.phase === "CARDS_DONE"
+                    ? t("dashboard.cardsDone", "Cards done")
+                    : t("dashboard.inProgress", "In progress")}
+                  {session.book_slug && ` · ${session.book_title || displayBookTitle(session.book_slug)}`}
                 </p>
               </div>
               <ChevronRight size={16} style={{ color: "#94A3B8", opacity: 0.5, flexShrink: 0 }} />

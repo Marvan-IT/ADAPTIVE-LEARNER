@@ -346,7 +346,8 @@ export default function CardLearningView({ remediationMode = false, onCardStates
 
         sendAssistMessage(
           `The student got this question wrong: "${mcq.question}". Give a helpful hint about this topic without revealing the answer.`,
-          "user"
+          "user",
+          { isSystemPrompt: true }
         );
 
         const isSecondAttempt = !!cs.replacementMcq;
@@ -436,7 +437,8 @@ export default function CardLearningView({ remediationMode = false, onCardStates
 
         sendAssistMessage(
           `The student got this question wrong: "${q.question}". Give a helpful hint about this topic without revealing the answer.`,
-          "user"
+          "user",
+          { isSystemPrompt: true }
         );
         feedbackTimerRef.current = setTimeout(() => {
           setCardStates((prev) => {
@@ -647,7 +649,7 @@ export default function CardLearningView({ remediationMode = false, onCardStates
                 {card.title}
               </div>
               <div style={{ color: "rgba(255,255,255,0.8)", fontSize: "12px", fontWeight: 500 }}>
-                {conceptTitle} — {t("learning.cardProgress", { current: currentCardIndex + 1 })}
+                {conceptTitle} — {t("learning.cardProgress", { current: currentCardIndex + 1, total: cards.length })}
               </div>
             </div>
             {/* Game HUD */}

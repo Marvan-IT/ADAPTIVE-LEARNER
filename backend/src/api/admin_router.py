@@ -37,6 +37,7 @@ from extraction.graph_builder import insert_section_node
 from api.chunk_knowledge_service import _normalize_image_url, _load_graph, reload_graph_with_overrides, invalidate_graph_cache
 import api.audit_service as audit_service
 from api.audit_schemas import AuditLogEntryResponse, UndoResponse, RedoResponse
+from api.teaching_service import invalidate_chunk_cache
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -1836,9 +1837,14 @@ async def update_chunk(
             "[admin] Audit log failed for update_chunk %s — proceeding", chunk_id
         )
 
+    try:
+        await invalidate_chunk_cache(db, [str(chunk_uuid)])
+    except Exception:
+        logger.warning("[admin-invalidate] action=update_chunk chunks=[%s] — invalidation failed", chunk_id)
     await db.commit()
     await db.refresh(chunk)
     logger.info("[admin] Chunk %s updated by admin %s (audit_logged)", chunk_id, str(_user.id))
+    logger.info("[admin-invalidate] action=update_chunk chunks=[%s]", chunk_id)
     return {
         "id": str(chunk.id),
         "heading": chunk.heading,
@@ -1894,9 +1900,14 @@ async def toggle_chunk_visibility(
             "[admin] Audit log failed for toggle_chunk_visibility %s — proceeding", chunk_id
         )
 
+    try:
+        await invalidate_chunk_cache(db, [str(chunk_uuid)])
+    except Exception:
+        logger.warning("[admin-invalidate] action=toggle_chunk_visibility chunks=[%s] — invalidation failed", chunk_id)
     await db.commit()
     await db.refresh(chunk)
     logger.info("[admin] Chunk %s is_hidden=%s toggled by admin %s (audit_logged)", chunk_id, chunk.is_hidden, str(_user.id))
+    logger.info("[admin-invalidate] action=toggle_chunk_visibility chunks=[%s]", chunk_id)
     return {"id": chunk_id, "is_hidden": chunk.is_hidden}
 
 
@@ -1941,9 +1952,14 @@ async def toggle_chunk_exam_gate(
             "[admin] Audit log failed for toggle_chunk_exam_gate %s — proceeding", chunk_id
         )
 
+    try:
+        await invalidate_chunk_cache(db, [str(chunk_uuid)])
+    except Exception:
+        logger.warning("[admin-invalidate] action=toggle_chunk_exam_gate chunks=[%s] — invalidation failed", chunk_id)
     await db.commit()
     await db.refresh(chunk)
     logger.info("[admin] Chunk %s exam_disabled=%s toggled by admin %s (audit_logged)", chunk_id, chunk.exam_disabled, str(_user.id))
+    logger.info("[admin-invalidate] action=toggle_chunk_exam_gate chunks=[%s]", chunk_id)
     return {"id": chunk_id, "exam_disabled": chunk.exam_disabled}
 
 
@@ -2091,11 +2107,16 @@ async def merge_chunks(
     except Exception:
         logger.warning("[admin] Audit log failed for merge_chunks — proceeding")
 
+    try:
+        await invalidate_chunk_cache(db, [surviving_id, deleted_id])
+    except Exception:
+        logger.warning("[admin-invalidate] action=merge_chunks chunks=[%s,%s] — invalidation failed", surviving_id, deleted_id)
     await db.commit()
     logger.info(
         "[admin] Merged chunk %s into %s (concept=%s) by admin %s; %d sessions affected (audit_logged)",
         deleted_id, surviving_id, concept_id_str, str(_user.id), affected_count,
     )
+    logger.info("[admin-invalidate] action=merge_chunks chunks=[%s,%s]", surviving_id, deleted_id)
     return {
         "merged_chunk_id": surviving_id,
         "embedding_stale": True,
@@ -2267,11 +2288,16 @@ async def split_chunk(
     except Exception:
         logger.warning("[admin] Audit log failed for split_chunk — proceeding")
 
+    try:
+        await invalidate_chunk_cache(db, [original_chunk_id, new_chunk_id])
+    except Exception:
+        logger.warning("[admin-invalidate] action=split_chunk chunks=[%s,%s] — invalidation failed", original_chunk_id, new_chunk_id)
     await db.commit()
     logger.info(
         "[admin] Split chunk %s → new chunk %s at pos %d (concept=%s) by admin %s; %d sessions affected (audit_logged)",
         original_chunk_id, new_chunk_id, split_pos, original_concept, str(_user.id), affected_count,
     )
+    logger.info("[admin-invalidate] action=split_chunk chunks=[%s,%s]", original_chunk_id, new_chunk_id)
     return {
         "original_chunk_id": original_chunk_id,
         "new_chunk_id": new_chunk_id,
@@ -2467,6 +2493,33 @@ async def rename_section(
     )
     chunks_updated = result.rowcount
 
+    # ── Translate the new section name into all 12 non-English locales ──────
+    translations: dict = {}
+    try:
+        from api.translation_helper import translate_one_string
+        async with asyncio.timeout(10.0):
+            translations = await translate_one_string(str(name))
+        if translations:
+            await db.execute(
+                text(
+                    "UPDATE concept_chunks "
+                    "SET admin_section_name_translations = :t "
+                    "WHERE concept_id = :cid AND book_slug = :slug"
+                ),
+                {"t": json.dumps(translations), "cid": concept_id, "slug": book_slug},
+            )
+            logger.info(
+                "[admin] admin_section_name_translations populated for concept=%s (%d langs)",
+                concept_id, len(translations) - 1,  # minus en_source_hash
+            )
+    except Exception:
+        logger.warning(
+            "[admin] admin_section_name translation failed — English name will be shown "
+            "until a manual re-trigger. concept=%s",
+            concept_id,
+        )
+    # ── End translation block ────────────────────────────────────────────────
+
     try:
         await audit_service.log_action(
             db,
@@ -2477,19 +2530,30 @@ async def rename_section(
             book_slug=book_slug,
             old_value={
                 "admin_section_name": old_name,
+                "admin_section_name_translations": section_snap[0].get(
+                    "admin_section_name_translations", {}
+                ) if section_snap else {},
                 "affected_chunk_ids": affected_chunk_ids,
             },
-            new_value={"admin_section_name": str(name)},
+            new_value={
+                "admin_section_name": str(name),
+                "admin_section_name_translations": translations,
+            },
             affected_count=chunks_updated,
         )
     except Exception:
         logger.warning("[admin] Audit log failed for rename_section — proceeding")
 
+    try:
+        await invalidate_chunk_cache(db, affected_chunk_ids)
+    except Exception:
+        logger.warning("[admin-invalidate] action=rename_section concept=%s — invalidation failed", concept_id)
     await db.commit()
     logger.info(
         "[admin] Renamed section concept=%s book=%s to '%s' by admin %s (%d chunks, audit_logged)",
         concept_id, book_slug, name, str(_user.id), chunks_updated,
     )
+    logger.info("[admin-invalidate] action=rename_section concept=%s chunks=%d", concept_id, len(affected_chunk_ids))
     return {"concept_id": concept_id, "admin_section_name": name, "chunks_updated": chunks_updated}
 
 
@@ -2541,11 +2605,17 @@ async def toggle_section_optional(
     except Exception:
         logger.warning("[admin] Audit log failed for toggle_section_optional — proceeding")
 
+    _section_chunk_ids = [entry["id"] for entry in section_snap]
+    try:
+        await invalidate_chunk_cache(db, _section_chunk_ids)
+    except Exception:
+        logger.warning("[admin-invalidate] action=toggle_section_optional concept=%s — invalidation failed", concept_id)
     await db.commit()
     logger.info(
         "[admin] Section concept=%s book=%s is_optional=%s set by admin %s (%d chunks, audit_logged)",
         concept_id, book_slug, is_optional, str(_user.id), chunks_updated,
     )
+    logger.info("[admin-invalidate] action=toggle_section_optional concept=%s chunks=%d", concept_id, len(_section_chunk_ids))
     return {"concept_id": concept_id, "is_optional": bool(is_optional), "chunks_updated": chunks_updated}
 
 
@@ -2597,11 +2667,17 @@ async def toggle_section_exam_gate(
     except Exception:
         logger.warning("[admin] Audit log failed for toggle_section_exam_gate — proceeding")
 
+    _section_exam_chunk_ids = [entry["id"] for entry in section_snap]
+    try:
+        await invalidate_chunk_cache(db, _section_exam_chunk_ids)
+    except Exception:
+        logger.warning("[admin-invalidate] action=toggle_section_exam_gate concept=%s — invalidation failed", concept_id)
     await db.commit()
     logger.info(
         "[admin] Section concept=%s book=%s exam_disabled=%s set by admin %s (%d chunks, audit_logged)",
         concept_id, book_slug, disabled, str(_user.id), chunks_updated,
     )
+    logger.info("[admin-invalidate] action=toggle_section_exam_gate concept=%s chunks=%d", concept_id, len(_section_exam_chunk_ids))
     return {"concept_id": concept_id, "exam_disabled": bool(disabled), "chunks_updated": chunks_updated}
 
 
@@ -2658,11 +2734,17 @@ async def toggle_section_visibility(
     except Exception:
         logger.warning("[admin] Audit log failed for toggle_section_visibility — proceeding")
 
+    _section_vis_chunk_ids = [entry["id"] for entry in section_snap]
+    try:
+        await invalidate_chunk_cache(db, _section_vis_chunk_ids)
+    except Exception:
+        logger.warning("[admin-invalidate] action=toggle_section_visibility concept=%s — invalidation failed", concept_id)
     await db.commit()
     logger.info(
         "[admin] Section concept=%s book=%s is_hidden=%s set by admin %s (%d chunks, audit_logged)",
         concept_id, book_slug, is_hidden, str(_user.id), chunks_updated,
     )
+    logger.info("[admin-invalidate] action=toggle_section_visibility concept=%s chunks=%d", concept_id, len(_section_vis_chunk_ids))
     return {"updated": chunks_updated, "is_hidden": bool(is_hidden)}
 
 
@@ -2907,6 +2989,10 @@ async def promote_subsection_to_section(
     except Exception:
         logger.warning("[admin] Audit log failed for promote — proceeding")
 
+    try:
+        await invalidate_chunk_cache(db, affected_chunk_ids)
+    except Exception:
+        logger.warning("[admin-invalidate] action=promote concept=%s — invalidation failed", concept_id)
     await db.commit()
 
     logger.info(
@@ -2915,6 +3001,7 @@ async def promote_subsection_to_section(
         book_slug, concept_id, new_concept_id, section_label,
         len(chunks_to_move), str(_user.id),
     )
+    logger.info("[admin-invalidate] action=promote concept=%s chunks=%d", concept_id, len(affected_chunk_ids))
 
     return {
         "old_concept_id": concept_id,
@@ -3005,6 +3092,18 @@ async def modify_graph_edge(
         if G.has_node(source) and G.has_node(target) and nx.has_path(G, target, source):
             raise HTTPException(400, "Would create a cycle in the prerequisite graph")
 
+    # Collect chunk IDs for both source and target concepts so we can invalidate
+    # active sessions whose card cache references either concept's chunks.
+    _graph_chunk_rows = (
+        await db.execute(
+            select(ConceptChunk.id).where(
+                ConceptChunk.book_slug == book_slug,
+                ConceptChunk.concept_id.in_([source, target]),
+            )
+        )
+    ).scalars().all()
+    _graph_chunk_ids = [str(r) for r in _graph_chunk_rows]
+
     override = AdminGraphOverride(
         book_slug=book_slug,
         action=action,
@@ -3013,6 +3112,12 @@ async def modify_graph_edge(
         created_by=_user.id,
     )
     db.add(override)
+    try:
+        await invalidate_chunk_cache(db, _graph_chunk_ids)
+    except Exception:
+        logger.warning(
+            "[admin-invalidate] action=modify_graph_edge %s→%s — invalidation failed", source, target
+        )
     await db.commit()
 
     # Refresh in-memory graph cache with the new override applied
@@ -3022,6 +3127,7 @@ async def modify_graph_edge(
         "[admin] Graph override %s %s→%s (book=%s) by admin %s",
         action, source, target, book_slug, str(_user.id),
     )
+    logger.info("[admin-invalidate] action=modify_graph_edge %s→%s chunks=%d", source, target, len(_graph_chunk_ids))
     return {"action": action, "source": source, "target": target}
 
 

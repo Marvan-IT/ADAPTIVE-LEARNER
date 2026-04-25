@@ -82,6 +82,20 @@ ACCOUNT_LOCKOUT_MINUTES: int = 15
 # ── Embedding ──────────────────────────────────────────────────────────
 EMBEDDING_MODEL = "text-embedding-3-small"
 
+# ── Custom Interest Validation ────────────────────────────────────────────────
+INTEREST_VALIDATOR_MODEL: str = OPENAI_MODEL_MINI  # cheapest capable model
+INTEREST_MIN_LENGTH: int = 2
+INTEREST_MAX_LENGTH: int = 30
+CUSTOM_INTERESTS_MAX: int = 20
+INTEREST_VALIDATOR_CACHE_TTL_SECONDS: int = 3600
+
+# Predefined interest IDs — mirrors frontend/src/constants/tutorPreferences.js INTEREST_OPTIONS.
+# Keep in sync with the frontend list; both sides must agree on the canonical IDs.
+PREDEFINED_INTEREST_IDS: list[str] = [
+    "Sports", "Gaming", "Music", "Movies", "Food",
+    "Animals", "Space", "Technology", "Art", "Nature",
+]
+
 # ── Adaptive Learning Engine ────────────────────────────────────────────────
 ADAPTIVE_ERROR_PENALTY_WEIGHT: float = 0.4   # Weight for error rate in confidence score
 ADAPTIVE_HINT_PENALTY_WEIGHT: float = 0.2    # Weight for hint usage in confidence score

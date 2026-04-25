@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { useToast } from "../components/ui/Toast";
 import { useDialog } from "../context/DialogProvider";
 import {
@@ -178,6 +179,7 @@ function PrereqAccordion({ slug, graphEdges, sections, allConcepts, graphInfo, o
 export default function AdminReviewPage() {
   const { slug } = useParams();
   const navigate = useNavigate();
+  const { t } = useTranslation();
   const { toast } = useToast();
   const dialog = useDialog();
 
@@ -384,7 +386,7 @@ export default function AdminReviewPage() {
   };
 
   const handleRenameChunkHeading = async (chunk) => {
-    const newHeading = window.prompt("New heading:", chunk.heading || "");
+    const newHeading = await dialog.prompt({ title: t("adminReview.promptNewHeading"), defaultValue: chunk.heading || "" });
     if (newHeading === null || newHeading.trim() === "") return;
     try {
       await updateChunk(chunk.id, { heading: newHeading.trim() });
@@ -462,10 +464,7 @@ export default function AdminReviewPage() {
   };
 
   const handlePromoteToSection = async (chunk) => {
-    const label = window.prompt(
-      "New section label (leave blank to use chunk heading):",
-      chunk.heading || ""
-    );
+    const label = await dialog.prompt({ title: t("adminReview.promptPromoteLabel"), defaultValue: chunk.heading || "" });
     if (label === null) return;
     try {
       await promoteToSection(selectedConcept, slug, chunk.id, label);
@@ -498,7 +497,7 @@ export default function AdminReviewPage() {
   // ── Section handlers ───────────────────────────────────────────────────
 
   const handleRenameSection = async (sec) => {
-    const newName = window.prompt("New section name:", sec.heading || sec.section || "");
+    const newName = await dialog.prompt({ title: t("adminReview.promptNewSectionName"), defaultValue: sec.heading || sec.section || "" });
     if (!newName || newName.trim() === "") return;
     try {
       await renameSection(sec.concept_id, slug, newName.trim());

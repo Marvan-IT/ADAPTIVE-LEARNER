@@ -1,8 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
-import { getGraphFull, getNextConcepts, translateConceptTitles } from "../api/concepts";
+import { getGraphFull, getNextConcepts } from "../api/concepts";
 import { useStudent } from "../context/StudentContext";
-import { formatConceptTitle } from "../utils/formatConceptTitle";
 
 export function useConceptMap(bookSlug = "prealgebra") {
   const { masteredConcepts } = useStudent();
@@ -35,27 +34,8 @@ export function useConceptMap(bookSlug = "prealgebra") {
         throw fetchErr;
       }
 
-      let graphNodes = graphRes.data.nodes;
+      const graphNodes = graphRes.data.nodes;
       setEdges(graphRes.data.edges);
-
-      // Translate concept titles if language is not English
-      if (i18n.language && i18n.language !== "en") {
-        try {
-          const titlesMap = {};
-          graphNodes.forEach((n) => {
-            titlesMap[n.concept_id] = n.title || formatConceptTitle(n.concept_id);
-          });
-          const transRes = await translateConceptTitles(titlesMap, i18n.language);
-          const translations = transRes.data.translations || {};
-          graphNodes = graphNodes.map((n) => ({
-            ...n,
-            title: translations[n.concept_id] || n.title,
-          }));
-        } catch {
-          // Silently fall back to English titles
-        }
-      }
-
       setNodes(graphNodes);
 
       // Build status map

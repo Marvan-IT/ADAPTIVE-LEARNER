@@ -23,26 +23,27 @@ import useDraftMode from "../hooks/useDraftMode";
 function sectionBadges(title) {
   const badges = [];
   if (/\(optional\)/i.test(title)) {
-    badges.push({ label: "Optional", cls: "bg-gray-100 text-gray-500" });
+    badges.push({ tKey: "adminContent.optionalBadge", cls: "bg-gray-100 text-gray-500" });
   }
   if (/\b(lab|experiment)\b/i.test(title)) {
-    badges.push({ label: "Lab", cls: "bg-blue-100 text-blue-700" });
+    badges.push({ tKey: "adminContent.labBadge", cls: "bg-blue-100 text-blue-700" });
   }
   return badges;
 }
 
 const CHUNK_TYPE_STYLES = {
-  teaching:           { label: "teaching",           bg: "#DCFCE7", color: "#15803D" },
-  lab:                { label: "lab",                bg: "#DBEAFE", color: "#1D4ED8" },
-  exercise:           { label: "exercise",           bg: "#FEF3C7", color: "#B45309" },
-  learning_objective: { label: "learning objective", bg: "#F3E8FF", color: "#7E22CE" },
+  teaching:           { tKey: "adminContent.chunkTypeTeaching",          bg: "#DCFCE7", color: "#15803D" },
+  lab:                { tKey: "adminContent.chunkTypeLab",               bg: "#DBEAFE", color: "#1D4ED8" },
+  exercise:           { tKey: "adminContent.chunkTypeExercise",          bg: "#FEF3C7", color: "#B45309" },
+  learning_objective: { tKey: "adminContent.chunkTypeLearningObjective", bg: "#F3E8FF", color: "#7E22CE" },
 };
 
 function ChunkTypeBadge({ type }) {
-  const cfg = CHUNK_TYPE_STYLES[type] || { label: type || "unknown", bg: "#F1F5F9", color: "#475569" };
+  const { t } = useTranslation();
+  const cfg = CHUNK_TYPE_STYLES[type] || { tKey: null, bg: "#F1F5F9", color: "#475569" };
   return (
     <span style={{ display: "inline-block", fontSize: "11px", fontWeight: 600, letterSpacing: "0.05em", padding: "2px 8px", borderRadius: "4px", textTransform: "uppercase", backgroundColor: cfg.bg, color: cfg.color }}>
-      {cfg.label}
+      {cfg.tKey ? t(cfg.tKey) : (type || "unknown")}
     </span>
   );
 }
@@ -64,6 +65,7 @@ function SectionBadge({ label, cls }) {
 // ── Accordion prerequisite editor ─────────────────────────────────────────────
 
 function PrereqAccordion({ slug, graphEdges, sections, allConcepts, graphInfo, onEdgesChanged }) {
+  const { t } = useTranslation();
   const { toast } = useToast();
   const dialog = useDialog();
   const [expandedId, setExpandedId] = useState(null);
@@ -103,28 +105,28 @@ function PrereqAccordion({ slug, graphEdges, sections, allConcepts, graphInfo, o
       setAddingFor(null);
       if (onEdgesChanged) onEdgesChanged();
     } catch (e) {
-      toast({ variant: "danger", title: "Error", description: e.response?.data?.detail || "Failed to add prerequisite" });
+      toast({ variant: "danger", title: t("adminContent.errorTitle"), description: e.response?.data?.detail || t("adminContent.failedAddPrereq") });
     } finally { setBusy(false); }
   };
 
   const handleRemove = async (sourceId, targetId) => {
-    if (!(await dialog.confirm({ title: "Remove Prerequisite", message: `Remove "${getName(sourceId)}" as prerequisite?`, variant: "danger", confirmLabel: "Confirm" }))) return;
+    if (!(await dialog.confirm({ title: t("adminContent.removePrereqTitle"), message: `Remove "${getName(sourceId)}" as prerequisite?`, variant: "danger", confirmLabel: t("adminContent.confirmBtn") }))) return;
     setBusy(true);
     try {
       await modifyGraphEdge(slug, "remove_edge", sourceId, targetId);
       if (onEdgesChanged) onEdgesChanged();
     } catch (e) {
-      toast({ variant: "danger", title: "Error", description: e.response?.data?.detail || "Failed" });
+      toast({ variant: "danger", title: t("adminContent.errorTitle"), description: e.response?.data?.detail || "Failed" });
     } finally { setBusy(false); }
   };
 
   return (
     <div>
-      <div style={{ fontSize: "11px", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", color: "#94A3B8", marginBottom: "12px" }}>Prerequisites</div>
+      <div style={{ fontSize: "11px", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em", color: "#94A3B8", marginBottom: "12px" }}>{t("adminContent.prereqSectionTitle")}</div>
       {graphInfo && (
         <div style={{ display: "flex", gap: "12px", marginBottom: "16px", fontSize: "12px", color: "#64748B" }}>
-          <span><strong style={{ color: "#0F172A" }}>{graphInfo.nodes}</strong> sections</span>
-          <span><strong style={{ color: "#0F172A" }}>{graphInfo.edges}</strong> edges</span>
+          <span><strong style={{ color: "#0F172A" }}>{graphInfo.nodes}</strong> {t("adminContent.sections")}</span>
+          <span><strong style={{ color: "#0F172A" }}>{graphInfo.edges}</strong> {t("adminContent.edges")}</span>
         </div>
       )}
       <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
@@ -146,7 +148,7 @@ function PrereqAccordion({ slug, graphEdges, sections, allConcepts, graphInfo, o
               {isExpanded && (
                 <div style={{ paddingLeft: "20px", paddingTop: "6px", paddingBottom: "10px" }}>
                   {prereqs.length === 0 ? (
-                    <div style={{ fontSize: "12px", color: "#94A3B8", marginBottom: "8px" }}>No prerequisites</div>
+                    <div style={{ fontSize: "12px", color: "#94A3B8", marginBottom: "8px" }}>{t("adminContent.noPrereqs")}</div>
                   ) : (
                     <div style={{ display: "flex", flexDirection: "column", gap: "4px", marginBottom: "8px" }}>
                       {prereqs.map((srcId) => (
@@ -160,14 +162,14 @@ function PrereqAccordion({ slug, graphEdges, sections, allConcepts, graphInfo, o
                   {addingFor === sec.id ? (
                     <div style={{ display: "flex", gap: "4px" }}>
                       <select value={newPrereq} onChange={(e) => setNewPrereq(e.target.value)} style={{ flex: 1, fontSize: "11px", padding: "4px 6px", border: "1px solid #E2E8F0", borderRadius: "6px" }} disabled={busy}>
-                        <option value="">Select...</option>
+                        <option value="">{t("adminContent.selectOption")}</option>
                         {available.map((c) => <option key={c} value={c}>{getName(c)}</option>)}
                       </select>
-                      <button onClick={() => handleAdd(sec.id)} disabled={busy || !newPrereq} style={{ padding: "4px 8px", borderRadius: "6px", backgroundColor: !newPrereq || busy ? "#CBD5E1" : "#22C55E", color: "#FFF", border: "none", cursor: !newPrereq || busy ? "not-allowed" : "pointer", fontSize: "11px", fontWeight: 600 }}>Add</button>
+                      <button onClick={() => handleAdd(sec.id)} disabled={busy || !newPrereq} style={{ padding: "4px 8px", borderRadius: "6px", backgroundColor: !newPrereq || busy ? "#CBD5E1" : "#22C55E", color: "#FFF", border: "none", cursor: !newPrereq || busy ? "not-allowed" : "pointer", fontSize: "11px", fontWeight: 600 }}>{t("adminContent.addBtn")}</button>
                       <button onClick={() => { setAddingFor(null); setNewPrereq(""); }} style={{ padding: "4px 6px", borderRadius: "6px", backgroundColor: "#F1F5F9", border: "none", cursor: "pointer", fontSize: "11px", color: "#64748B" }}>✕</button>
                     </div>
                   ) : (
-                    <button onClick={() => setAddingFor(sec.id)} style={{ fontSize: "11px", color: "#EA580C", background: "none", border: "none", cursor: "pointer", fontWeight: 500, padding: 0 }}>+ Add prerequisite</button>
+                    <button onClick={() => setAddingFor(sec.id)} style={{ fontSize: "11px", color: "#EA580C", background: "none", border: "none", cursor: "pointer", fontWeight: 500, padding: 0 }}>{t("adminContent.addPrereqBtn")}</button>
                   )}
                 </div>
               )}
@@ -183,7 +185,7 @@ function PrereqAccordion({ slug, graphEdges, sections, allConcepts, graphInfo, o
 
 export default function AdminBookContentPage() {
   const { slug } = useParams();
-  useTranslation();
+  const { t } = useTranslation();
   const { toast } = useToast();
   const dialog = useDialog();
 
@@ -226,6 +228,26 @@ export default function AdminBookContentPage() {
     saveStatus,
   } = useDraftMode(slug, selectedConcept, serverChunks);
 
+  // ── Chunk loading ──────────────────────────────────────────────────────
+
+  const loadChunks = useCallback(async (conceptId) => {
+    setSelectedConcept(conceptId);
+    setServerChunks([]);
+    setEditingChunk(null);
+    setChunksLoading(true);
+    try {
+      const r = await getBookChunks(slug, conceptId);
+      const chunks = r.data || [];
+      setServerChunks(chunks);
+      return chunks;
+    } catch (e) {
+      console.error(e);
+      return [];
+    } finally {
+      setChunksLoading(false);
+    }
+  }, [slug]);
+
   // ── Listen for undo/redo performed from AdminTopBar ────────────────────
 
   useEffect(() => {
@@ -243,7 +265,7 @@ export default function AdminBookContentPage() {
       if (selectedConcept) {
         loadChunks(selectedConcept);
       }
-      toast({ variant: "info", title: "Content updated", description: "Unsaved drafts cleared. Content re-fetched from server." });
+      toast({ variant: "info", title: t("adminContent.contentUpdatedTitle"), description: t("adminContent.contentUpdatedDesc") });
     };
 
     window.addEventListener("admin:audit-changed", handleAuditChanged);
@@ -281,26 +303,6 @@ export default function AdminBookContentPage() {
     }).catch((e) => { console.error(e); setLoading(false); });
 
     getGraphEdges(slug).then((r) => setGraphEdges(r.data || [])).catch(() => {});
-  }, [slug]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // ── Chunk loading ──────────────────────────────────────────────────────
-
-  const loadChunks = useCallback(async (conceptId) => {
-    setSelectedConcept(conceptId);
-    setServerChunks([]);
-    setEditingChunk(null);
-    setChunksLoading(true);
-    try {
-      const r = await getBookChunks(slug, conceptId);
-      const chunks = r.data || [];
-      setServerChunks(chunks);
-      return chunks;
-    } catch (e) {
-      console.error(e);
-      return [];
-    } finally {
-      setChunksLoading(false);
-    }
   }, [slug]);
 
   const scrollToChunk = useCallback((chunkId) => {
@@ -365,7 +367,7 @@ export default function AdminBookContentPage() {
   };
 
   const handleMerge = async (id1, id2) => {
-    if (!(await dialog.confirm({ title: "Merge Chunks", message: "Merge these two chunks? This will be applied when you save.", variant: "primary", confirmLabel: "Merge" }))) return;
+    if (!(await dialog.confirm({ title: t("adminContent.mergeChunksTitle"), message: t("adminContent.mergeSaveNote"), variant: "primary", confirmLabel: t("adminContent.mergeBtn") }))) return;
     mergeDraftChunks(id1, id2);
   };
 
@@ -385,14 +387,14 @@ export default function AdminBookContentPage() {
       await regenerateChunkEmbedding(chunkId);
       loadChunks(selectedConcept);
     } catch (e) {
-      toast({ variant: "danger", title: "Error", description: e.response?.data?.detail || "Failed to regenerate embedding" });
+      toast({ variant: "danger", title: t("adminContent.errorTitle"), description: e.response?.data?.detail || "Failed to regenerate embedding" });
     }
   };
 
   // ── Section handlers (always immediate) ───────────────────────────────
 
   const handleRenameSection = async (sec) => {
-    const newName = window.prompt("New section name:", sec.display_name || sec.section || "");
+    const newName = await dialog.prompt({ title: t("adminContent.renameSectionTitle"), defaultValue: sec.display_name || sec.section || "" });
     if (!newName || newName.trim() === "") return;
     try {
       await renameSection(sec.concept_id, slug, newName.trim());
@@ -402,13 +404,13 @@ export default function AdminBookContentPage() {
       if (secData?.title) setBookTitle(secData.title);
       if (selectedConcept) loadChunks(selectedConcept);
     } catch (e) {
-      toast({ variant: "danger", title: "Error", description: e.response?.data?.detail || "Failed to rename" });
+      toast({ variant: "danger", title: t("adminContent.errorTitle"), description: e.response?.data?.detail || "Failed to rename" });
     }
   };
 
   const handleToggleSectionOptional = async (sec) => {
     if (selectedConcept === sec.concept_id && isDirty) {
-      if (!(await dialog.confirm({ title: "Unsaved Changes", message: "This section has unsaved chunk edits that will be discarded. Continue?", variant: "danger", confirmLabel: "Continue" }))) return;
+      if (!(await dialog.confirm({ title: t("adminContent.unsavedChangesTitle"), message: t("adminContent.unsavedChangesMsg"), variant: "danger", confirmLabel: t("adminContent.continueBtn") }))) return;
     }
     try {
       await toggleSectionOptional(sec.concept_id, slug, !sec.is_optional);
@@ -419,13 +421,13 @@ export default function AdminBookContentPage() {
         await loadChunks(sec.concept_id);
       }
     } catch (e) {
-      toast({ variant: "danger", title: "Error", description: e.response?.data?.detail || e.message || "Failed to toggle optional" });
+      toast({ variant: "danger", title: t("adminContent.errorTitle"), description: e.response?.data?.detail || e.message || "Failed to toggle optional" });
     }
   };
 
   const handleToggleSectionExamGate = async (sec) => {
     if (selectedConcept === sec.concept_id && isDirty) {
-      if (!(await dialog.confirm({ title: "Unsaved Changes", message: "This section has unsaved chunk edits that will be discarded. Continue?", variant: "danger", confirmLabel: "Continue" }))) return;
+      if (!(await dialog.confirm({ title: t("adminContent.unsavedChangesTitle"), message: t("adminContent.unsavedChangesMsg"), variant: "danger", confirmLabel: t("adminContent.continueBtn") }))) return;
     }
     try {
       await toggleSectionExamGate(sec.concept_id, slug, !sec.exam_disabled);
@@ -436,13 +438,13 @@ export default function AdminBookContentPage() {
         await loadChunks(sec.concept_id);
       }
     } catch (e) {
-      toast({ variant: "danger", title: "Error", description: e.response?.data?.detail || e.message || "Failed to toggle exam gate" });
+      toast({ variant: "danger", title: t("adminContent.errorTitle"), description: e.response?.data?.detail || e.message || "Failed to toggle exam gate" });
     }
   };
 
   const handleToggleSectionVisibility = async (sec) => {
     if (selectedConcept === sec.concept_id && isDirty) {
-      if (!(await dialog.confirm({ title: "Unsaved Changes", message: "This section has unsaved chunk edits that will be discarded. Continue?", variant: "danger", confirmLabel: "Continue" }))) return;
+      if (!(await dialog.confirm({ title: t("adminContent.unsavedChangesTitle"), message: t("adminContent.unsavedChangesMsg"), variant: "danger", confirmLabel: t("adminContent.continueBtn") }))) return;
     }
     const newHidden = !sec.is_hidden;
     // Optimistic update — flip the section flag immediately so the UI reacts
@@ -477,7 +479,7 @@ export default function AdminBookContentPage() {
           ),
         }))
       );
-      toast({ variant: "danger", title: "Error", description: e.response?.data?.detail || e.message || "Failed to toggle section visibility" });
+      toast({ variant: "danger", title: t("adminContent.errorTitle"), description: e.response?.data?.detail || e.message || "Failed to toggle section visibility" });
     }
   };
 
@@ -487,13 +489,13 @@ export default function AdminBookContentPage() {
 
   const handleRegenAllStale = async () => {
     if (!selectedConcept) return;
-    if (!(await dialog.confirm({ title: "Regenerate All Embeddings", message: `Regenerate embeddings for ${staleCount} stale chunk(s) in this section?`, variant: "danger", confirmLabel: "Confirm" }))) return;
+    if (!(await dialog.confirm({ title: t("adminContent.regenAllTitle"), message: t("adminContent.regenAllMsg", { count: staleCount }), variant: "danger", confirmLabel: t("adminContent.confirmBtn") }))) return;
     setRegenAllBusy(true);
     try {
       await regenerateConceptEmbeddings(selectedConcept, slug);
       loadChunks(selectedConcept);
     } catch (e) {
-      toast({ variant: "danger", title: "Error", description: e.response?.data?.detail || "Failed to regenerate embeddings" });
+      toast({ variant: "danger", title: t("adminContent.errorTitle"), description: e.response?.data?.detail || "Failed to regenerate embeddings" });
     } finally {
       setRegenAllBusy(false);
     }
@@ -511,20 +513,20 @@ export default function AdminBookContentPage() {
         toggleChunkExamGate: (id) => toggleChunkExamGateApi(id),
         reloadChunks: () => loadChunks(selectedConcept),
       });
-      toast({ variant: "success", title: "Saved", description: "All changes applied successfully" });
+      toast({ variant: "success", title: t("adminContent.savedTitle"), description: t("adminContent.savedDesc") });
     } catch (e) {
-      toast({ variant: "danger", title: "Save Failed", description: e.message || "Some changes could not be applied" });
+      toast({ variant: "danger", title: t("adminContent.saveFailedTitle"), description: e.message || "Some changes could not be applied" });
     }
   };
 
   const handleDiscard = async () => {
-    if (!(await dialog.confirm({ title: "Discard Changes", message: "Discard all unsaved changes? This cannot be undone.", variant: "danger", confirmLabel: "Discard" }))) return;
+    if (!(await dialog.confirm({ title: t("adminContent.discardChangesTitle"), message: t("adminContent.discardChangesMsg"), variant: "danger", confirmLabel: t("adminContent.discardBtn") }))) return;
     discardDraft();
   };
 
   // ── Render ─────────────────────────────────────────────────────────────
 
-  if (loading) return <div style={{ padding: "40px 0", color: "#94A3B8" }}>Loading...</div>;
+  if (loading) return <div style={{ padding: "40px 0", color: "#94A3B8" }}>{t("adminContent.loading")}</div>;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "calc(100vh - 64px)" }}>
@@ -532,30 +534,30 @@ export default function AdminBookContentPage() {
       {/* Header */}
       <div style={{ padding: "12px 20px", borderBottom: "1px solid #E2E8F0", display: "flex", alignItems: "center", gap: "16px", flexShrink: 0, backgroundColor: "#FFFFFF" }}>
         <h2 style={{ fontSize: "18px", fontWeight: 600, color: "#0F172A", textTransform: "capitalize", display: "flex", alignItems: "center", gap: "8px" }}>
-          {bookTitle || slug.replace(/_/g, " ")} — Content Editor
+          {bookTitle || slug.replace(/_/g, " ")} — {t("adminContent.contentEditor")}
           <button
             onClick={async () => {
-              const newTitle = prompt("Rename book:", bookTitle || slug.replace(/_/g, " "));
+              const newTitle = await dialog.prompt({ title: t("adminContent.renameBookPrompt"), defaultValue: bookTitle || slug.replace(/_/g, " ") });
               if (newTitle && newTitle.trim()) {
                 try {
                   const { renameBook } = await import("../api/admin");
                   await renameBook(slug, newTitle.trim());
                   setBookTitle(newTitle.trim());
                 } catch (e) {
-                  alert("Failed to rename book: " + (e.response?.data?.detail || e.message));
+                  toast({ variant: "danger", title: t("adminContent.errorTitle"), description: t("adminContent.failedRenameBook") + " " + (e.response?.data?.detail || e.message) });
                 }
               }
             }}
-            title="Rename book"
+            title={t("adminContent.renameBook")}
             style={{ background: "none", border: "none", cursor: "pointer", padding: "4px", color: "#94A3B8", fontSize: "14px" }}
           >
             ✎
           </button>
         </h2>
-        <span style={{ fontSize: "12px", color: "#22C55E", backgroundColor: "#F0FDF4", padding: "2px 10px", borderRadius: "9999px", fontWeight: 500 }}>Published</span>
+        <span style={{ fontSize: "12px", color: "#22C55E", backgroundColor: "#F0FDF4", padding: "2px 10px", borderRadius: "9999px", fontWeight: 500 }}>{t("adminContent.published")}</span>
         {isDirty && (
           <span style={{ fontSize: "12px", color: "#F97316", backgroundColor: "#FFF7ED", padding: "2px 10px", borderRadius: "9999px", fontWeight: 500, border: "1px solid #FED7AA" }}>
-            Draft — unsaved
+            {t("adminContent.draftUnsaved")}
           </span>
         )}
       </div>
@@ -566,12 +568,12 @@ export default function AdminBookContentPage() {
         {/* ── Left: section tree ── */}
         <div style={{ width: "300px", flexShrink: 0, borderRight: "1px solid #E2E8F0", overflowY: "auto", padding: "16px", backgroundColor: "#FFFFFF" }}>
           {sections.length === 0 ? (
-            <div style={{ fontSize: "13px", color: "#94A3B8" }}>No sections found</div>
+            <div style={{ fontSize: "13px", color: "#94A3B8" }}>{t("adminContent.noSectionsFound")}</div>
           ) : (
             sections.map((chapter) => (
               <div key={chapter.chapter} style={{ marginBottom: "20px" }}>
                 <div style={{ fontWeight: 700, fontSize: "12px", color: "#64748B", marginBottom: "8px", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-                  Chapter {chapter.chapter}
+                  {t("adminContent.chapter")} {chapter.chapter}
                 </div>
                 {chapter.sections.map((sec) => {
                   const sectionNum = sec.section || "";
@@ -610,11 +612,11 @@ export default function AdminBookContentPage() {
                           <strong style={{ fontWeight: 600 }}>{sectionNum}</strong>{" "}
                           <span style={{ fontWeight: 400, color: sec.is_hidden ? "#94A3B8" : isSelected ? "#EA580C" : "#475569" }}>{heading !== sectionNum ? heading : ""}</span>
                           {badges.map((b) => (
-                            <SectionBadge key={b.label} label={b.label} cls={b.cls} />
+                            <SectionBadge key={b.tKey} label={t(b.tKey)} cls={b.cls} />
                           ))}
                           {sec.is_hidden && (
                             <span style={{ display: "inline-block", fontSize: "10px", fontWeight: 600, color: "#DC2626", backgroundColor: "#FEE2E2", padding: "1px 5px", borderRadius: "3px", marginLeft: "4px", verticalAlign: "middle" }}>
-                              hidden
+                              {t("adminContent.hidden")}
                             </span>
                           )}
                           {!sec.is_hidden && (sec.hidden_count || 0) > 0 && (
@@ -636,7 +638,7 @@ export default function AdminBookContentPage() {
                           onClick={(e) => e.stopPropagation()}
                         >
                           <button
-                            title="Rename section"
+                            title={t("adminContent.renameSectionTitle2")}
                             onClick={() => handleRenameSection(sec)}
                             style={{ padding: "2px 6px", fontSize: "12px", borderRadius: "4px", border: "1px solid #E2E8F0", backgroundColor: "#F8FAFC", color: "#64748B", cursor: "pointer" }}
                           >
@@ -652,7 +654,7 @@ export default function AdminBookContentPage() {
                               color: sec.is_optional ? "#92400E" : (!sec.is_optional && (sec.optional_count || 0) > 0) ? "#C2410C" : "#64748B",
                             }}
                           >
-                            Opt
+                            {t("adminContent.toggleOptionalBtn")}
                           </button>
                           <button
                             title={sec.exam_disabled ? "All exams disabled" : (sec.exam_disabled_count || 0) > 0 ? `${sec.exam_disabled_count}/${sec.chunk_count} exams disabled` : "Toggle exam gate"}
@@ -664,7 +666,7 @@ export default function AdminBookContentPage() {
                               color: sec.exam_disabled ? "#991B1B" : (!sec.exam_disabled && (sec.exam_disabled_count || 0) > 0) ? "#C2410C" : "#64748B",
                             }}
                           >
-                            E
+                            {t("adminContent.toggleExamBtn")}
                           </button>
                           <button
                             title={sec.is_hidden ? "Show section" : (sec.hidden_count || 0) > 0 ? `${sec.hidden_count}/${sec.chunk_count} hidden` : "Hide section"}
@@ -676,7 +678,7 @@ export default function AdminBookContentPage() {
                               color: sec.is_hidden ? "#991B1B" : (!sec.is_hidden && (sec.hidden_count || 0) > 0) ? "#C2410C" : "#64748B",
                             }}
                           >
-                            {sec.is_hidden ? "Show" : "Hide"}
+                            {sec.is_hidden ? t("adminContent.showBtn") : t("adminContent.hideBtn")}
                           </button>
                         </div>
                       </div>
@@ -701,8 +703,8 @@ export default function AdminBookContentPage() {
                                   backgroundColor: isActive ? "#FFF7ED" : "transparent",
                                 }}
                               >
-                                {chunk.is_hidden && <span style={{ fontSize: "10px", marginRight: "4px", opacity: 0.5 }}>hidden</span>}
-                                {!chunk.has_embedding && <span style={{ fontSize: "10px", marginRight: "4px", color: "#F97316" }}>stale</span>}
+                                {chunk.is_hidden && <span style={{ fontSize: "10px", marginRight: "4px", opacity: 0.5 }}>{t("adminContent.hiddenBadge")}</span>}
+                                {!chunk.has_embedding && <span style={{ fontSize: "10px", marginRight: "4px", color: "#F97316" }}>{t("adminContent.staleBadge")}</span>}
                                 {isModifiedLeft && <span style={{ fontSize: "10px", marginRight: "4px", color: "#F97316" }}>*</span>}
                                 {chunk.heading || `Chunk ${ci + 1}`}
                               </div>
@@ -722,12 +724,12 @@ export default function AdminBookContentPage() {
         <div ref={centerRef} style={{ flex: 1, overflowY: "auto", padding: "20px" }}>
           {!selectedConcept ? (
             <div style={{ color: "#94A3B8", textAlign: "center", paddingTop: "64px", fontSize: "14px" }}>
-              Select a section from the left panel
+              {t("adminContent.selectSection")}
             </div>
           ) : chunksLoading ? (
-            <div style={{ color: "#94A3B8", fontSize: "14px" }}>Loading chunks...</div>
+            <div style={{ color: "#94A3B8", fontSize: "14px" }}>{t("adminContent.loadingChunks")}</div>
           ) : draftChunks.length === 0 ? (
-            <div style={{ color: "#94A3B8", fontSize: "14px" }}>No chunks found for this section</div>
+            <div style={{ color: "#94A3B8", fontSize: "14px" }}>{t("adminContent.noChunksFound")}</div>
           ) : (
             draftChunks.map((chunk, i) => {
               const isModified = modifiedChunkIds.has(chunk.id);
@@ -748,11 +750,11 @@ export default function AdminBookContentPage() {
                   {/* Action toolbar */}
                   <div style={{ display: "flex", gap: "6px", marginBottom: "12px", flexWrap: "wrap" }}>
                     {[
-                      { label: "✎", onClick: () => { const newH = window.prompt("New heading:", chunk.heading || ""); if (newH !== null && newH.trim() !== "") editChunk(chunk.id, { heading: newH.trim() }); }, title: "Rename" },
-                      { label: "Edit", onClick: () => startEdit(chunk), title: "Edit heading and text" },
-                      { label: chunk.is_hidden ? "Show" : "Hide", onClick: () => handleToggleVisibility(chunk.id), title: chunk.is_hidden ? "Show to students" : "Hide from students", active: chunk.is_hidden, activeColor: "#FEF3C7", activeBorder: "#FCD34D", activeText: "#92400E" },
-                      { label: chunk.is_optional ? "Required" : "Optional", onClick: () => handleToggleOptional(chunk), title: "Toggle optional", active: chunk.is_optional, activeColor: "#FEF3C7", activeBorder: "#FCD34D", activeText: "#92400E" },
-                      { label: chunk.exam_disabled ? "Enable Exam" : "No Exam", onClick: () => handleToggleExamGate(chunk), title: "Toggle exam gate", active: chunk.exam_disabled, activeColor: "#FEE2E2", activeBorder: "#FCA5A5", activeText: "#991B1B" },
+                      { label: "✎", onClick: async () => { const newH = await dialog.prompt({ title: t("adminContent.renameSectionTitle"), defaultValue: chunk.heading || "" }); if (newH !== null && newH.trim() !== "") editChunk(chunk.id, { heading: newH.trim() }); }, title: t("adminContent.renameSectionTitle2") },
+                      { label: t("adminContent.editBtn"), onClick: () => startEdit(chunk), title: "Edit heading and text" },
+                      { label: chunk.is_hidden ? t("adminContent.showBtn") : t("adminContent.hideBtn"), onClick: () => handleToggleVisibility(chunk.id), title: chunk.is_hidden ? "Show to students" : "Hide from students", active: chunk.is_hidden, activeColor: "#FEF3C7", activeBorder: "#FCD34D", activeText: "#92400E" },
+                      { label: chunk.is_optional ? t("adminContent.requiredBtn") : t("adminContent.optionalBtn"), onClick: () => handleToggleOptional(chunk), title: "Toggle optional", active: chunk.is_optional, activeColor: "#FEF3C7", activeBorder: "#FCD34D", activeText: "#92400E" },
+                      { label: chunk.exam_disabled ? t("adminContent.enableExamBtn") : t("adminContent.noExamBtn"), onClick: () => handleToggleExamGate(chunk), title: "Toggle exam gate", active: chunk.exam_disabled, activeColor: "#FEE2E2", activeBorder: "#FCA5A5", activeText: "#991B1B" },
                     ].map((btn, bi) => (
                       <button
                         key={bi}
@@ -779,7 +781,7 @@ export default function AdminBookContentPage() {
                         color: chunk.chunk_type === "exercise" ? "#92400E" : "#64748B",
                       }}
                     >
-                      {chunk.chunk_type === "exercise" ? "\u2192 Teaching" : "\u2192 Exercise"}
+                      {chunk.chunk_type === "exercise" ? t("adminContent.toTeachingBtn") : t("adminContent.toExerciseBtn")}
                     </button>
                     {i < draftChunks.length - 1 && (
                       <button
@@ -787,7 +789,7 @@ export default function AdminBookContentPage() {
                         title="Merge with the next chunk"
                         style={{ padding: "4px 10px", fontSize: "12px", borderRadius: "6px", cursor: "pointer", border: "1px solid #E2E8F0", backgroundColor: "#F8FAFC", color: "#64748B", fontWeight: 500 }}
                       >
-                        Merge ↓
+                        {t("adminContent.mergeDownBtn")}
                       </button>
                     )}
                     <button
@@ -795,12 +797,12 @@ export default function AdminBookContentPage() {
                       title="Split this chunk at a character position"
                       style={{ padding: "4px 10px", fontSize: "12px", borderRadius: "6px", cursor: "pointer", border: "1px solid #E2E8F0", backgroundColor: "#F8FAFC", color: "#64748B", fontWeight: 500 }}
                     >
-                      Split
+                      {t("adminContent.splitBtn")}
                     </button>
                     {i > 0 && !isTempChunk && (
                       <button
                         onClick={async () => {
-                          const label = window.prompt("New section label (optional):");
+                          const label = await dialog.prompt({ title: t("adminContent.promoteSectionPrompt"), defaultValue: "" });
                           if (label === null) return;
                           try {
                             await promoteToSection(selectedConcept, slug, chunk.id, label || undefined);
@@ -813,9 +815,9 @@ export default function AdminBookContentPage() {
                             getBookGraph(slug).then((r) => {
                               if (r.data) setGraphInfo({ nodes: r.data.nodes?.length || 0, edges: r.data.edges?.length || 0 });
                             }).catch(() => {});
-                            toast({ variant: "success", title: "Promoted", description: "Chunk promoted to new section" });
+                            toast({ variant: "success", title: t("adminContent.promotedSuccess"), description: t("adminContent.promotedDesc") });
                           } catch (e) {
-                            toast({ variant: "danger", title: "Error", description: e.response?.data?.detail || "Failed to promote" });
+                            toast({ variant: "danger", title: t("adminContent.errorTitle"), description: e.response?.data?.detail || "Failed to promote" });
                           }
                         }}
                         title="Promote this chunk (and all after it) to a new section"
@@ -824,7 +826,7 @@ export default function AdminBookContentPage() {
                           border: "1px solid #C4B5FD", backgroundColor: "#EDE9FE", color: "#5B21B6", fontWeight: 500,
                         }}
                       >
-                        Promote
+                        {t("adminContent.promoteBtn")}
                       </button>
                     )}
                     {!chunk.has_embedding && !isTempChunk && (
@@ -836,7 +838,7 @@ export default function AdminBookContentPage() {
                           border: "1px solid #FCD34D", backgroundColor: "#FEF3C7", color: "#92400E", fontWeight: 500,
                         }}
                       >
-                        Regen
+                        {t("adminContent.regenBtn")}
                       </button>
                     )}
                   </div>
@@ -860,13 +862,13 @@ export default function AdminBookContentPage() {
                           onClick={() => handleSaveEdit(chunk.id)}
                           style={{ padding: "4px 12px", backgroundColor: "#22C55E", color: "#FFFFFF", borderRadius: "9999px", fontSize: "12px", fontWeight: 500, border: "none", cursor: "pointer" }}
                         >
-                          Save
+                          {t("adminContent.saveBtn")}
                         </button>
                         <button
                           onClick={() => setEditingChunk(null)}
                           style={{ padding: "4px 12px", backgroundColor: "#64748B", color: "#FFFFFF", borderRadius: "9999px", fontSize: "12px", fontWeight: 500, border: "none", cursor: "pointer" }}
                         >
-                          Cancel
+                          {t("adminContent.cancelBtn")}
                         </button>
                       </div>
                     </div>
@@ -877,25 +879,25 @@ export default function AdminBookContentPage() {
                         <h4 style={{ fontSize: "15px", fontWeight: 700, color: "#0F172A", flex: 1, lineHeight: 1.3 }}>
                           {chunk.heading || `Chunk ${i + 1}`}
                           {isModified && !isTempChunk && (
-                            <span style={{ fontSize: "10px", color: "#F97316", fontWeight: 600, marginLeft: "8px" }}>Modified</span>
+                            <span style={{ fontSize: "10px", color: "#F97316", fontWeight: 600, marginLeft: "8px" }}>{t("adminContent.modifiedBadge")}</span>
                           )}
                           {isTempChunk && (
-                            <span style={{ fontSize: "10px", color: "#3B82F6", fontWeight: 600, marginLeft: "8px" }}>New (split)</span>
+                            <span style={{ fontSize: "10px", color: "#3B82F6", fontWeight: 600, marginLeft: "8px" }}>{t("adminContent.newSplitBadge")}</span>
                           )}
                         </h4>
                         <div style={{ display: "flex", alignItems: "center", gap: "6px", flexShrink: 0 }}>
                           {chunk.chunk_type && <ChunkTypeBadge type={chunk.chunk_type} />}
                           {chunk.is_optional && (
-                            <span style={{ fontSize: "11px", color: "#64748B", fontStyle: "italic" }}>(Optional)</span>
+                            <span style={{ fontSize: "11px", color: "#64748B", fontStyle: "italic" }}>({t("adminContent.optionalBadge")})</span>
                           )}
                           {chunk.is_hidden && (
-                            <span style={{ fontSize: "11px", color: "#94A3B8", fontStyle: "italic" }}>(Hidden)</span>
+                            <span style={{ fontSize: "11px", color: "#94A3B8", fontStyle: "italic" }}>({t("adminContent.hiddenBadge")})</span>
                           )}
                           {chunk.exam_disabled && (
-                            <span style={{ fontSize: "11px", color: "#EF4444", fontStyle: "italic" }}>(No Exam)</span>
+                            <span style={{ fontSize: "11px", color: "#EF4444", fontStyle: "italic" }}>({t("adminContent.noExamBadge")})</span>
                           )}
                           {!chunk.has_embedding && !isTempChunk && (
-                            <span style={{ fontSize: "11px", color: "#F97316", fontStyle: "italic" }}>(Stale embedding)</span>
+                            <span style={{ fontSize: "11px", color: "#F97316", fontStyle: "italic" }}>({t("adminContent.staleEmbeddingBadge")})</span>
                           )}
                         </div>
                       </div>
@@ -903,7 +905,7 @@ export default function AdminBookContentPage() {
                       {/* Chunk text / split UI */}
                       {splittingChunk === chunk.id ? (
                         <div style={{ border: "2px solid #3B82F6", borderRadius: "12px", padding: "12px", backgroundColor: "#EFF6FF" }}>
-                          <div style={{ fontSize: "12px", fontWeight: 600, color: "#2563EB", marginBottom: "8px" }}>Click a divider to split at that point:</div>
+                          <div style={{ fontSize: "12px", fontWeight: 600, color: "#2563EB", marginBottom: "8px" }}>{t("adminContent.clickToDivider")}</div>
                           {(chunk.text || "").split("\n\n").map((para, pi, arr) => (
                             <div key={pi}>
                               <p style={{ fontSize: "13px", lineHeight: 1.6, margin: "4px 0", color: "#0F172A" }}>{para}</p>
@@ -912,7 +914,7 @@ export default function AdminBookContentPage() {
                                   onClick={() => handleSplitAt(chunk.id, (chunk.text || "").split("\n\n").slice(0, pi + 1).join("\n\n").length)}
                                   style={{ width: "100%", padding: "4px 0", margin: "4px 0", backgroundColor: "#DBEAFE", border: "1px dashed #3B82F6", borderRadius: "4px", fontSize: "11px", color: "#2563EB", cursor: "pointer" }}
                                 >
-                                  &#9986; Split here
+                                  &#9986; {t("adminContent.splitHereBtn")}
                                 </button>
                               )}
                             </div>
@@ -921,7 +923,7 @@ export default function AdminBookContentPage() {
                             onClick={() => setSplittingChunk(null)}
                             style={{ marginTop: "8px", padding: "4px 12px", backgroundColor: "#64748B", color: "#FFFFFF", borderRadius: "9999px", fontSize: "12px", border: "none", cursor: "pointer" }}
                           >
-                            Cancel
+                            {t("adminContent.cancelBtn")}
                           </button>
                         </div>
                       ) : (
@@ -980,14 +982,14 @@ export default function AdminBookContentPage() {
               disabled={saveStatus === "saving"}
               style={{ padding: "10px 24px", backgroundColor: "#64748B", color: "#FFFFFF", borderRadius: "9999px", fontSize: "14px", fontWeight: 600, border: "none", cursor: saveStatus === "saving" ? "not-allowed" : "pointer", opacity: saveStatus === "saving" ? 0.6 : 1 }}
             >
-              Discard
+              {t("adminContent.discardBtn")}
             </button>
             <button
               onClick={handleSaveAll}
               disabled={saveStatus === "saving"}
               style={{ padding: "10px 24px", backgroundColor: "#22C55E", color: "#FFFFFF", borderRadius: "9999px", fontSize: "14px", fontWeight: 600, border: "none", cursor: saveStatus === "saving" ? "not-allowed" : "pointer", opacity: saveStatus === "saving" ? 0.7 : 1 }}
             >
-              {saveStatus === "saving" ? "Saving..." : "Save Changes"}
+              {saveStatus === "saving" ? t("adminContent.savingBtn") : t("adminContent.saveChangesBtn")}
             </button>
           </div>
         </div>
@@ -998,13 +1000,13 @@ export default function AdminBookContentPage() {
             {selectedConcept ? (
               staleCount > 0 ? (
                 <span style={{ color: "#F97316", fontWeight: 500 }}>
-                  {staleCount} stale embedding{staleCount !== 1 ? "s" : ""}
+                  {staleCount} {t("adminContent.staleEmbeddingsMsg")}
                 </span>
               ) : (
-                <span style={{ color: "#22C55E", fontWeight: 500 }}>All embeddings OK</span>
+                <span style={{ color: "#22C55E", fontWeight: 500 }}>{t("adminContent.allEmbeddingsOk")}</span>
               )
             ) : (
-              <span style={{ color: "#94A3B8" }}>Select a section to edit</span>
+              <span style={{ color: "#94A3B8" }}>{t("adminContent.selectSection")}</span>
             )}
           </div>
 
@@ -1020,7 +1022,7 @@ export default function AdminBookContentPage() {
                 opacity: regenAllBusy ? 0.7 : 1, transition: "background-color 0.15s",
               }}
             >
-              {regenAllBusy ? "Regenerating..." : "Regenerate Embeddings"}
+              {regenAllBusy ? t("adminContent.regeneratingBtn") : t("adminContent.regenAllBtn")}
             </button>
           </div>
         </div>

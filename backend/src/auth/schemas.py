@@ -5,7 +5,7 @@ Pydantic v2 schemas for the authentication module.
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, model_validator
 
 
 class RegisterRequest(BaseModel):
@@ -14,6 +14,27 @@ class RegisterRequest(BaseModel):
     display_name: str = Field(..., min_length=1, max_length=100)
     age: int | None = Field(default=None, ge=5, le=120)
     preferred_language: str = Field(default="en")
+    preferred_style: str = Field(
+        default="default",
+        pattern="^(default|pirate|astronaut|gamer)$",
+    )
+    interests: list[str] = Field(
+        default_factory=list,
+        max_length=20,
+        description="Interests for metaphor personalization (max 20 entries, 50 chars each)",
+    )
+
+    @model_validator(mode="after")
+    def _clean_interests(self) -> "RegisterRequest":
+        seen: set[str] = set()
+        cleaned: list[str] = []
+        for entry in self.interests:
+            trimmed = entry.strip()[:50]
+            if trimmed and trimmed not in seen:
+                seen.add(trimmed)
+                cleaned.append(trimmed)
+        self.interests = cleaned
+        return self
 
 
 class VerifyOtpRequest(BaseModel):

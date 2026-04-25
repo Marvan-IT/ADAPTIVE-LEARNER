@@ -177,6 +177,31 @@ async def run_pipeline(pdf_path: Path, subject: str, slug_override: str | None =
         except Exception as exc:
             logger.error("[%s] Stage 6/6: Hot-load failed: %s", slug, exc)
 
+        # Stage 7 — Auto-translate catalog to all non-English locales.
+        # Non-blocking: failures do not abort publishing; book remains usable in English.
+        if os.getenv("SKIP_TRANSLATION", "").lower() not in ("1", "true", "yes"):
+            logger.info("[%s] Stage 7/7: Auto-translating catalog to all languages...", slug)
+            try:
+                from src.db.connection import async_session_factory as _asf_t
+                # translate_catalog.py lives under backend/scripts — add to path once.
+                _scripts_dir = Path(__file__).resolve().parents[2] / "scripts"
+                if str(_scripts_dir) not in sys.path:
+                    sys.path.insert(0, str(_scripts_dir))
+                from translate_catalog import translate_book  # type: ignore[import-not-found]
+                async with _asf_t() as _trans_db:
+                    summary = await translate_book(slug, db=_trans_db)
+                logger.info(
+                    "[%s] Stage 7/7: Translated %d rows across %d languages (%d LLM calls)",
+                    slug,
+                    summary.get("rows_translated", 0),
+                    len(summary.get("languages_succeeded", [])),
+                    summary.get("llm_calls", 0),
+                )
+            except Exception:
+                logger.exception("[%s] Stage 7/7: Translation failed — book remains English-only", slug)
+        else:
+            logger.info("[%s] Stage 7/7: Skipped (SKIP_TRANSLATION set)", slug)
+
         logger.info("[%s] Pipeline complete", slug)
 
         # Update books table status to READY_FOR_REVIEW

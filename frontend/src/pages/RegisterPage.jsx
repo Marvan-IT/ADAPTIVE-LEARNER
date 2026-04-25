@@ -2,9 +2,10 @@ import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { motion, AnimatePresence } from "framer-motion";
-import { User, Mail, Lock, AlertCircle, Eye, EyeOff } from "lucide-react";
+import { User, Mail, Lock, AlertCircle, Eye, EyeOff, ChevronDown } from "lucide-react";
 import { registerUser } from "../api/auth";
 import { StrengthBar, passwordStrength } from "../components/ui";
+import { TUTOR_STYLES, INTEREST_OPTIONS, MAX_INTERESTS, MAX_INTEREST_LENGTH } from "../constants/tutorPreferences";
 
 const SUPPORTED_LANGUAGES = [
   { code: "en", label: "English" },
@@ -187,6 +188,10 @@ export default function RegisterPage() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [age, setAge] = useState("");
   const [preferredLanguage, setPreferredLanguage] = useState("en");
+  const [tutorStyle, setTutorStyle] = useState("default");
+  const [interests, setInterests] = useState([]);
+  const [customInterest, setCustomInterest] = useState("");
+  const [prefsExpanded, setPrefsExpanded] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [focusedField, setFocusedField] = useState(null);
@@ -214,6 +219,8 @@ export default function RegisterPage() {
         password,
         age: age ? parseInt(age, 10) : null,
         preferred_language: preferredLanguage,
+        preferred_style: tutorStyle,
+        interests,
       });
       navigate("/verify-otp", {
         state: { email: email.trim(), purpose: "email_verify" },
@@ -459,6 +466,198 @@ export default function RegisterPage() {
                 ▾
               </span>
             </div>
+          </div>
+
+          {/* Personalize your tutor — optional collapsible */}
+          <div style={{ marginBottom: 16 }}>
+            {/* Collapsible header */}
+            <button
+              type="button"
+              onClick={() => setPrefsExpanded((p) => !p)}
+              style={{
+                width: "100%",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                padding: "8px 12px",
+                borderRadius: 10,
+                border: "1.5px solid #E2E8F0",
+                background: prefsExpanded ? "#FFF7ED" : "#F8FAFC",
+                cursor: "pointer",
+                fontFamily: "inherit",
+                transition: "all 0.15s",
+              }}
+            >
+              <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: "#475569" }}>
+                  {t("auth.preferencesSectionTitle", "Personalize your tutor")}
+                </span>
+                <span style={{
+                  fontSize: 11, fontWeight: 500, color: "#94A3B8",
+                  background: "#F1F5F9", borderRadius: 9999,
+                  padding: "2px 8px",
+                }}>
+                  {t("auth.preferencesOptional", "(optional)")}
+                </span>
+              </span>
+              <ChevronDown
+                size={15}
+                color="#94A3B8"
+                style={{
+                  transition: "transform 0.2s",
+                  transform: prefsExpanded ? "rotate(180deg)" : "rotate(0deg)",
+                  flexShrink: 0,
+                }}
+              />
+            </button>
+
+            {/* Expanded content */}
+            {prefsExpanded && (
+              <div style={{
+                marginTop: 8,
+                padding: "14px 14px 12px",
+                borderRadius: 10,
+                border: "1.5px solid #E2E8F0",
+                background: "#FAFAFA",
+                display: "flex",
+                flexDirection: "column",
+                gap: 14,
+              }}>
+                {/* Tutor style */}
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: "#64748B", marginBottom: 8 }}>
+                    {t("auth.tutorStyleLabel", "Tutor style")}
+                  </div>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {TUTOR_STYLES.map(({ id, emoji }) => (
+                      <button
+                        key={id}
+                        type="button"
+                        onClick={() => setTutorStyle(id)}
+                        style={{
+                          padding: "6px 12px",
+                          borderRadius: 9999,
+                          fontSize: 12,
+                          fontWeight: 600,
+                          cursor: "pointer",
+                          fontFamily: "inherit",
+                          transition: "all 0.15s",
+                          border: tutorStyle === id ? "2px solid #F97316" : "1.5px solid #E2E8F0",
+                          background: tutorStyle === id ? "#FFF7ED" : "transparent",
+                          color: tutorStyle === id ? "#F97316" : "#64748B",
+                        }}
+                      >
+                        {emoji} {t(`tutorStyles.${id}`)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Interests */}
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: "#64748B", marginBottom: 4 }}>
+                    {t("auth.interestsLabel", "Interests")}
+                    <span style={{ fontWeight: 400, color: "#94A3B8", marginLeft: 4 }}>
+                      — {t("auth.interestsHint", "Helps your tutor pick relatable examples.")}
+                    </span>
+                  </div>
+                  {/* Preset chips */}
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+                    {INTEREST_OPTIONS.map(({ id, emoji }) => {
+                      const sel = interests.includes(id);
+                      return (
+                        <button
+                          key={id}
+                          type="button"
+                          onClick={() => {
+                            if (sel) {
+                              setInterests((prev) => prev.filter((i) => i !== id));
+                            } else if (interests.length < MAX_INTERESTS) {
+                              setInterests((prev) => [...new Set([...prev, id])]);
+                            }
+                          }}
+                          style={{
+                            padding: "5px 10px",
+                            borderRadius: 9999,
+                            fontSize: 12,
+                            fontWeight: 600,
+                            cursor: "pointer",
+                            fontFamily: "inherit",
+                            transition: "all 0.15s",
+                            border: sel ? "2px solid #F97316" : "1.5px solid #E2E8F0",
+                            background: sel ? "#FFF7ED" : "transparent",
+                            color: sel ? "#F97316" : "#64748B",
+                          }}
+                        >
+                          {emoji} {t(`interests.${id}`)}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* User-added custom interests */}
+                  {interests.filter((i) => !INTEREST_OPTIONS.some((o) => o.id === i)).length > 0 && (
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
+                      {interests
+                        .filter((i) => !INTEREST_OPTIONS.some((o) => o.id === i))
+                        .map((interest) => (
+                          <span
+                            key={interest}
+                            onClick={() => setInterests((prev) => prev.filter((i) => i !== interest))}
+                            style={{
+                              padding: "4px 10px",
+                              borderRadius: 9999,
+                              background: "#FFF7ED",
+                              color: "#F97316",
+                              fontSize: 12,
+                              fontWeight: 600,
+                              cursor: "pointer",
+                              border: "1px solid rgba(249,115,22,0.3)",
+                            }}
+                          >
+                            {interest} ✕
+                          </span>
+                        ))}
+                    </div>
+                  )}
+
+                  {/* Custom interest input */}
+                  <input
+                    type="text"
+                    value={customInterest}
+                    onChange={(e) => setCustomInterest(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        const v = customInterest.trim().slice(0, MAX_INTEREST_LENGTH);
+                        if (v && !interests.includes(v) && interests.length < MAX_INTERESTS) {
+                          setInterests((prev) => [...prev, v]);
+                        }
+                        setCustomInterest("");
+                      }
+                    }}
+                    placeholder={t("auth.addInterestPlaceholder", "Type topic and press Enter...")}
+                    style={{
+                      width: "100%",
+                      padding: "7px 12px",
+                      borderRadius: 8,
+                      border: "1.5px solid #E2E8F0",
+                      background: "#F8FAFC",
+                      fontSize: 12,
+                      fontFamily: "inherit",
+                      outline: "none",
+                      boxSizing: "border-box",
+                      color: "#1E293B",
+                    }}
+                  />
+                </div>
+
+                {/* Helper text */}
+                <p style={{ margin: 0, fontSize: 11, color: "#94A3B8", lineHeight: 1.5 }}>
+                  {t("auth.preferencesHint", "You can change these anytime in Settings.")}
+                </p>
+              </div>
+            )}
           </div>
 
           {/* Submit */}

@@ -28,6 +28,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import OUTPUT_DIR
+from api.teaching_service import invalidate_chunk_cache
 from db.models import AdminAuditLog, ChunkImage, ConceptChunk, TeachingSession
 
 logger = logging.getLogger(__name__)
@@ -147,6 +148,7 @@ async def snapshot_section(
             "is_optional": c.is_optional,
             "exam_disabled": c.exam_disabled,
             "admin_section_name": c.admin_section_name,
+            "admin_section_name_translations": c.admin_section_name_translations or {},  # extended for i18n undo
         }
         for c in chunks
     ]
@@ -391,6 +393,7 @@ async def _undo_update_chunk(db: AsyncSession, audit: AdminAuditLog) -> None:
     # Restore embedding if present
     if "embedding" in old:
         chunk.embedding = decode_embedding(old["embedding"])
+    await invalidate_chunk_cache(db, [audit.resource_id])
     await db.flush()
 
 
@@ -400,6 +403,7 @@ async def _undo_toggle_chunk_visibility(db: AsyncSession, audit: AdminAuditLog) 
     if chunk is None:
         raise HTTPException(404, "Chunk no longer exists — cannot undo")
     chunk.is_hidden = old["is_hidden"]
+    await invalidate_chunk_cache(db, [audit.resource_id])
     await db.flush()
 
 
@@ -409,6 +413,7 @@ async def _undo_toggle_chunk_exam_gate(db: AsyncSession, audit: AdminAuditLog) -
     if chunk is None:
         raise HTTPException(404, "Chunk no longer exists — cannot undo")
     chunk.exam_disabled = old["exam_disabled"]
+    await invalidate_chunk_cache(db, [audit.resource_id])
     await db.flush()
 
 
@@ -418,43 +423,52 @@ async def _undo_rename_section(db: AsyncSession, audit: AdminAuditLog) -> None:
     # has a single uniform name applied to all chunks.  On undo we restore
     # the original name to each chunk individually.
     original_name = old.get("admin_section_name")
+    original_translations = old.get("admin_section_name_translations", {})
     chunk_ids = old.get("affected_chunk_ids", [])
     for chunk_id_str in chunk_ids:
         chunk = await db.get(ConceptChunk, UUID(chunk_id_str))
         if chunk is None:
             continue
         chunk.admin_section_name = original_name
+        chunk.admin_section_name_translations = original_translations
+    await invalidate_chunk_cache(db, chunk_ids)
     await db.flush()
 
 
 async def _undo_toggle_section_optional(db: AsyncSession, audit: AdminAuditLog) -> None:
     old = audit.old_value
+    _chunk_ids = [entry["id"] for entry in old.get("per_chunk", [])]
     for entry in old.get("per_chunk", []):
         chunk = await db.get(ConceptChunk, UUID(entry["id"]))
         if chunk is None:
             continue
         chunk.is_optional = entry["is_optional"]
+    await invalidate_chunk_cache(db, _chunk_ids)
     await db.flush()
 
 
 async def _undo_toggle_section_exam_gate(db: AsyncSession, audit: AdminAuditLog) -> None:
     old = audit.old_value
+    _exam_chunk_ids = [entry["id"] for entry in old.get("per_chunk", [])]
     for entry in old.get("per_chunk", []):
         chunk = await db.get(ConceptChunk, UUID(entry["id"]))
         if chunk is None:
             continue
         chunk.exam_disabled = entry["exam_disabled"]
+    await invalidate_chunk_cache(db, _exam_chunk_ids)
     await db.flush()
 
 
 async def _undo_toggle_section_visibility(db: AsyncSession, audit: AdminAuditLog) -> None:
     old = audit.old_value
+    _vis_chunk_ids = [entry["id"] for entry in old.get("per_chunk", [])]
     for entry in old.get("per_chunk", []):
         chunk = await db.get(ConceptChunk, UUID(entry["id"]))
         if chunk is None:
             continue
         chunk.is_hidden = entry["is_hidden"]
         chunk.chunk_type_locked = entry["chunk_type_locked"]
+    await invalidate_chunk_cache(db, _vis_chunk_ids)
     await db.flush()
 
 
@@ -531,6 +545,9 @@ async def _undo_merge_chunks(db: AsyncSession, audit: AdminAuditLog) -> None:
             continue
         session.chunk_progress = sess_snap["chunk_progress_before"]
 
+    # Invalidate cache for both chunks (the surviving chunk and the restored chunk2)
+    _merge_chunk_ids = [chunk1_snap["id"], chunk2_snap["id"]]
+    await invalidate_chunk_cache(db, _merge_chunk_ids)
     await db.flush()
 
 
@@ -573,6 +590,8 @@ async def _undo_split_chunk(db: AsyncSession, audit: AdminAuditLog) -> None:
             continue
         session.chunk_progress = sess_snap["chunk_progress_before"]
 
+    # Invalidate cache for the original chunk (the created chunk was deleted above)
+    await invalidate_chunk_cache(db, [original_snap["id"]])
     await db.flush()
 
 
@@ -586,6 +605,7 @@ async def _undo_promote(db: AsyncSession, audit: AdminAuditLog) -> None:
     book_slug = audit.book_slug
 
     # 1. Restore chunk concept_id, section, is_hidden
+    _promote_chunk_ids = []
     for chunk_snap in old.get("affected_chunks", []):
         chunk = await db.get(ConceptChunk, UUID(chunk_snap["id"]))
         if chunk is None:
@@ -593,7 +613,9 @@ async def _undo_promote(db: AsyncSession, audit: AdminAuditLog) -> None:
         chunk.concept_id = chunk_snap["concept_id"]
         chunk.section = chunk_snap["section"]
         chunk.is_hidden = chunk_snap.get("is_hidden", False)
+        _promote_chunk_ids.append(chunk_snap["id"])
 
+    await invalidate_chunk_cache(db, _promote_chunk_ids)
     await db.flush()
 
     # 2. Restore graph.json atomically (write temp → rename)
@@ -735,11 +757,13 @@ async def apply_redo(
 
     elif action == "rename_section":
         new_name = audit.new_value.get("admin_section_name")
+        new_translations = audit.new_value.get("admin_section_name_translations", {})
         for chunk_id_str in audit.old_value.get("affected_chunk_ids", []):
             chunk = await db.get(ConceptChunk, UUID(chunk_id_str))
             if chunk is None:
                 continue
             chunk.admin_section_name = new_name
+            chunk.admin_section_name_translations = new_translations
 
     elif action == "toggle_section_optional":
         new_val = audit.new_value.get("is_optional")
@@ -875,6 +899,28 @@ async def apply_redo(
                     "[audit_redo] Graph cache reload failed after promote redo (book=%s)",
                     book_slug,
                 )
+
+    # Invalidate cache for the chunks affected by this redo operation.
+    # Derive the affected chunk IDs from the audit record using the same logic as the undo handlers.
+    _redo_chunk_ids: list[str] = []
+    if action in ("update_chunk", "toggle_chunk_visibility", "toggle_chunk_exam_gate"):
+        _redo_chunk_ids = [audit.resource_id]
+    elif action == "rename_section":
+        _redo_chunk_ids = audit.old_value.get("affected_chunk_ids", [])
+    elif action in ("toggle_section_optional", "toggle_section_exam_gate", "toggle_section_visibility"):
+        _redo_chunk_ids = [e["id"] for e in audit.old_value.get("per_chunk", [])]
+    elif action == "merge_chunks":
+        old_val = audit.old_value
+        _redo_chunk_ids = [old_val["chunk1"]["id"], old_val["chunk2"]["id"]]
+    elif action == "split_chunk":
+        _redo_chunk_ids = [audit.old_value["original_chunk"]["id"], audit.new_value.get("created_chunk_id", "")]
+    elif action == "promote":
+        _redo_chunk_ids = audit.new_value.get("affected_chunk_ids", [])
+    if _redo_chunk_ids:
+        try:
+            await invalidate_chunk_cache(db, [cid for cid in _redo_chunk_ids if cid])
+        except Exception:
+            logger.warning("[audit_redo] cache invalidation failed for action=%s", action, exc_info=True)
 
     await db.flush()
 

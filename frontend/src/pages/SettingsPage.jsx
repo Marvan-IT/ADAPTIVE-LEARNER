@@ -1,33 +1,16 @@
 import { useState, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
-import { User, Sparkles, Shield, Eye, EyeOff, LogOut, Check, MessageCircle, Plus, Send, ArrowLeft, Loader } from "lucide-react";
+import { User, Sparkles, Shield, Eye, EyeOff, LogOut, Check, MessageCircle, Plus, Send, ArrowLeft, Loader, Trash2 } from "lucide-react";
 import { useStudent } from "../context/StudentContext";
 import { useAuth } from "../context/AuthContext";
+import { useDialog } from "../context/DialogProvider";
 import { Avatar } from "../components/ui";
 import LanguageSelector from "../components/LanguageSelector";
-import { updateStudentProfile } from "../api/students";
+import { updateStudentProfile, validateCustomInterest } from "../api/students";
 import { changePassword } from "../api/auth";
 import { createTicket, getTickets, getTicketDetail, sendMessage } from "../api/support";
-
-const TUTOR_STYLES = [
-  { id: "default", label: "Default", emoji: "📖" },
-  { id: "pirate", label: "Pirate", emoji: "🏴‍☠️" },
-  { id: "astronaut", label: "Space", emoji: "🚀" },
-  { id: "gamer", label: "Gamer", emoji: "🎮" },
-];
-
-const INTEREST_OPTIONS = [
-  { id: "Sports", emoji: "⚽" },
-  { id: "Gaming", emoji: "🎮" },
-  { id: "Music", emoji: "🎵" },
-  { id: "Movies", emoji: "🎬" },
-  { id: "Food", emoji: "🍕" },
-  { id: "Animals", emoji: "🐾" },
-  { id: "Space", emoji: "🚀" },
-  { id: "Technology", emoji: "💻" },
-  { id: "Art", emoji: "🎨" },
-  { id: "Nature", emoji: "🌿" },
-];
+import { TUTOR_STYLES, INTEREST_OPTIONS } from "../constants/tutorPreferences";
+import { preValidate, reasonText } from "./settings/interestValidation";
 
 /* ── Shared inline style objects ── */
 const cardStyle = { borderRadius: 16, padding: 24, border: "1px solid #E2E8F0", background: "#FFFFFF", marginBottom: 20 };
@@ -37,7 +20,7 @@ const primaryBtn = { borderRadius: 9999, padding: "10px 20px", fontSize: 14, fon
 const secondaryBtn = { ...primaryBtn, background: "transparent", border: "1.5px solid #E2E8F0", color: "#64748B" };
 const dangerBtn = { ...primaryBtn, background: "#FEF2F2", color: "#EF4444", border: "1.5px solid rgba(239,68,68,0.2)" };
 
-function IconCircle({ bg, color, children }) {
+function IconCircle({ bg, children }) {
   return (
     <div style={{ width: 36, height: 36, borderRadius: "50%", background: bg, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
       {children}
@@ -72,6 +55,7 @@ export default function SettingsPage() {
   const { t } = useTranslation();
   const { student, logout, refreshStudent } = useStudent();
   const { user } = useAuth();
+  const { confirm } = useDialog();
 
   const [displayName, setDisplayName] = useState("");
   const [age, setAge] = useState("");
@@ -80,7 +64,10 @@ export default function SettingsPage() {
 
   const [tutorStyle, setTutorStyle] = useState("default");
   const [interests, setInterests] = useState([]);
+  const [customInterests, setCustomInterests] = useState([]);
   const [customInterest, setCustomInterest] = useState("");
+  const [interestErr, setInterestErr] = useState(null);
+  const [validating, setValidating] = useState(false);
   const [prefsSaving, setPrefsSaving] = useState(false);
   const [prefsMsg, setPrefsMsg] = useState(null);
 
@@ -155,6 +142,7 @@ export default function SettingsPage() {
       setAge(student.age != null ? String(student.age) : "");
       setTutorStyle(student.preferred_style || "default");
       setInterests(student.interests || []);
+      setCustomInterests(student.custom_interests || []);
     }
   }, [student]);
 
@@ -172,14 +160,49 @@ export default function SettingsPage() {
   };
 
   const handleSavePrefs = async () => {
-    setPrefsSaving(true); setPrefsMsg(null);
+    setPrefsSaving(true); setPrefsMsg(null); setInterestErr(null);
+    let mergedCustom = customInterests;
+    let mergedInterests = interests;
+    const pending = customInterest.trim();
+    if (pending) {
+      const pre = preValidate(pending, { existingCustom: customInterests, predefined: INTEREST_OPTIONS });
+      if (!pre.ok) {
+        setInterestErr(reasonText(t, pre.code));
+        setPrefsSaving(false);
+        return;
+      }
+      try {
+        const res = await validateCustomInterest(student.id, pre.value, student?.preferred_language || undefined);
+        if (!res.data.ok) {
+          setInterestErr(reasonText(t, res.data.reason || "unrecognized"));
+          setPrefsSaving(false);
+          return;
+        }
+        mergedCustom = [...customInterests, res.data.normalized];
+        mergedInterests = [...interests, res.data.normalized];
+      } catch {
+        setInterestErr(reasonText(t, "validator_unavailable"));
+        setPrefsSaving(false);
+        return;
+      }
+    }
     try {
-      await updateStudentProfile(student.id, { preferred_style: tutorStyle, interests });
+      await updateStudentProfile(student.id, {
+        preferred_style: tutorStyle,
+        interests: mergedInterests,
+        custom_interests: mergedCustom,
+      });
+      setCustomInterests(mergedCustom);
+      setInterests(mergedInterests);
+      setCustomInterest("");
       await refreshStudent();
       setPrefsMsg({ type: "success", text: t("settings.saved", "Saved successfully") });
     } catch (err) {
       setPrefsMsg({ type: "error", text: err.response?.data?.detail || t("settings.saveFailed", "Failed to save") });
-    } finally { setPrefsSaving(false); setTimeout(() => setPrefsMsg(null), 3000); }
+    } finally {
+      setPrefsSaving(false);
+      setTimeout(() => setPrefsMsg(null), 3000);
+    }
   };
 
   const handleChangePassword = async () => {
@@ -195,7 +218,32 @@ export default function SettingsPage() {
   };
 
   const toggleInterest = (id) => setInterests((prev) => prev.includes(id) ? prev.filter((i) => i !== id) : [...new Set([...prev, id])]);
-  const addCustomInterest = () => { const v = customInterest.trim(); if (v && !interests.includes(v)) setInterests((p) => [...p, v]); setCustomInterest(""); };
+
+  const addCustomInterest = async () => {
+    setInterestErr(null);
+    const pre = preValidate(customInterest, { existingCustom: customInterests, predefined: INTEREST_OPTIONS });
+    if (!pre.ok) { setInterestErr(reasonText(t, pre.code)); return; }
+    setValidating(true);
+    try {
+      const res = await validateCustomInterest(student.id, pre.value, student?.preferred_language || undefined);
+      if (!res.data.ok) {
+        setInterestErr(reasonText(t, res.data.reason || "unrecognized"));
+        return;
+      }
+      setCustomInterests((prev) => [...prev, res.data.normalized]);
+      setInterests((prev) => [...prev, res.data.normalized]);
+      setCustomInterest("");
+    } catch {
+      setInterestErr(reasonText(t, "validator_unavailable"));
+    } finally {
+      setValidating(false);
+    }
+  };
+
+  const removeCustomInterest = (entry) => {
+    setCustomInterests((prev) => prev.filter((e) => e !== entry));
+    setInterests((prev) => prev.filter((e) => e !== entry));
+  };
 
   const StatusBadge = ({ status }) => (
     <span style={{ fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: 9999, background: status === "open" ? "#DCFCE7" : "#F1F5F9", color: status === "open" ? "#16A34A" : "#94A3B8" }}>
@@ -267,14 +315,14 @@ export default function SettingsPage() {
           <label style={labelStyle}>{t("customize.style", "Tutor Style")}</label>
           <p style={{ fontSize: 12, color: "#94A3B8", margin: "0 0 12px" }}>{t("settings.tutorStyleHint", "Choose how your AI tutor talks to you during lessons")}</p>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            {TUTOR_STYLES.map(({ id, label, emoji }) => (
+            {TUTOR_STYLES.map(({ id, emoji }) => (
               <button key={id} onClick={() => setTutorStyle(id)} style={{
                 padding: "8px 16px", borderRadius: 9999, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", transition: "all 0.15s",
                 border: tutorStyle === id ? "2px solid #F97316" : "1.5px solid #E2E8F0",
                 background: tutorStyle === id ? "#FFF7ED" : "transparent",
                 color: tutorStyle === id ? "#F97316" : "#64748B",
               }}>
-                {emoji} {t(`style.${id}`, label)}
+                {emoji} {t(`tutorStyles.${id}`)}
               </button>
             ))}
           </div>
@@ -295,30 +343,71 @@ export default function SettingsPage() {
                   background: sel ? "#FFF7ED" : "transparent",
                   color: sel ? "#F97316" : "#64748B",
                 }}>
-                  {emoji} {id}
+                  {emoji} {t(`interests.${id}`)}
                 </button>
               );
             })}
           </div>
-          {/* Custom interests */}
-          {interests.filter((i) => !INTEREST_OPTIONS.some((o) => o.id === i)).length > 0 && (
+          {/* Custom interest chips — toggle-able, removable */}
+          {customInterests.length > 0 && (
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
-              {interests.filter((i) => !INTEREST_OPTIONS.some((o) => o.id === i)).map((interest) => (
-                <span key={interest} onClick={() => toggleInterest(interest)} style={{
-                  padding: "4px 12px", borderRadius: 9999, background: "#FFF7ED", color: "#F97316", fontSize: 12, fontWeight: 600, cursor: "pointer", border: "1px solid rgba(249,115,22,0.3)",
-                }}>
-                  {interest} ✕
-                </span>
-              ))}
+              {customInterests.map((entry) => {
+                const sel = interests.includes(entry);
+                return (
+                  <button
+                    key={entry}
+                    onClick={() => toggleInterest(entry)}
+                    style={{
+                      position: "relative", padding: "6px 28px 6px 14px", borderRadius: 9999, fontSize: 12, fontWeight: 600,
+                      cursor: "pointer", fontFamily: "inherit", transition: "all 0.15s",
+                      border: sel ? "2px solid #F97316" : "1.5px solid #E2E8F0",
+                      background: sel ? "#FFF7ED" : "transparent",
+                      color: sel ? "#F97316" : "#64748B",
+                    }}
+                  >
+                    {entry}
+                    <span
+                      role="button"
+                      tabIndex={0}
+                      aria-label={t("settings.deleteCustomInterest", "Remove custom interest")}
+                      onClick={(e) => { e.stopPropagation(); removeCustomInterest(entry); }}
+                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.stopPropagation(); e.preventDefault(); removeCustomInterest(entry); } }}
+                      style={{
+                        position: "absolute", top: "50%", right: 8, transform: "translateY(-50%)",
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        background: "none", border: "none", cursor: "pointer", padding: 0, lineHeight: 1,
+                        color: sel ? "#F97316" : "#94A3B8",
+                      }}
+                    >
+                      <Trash2 size={14} />
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           )}
+          {/* autoComplete="new-password" kills Chrome profile autofill on this text input; see DLD Follow-ups v2 */}
           <input
+            type="text"
+            name="custom-interest"
+            autoComplete="new-password"
+            role="textbox"
+            data-lpignore="true"
             value={customInterest}
-            onChange={(e) => setCustomInterest(e.target.value)}
+            onChange={(e) => { setCustomInterest(e.target.value); setInterestErr(null); }}
             onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addCustomInterest(); } }}
             placeholder={t("customize.addInterest", "Type topic and press Enter...")}
             style={inputStyle}
           />
+          {validating && (
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6, fontSize: 12, color: "#64748B" }}>
+              <Loader size={12} style={{ animation: "spin 1s linear infinite" }} />
+              {t("settings.validating", "Checking...")}
+            </div>
+          )}
+          {interestErr && !validating && (
+            <div style={{ marginTop: 6, fontSize: 12, color: "#EF4444" }}>{interestErr}</div>
+          )}
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 20 }}>
@@ -495,7 +584,21 @@ export default function SettingsPage() {
         <hr style={{ border: "none", borderTop: "1px solid #E2E8F0", margin: "20px 0" }} />
 
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          <button onClick={async () => { await logout(); window.location.href = "/login"; }} style={{ ...secondaryBtn, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, width: "100%" }}>
+          <button
+            onClick={async () => {
+              const ok = await confirm({
+                title: t("confirm.logoutTitle"),
+                message: t("confirm.logoutMessage"),
+                confirmLabel: t("nav.logout"),
+                cancelLabel: t("confirm.cancel"),
+                variant: "danger",
+              });
+              if (!ok) return;
+              await logout();
+              window.location.href = "/login";
+            }}
+            style={{ ...secondaryBtn, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, width: "100%" }}
+          >
             <LogOut size={16} /> {t("auth.logout")}
           </button>
           <button disabled style={{ ...dangerBtn, width: "100%", opacity: 0.5, cursor: "not-allowed" }}>

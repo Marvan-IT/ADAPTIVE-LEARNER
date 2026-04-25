@@ -30,10 +30,18 @@ def _language_instruction(language: str) -> str:
     return (
         f"\n\nLANGUAGE REQUIREMENT — THIS IS MANDATORY:\n"
         f"You MUST respond ENTIRELY in {lang_name}. "
-        f"All explanations, questions, options, hints, feedback, and conversation "
-        f"must be written in {lang_name}. "
-        f"Keep mathematical notation ($...$) and proper nouns (like 'Adaptive Learner') in their original form. "
-        f"Translate concept titles and section headers into {lang_name} as well."
+        f"Translate ALL content into {lang_name}: explanations, questions, options, hints, "
+        f"feedback, conversation, technical terminology, subject-specific vocabulary, "
+        f"concept names, and chapter/section titles. "
+        f"A student reading your response may not know ANY English — no English words should appear "
+        f"except for the specific exceptions below.\n"
+        f"The ONLY exceptions that stay in their original form are:\n"
+        f"  (a) Mathematical formulas, equations, and LaTeX notation ($...$, \\frac, \\sum, etc.)\n"
+        f"  (b) The product name \"Adaptive Learner\" when referring to the app itself\n"
+        f"  (c) Numerical digits and units that are universally written in Latin script\n"
+        f"Translate technical terms naturally into the equivalent {lang_name} word or phrase, "
+        f"not as transliteration. For example, 'qualitative data' should become the native {lang_name} "
+        f"phrase for that concept, not the English words in {lang_name} script."
     )
 
 
@@ -70,11 +78,19 @@ STYLE_MODIFIERS = {
 VALID_STYLES = set(STYLE_MODIFIERS.keys())
 
 
-def _build_interests_block(interests: list[str]) -> str:
-    """Return a strong mandatory interest-injection block for LLM system prompts."""
+def _build_interests_block(interests: list[str], primary: str | None = None) -> str:
+    """Return a strong mandatory interest-injection block for LLM system prompts.
+
+    Args:
+        interests: Full list of student interests (shown as context).
+        primary:   The single interest to use for "frame every example using: X context."
+                   Defaults to interests[0] when None (preserves original behaviour for
+                   lesson-wide prompts; callers pass a card-index-rotated value for
+                   per-card generation).
+    """
     if not interests:
         return ""
-    first = interests[0]
+    frame_with = primary if primary else interests[0]
     joined = ", ".join(interests)
     return (
         f"\n\n## MANDATORY INTEREST RULE\n"
@@ -82,7 +98,7 @@ def _build_interests_block(interests: list[str]) -> str:
         f"HARD REQUIREMENT: ALL examples, analogies, worked problems, and MCQ question "
         f"scenarios MUST be framed in terms of the student's interests above. "
         f"Do NOT use generic examples (e.g. 'a store sells apples', 'bags of marbles'). "
-        f"Instead frame every example using: {first} context. "
+        f"Instead frame every example using: {frame_with} context. "
         f"Every TEACH and EXAMPLE card MUST contain at least 1 interest-framed worked example. "
         f"This rule is non-negotiable — a card without an interest-framed example is invalid."
     )
@@ -94,10 +110,11 @@ def build_presentation_system_prompt(
     style: str = "default",
     interests: list[str] | None = None,
     language: str = "en",
+    primary_interest: str | None = None,
 ) -> str:
     """Build the system prompt for generating a concept explanation."""
 
-    interests_text = _build_interests_block(interests or [])
+    interests_text = _build_interests_block(interests or [], primary_interest)
 
     style_modifier = STYLE_MODIFIERS.get(style, "")
     style_prefix = f"{style_modifier}\n\n" if style_modifier else ""
@@ -292,6 +309,7 @@ def build_socratic_system_prompt(
     history: dict | None = None,    # EXISTING
     session_card_stats: dict | None = None,  # EXISTING
     covered_topics: list[str] | None = None,  # NEW — card titles the student actually saw
+    primary_interest: str | None = None,
 ) -> str:
     """Build the system prompt for the Socratic questioning phase."""
 
@@ -299,7 +317,7 @@ def build_socratic_system_prompt(
     style_prefix = f"{style_modifier}\n\n" if style_modifier else ""
     style_text = ""  # no longer appended at bottom
 
-    interests_text = _build_interests_block(interests or [])
+    interests_text = _build_interests_block(interests or [], primary_interest)
 
     image_context = ""
     if card_visuals:
@@ -508,6 +526,7 @@ def build_remediation_socratic_prompt(
     style: str = "default",
     language: str = "en",
     session_stats: dict | None = None,
+    primary_interest: str | None = None,
 ) -> str:
     """
     Build the system prompt for the RECHECKING phase after remediation.
@@ -517,7 +536,7 @@ def build_remediation_socratic_prompt(
     style_prefix = f"{style_modifier}\n\n" if style_modifier else ""
     style_text = ""  # no longer appended at bottom
 
-    interests_text = _build_interests_block(student_interests or [])
+    interests_text = _build_interests_block(student_interests or [], primary_interest)
 
     failed_topics_text = (
         ", ".join(failed_topics[:5]) if failed_topics else "the key concepts of this section"
@@ -826,6 +845,7 @@ def build_cards_system_prompt(
     trend_direction: str = "STABLE",
     engagement: str = "ENGAGED",
     section_domain: str = "TYPE_A",
+    primary_interest: str | None = None,
 ) -> str:
     """Build the system prompt for unified card-based lesson generation.
 
@@ -833,7 +853,7 @@ def build_cards_system_prompt(
     No card_type, no quick_check, no questions[], no True/False anywhere.
     """
 
-    interests_text = _build_interests_block(interests or [])
+    interests_text = _build_interests_block(interests or [], primary_interest)
 
     style_modifier = STYLE_MODIFIERS.get(style, "")
     # Persona block prepended at the TOP of the system prompt (before all other instructions)
@@ -1428,6 +1448,7 @@ def build_assistant_system_prompt(
     style: str = "default",
     interests: list[str] | None = None,
     language: str = "en",
+    primary_interest: str | None = None,
 ) -> str:
     """Build the system prompt for the AI assistant sidebar."""
 
@@ -1435,7 +1456,7 @@ def build_assistant_system_prompt(
     style_prefix = f"{style_modifier}\n\n" if style_modifier else ""
     style_text = ""  # no longer appended at bottom
 
-    interests_text = _build_interests_block(interests or [])
+    interests_text = _build_interests_block(interests or [], primary_interest)
 
     _style_rule = (
         f"6. STAY IN CHARACTER as the {style} tutor AT ALL TIMES — use {style}-themed vocabulary in every response\n"

@@ -44,9 +44,8 @@ from auth.router import router as auth_router
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from db.connection import init_db, close_db, get_db
-from config import OUTPUT_DIR, DATA_DIR, OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL_MINI, validate_required_env_vars
+from config import OUTPUT_DIR, DATA_DIR, OPENAI_API_KEY, OPENAI_BASE_URL, validate_required_env_vars
 from extraction.calibrate import derive_slug
-from api.prompts import LANGUAGE_NAMES
 
 
 logger = logging.getLogger(__name__)
@@ -83,45 +82,14 @@ _SKIP_AUTH_PREFIXES = ("/images/", "/static/", "/api/v1/auth/")
 
 _chunk_knowledge_svc: ChunkKnowledgeService = None  # chunk-based service (PostgreSQL + graph)
 _openai_client: AsyncOpenAI = None
-_cache_write_lock: asyncio.Lock | None = None
-
-# Persistent translation cache: { (language, concept_id): translated_title }
-_title_translation_cache: dict[tuple[str, str], str] = {}
-_TRANSLATION_CACHE_FILE = Path(__file__).resolve().parent.parent.parent / "translation_cache.json"
-
-
-def _load_translation_cache() -> None:
-    """Load translation cache from disk if it exists."""
-    global _title_translation_cache
-    if _TRANSLATION_CACHE_FILE.exists():
-        try:
-            with open(_TRANSLATION_CACHE_FILE, "r", encoding="utf-8") as f:
-                raw: dict = json.load(f)
-            # Keys stored as "lang|concept_id" strings
-            _title_translation_cache = {
-                tuple(k.split("|", 1)): v for k, v in raw.items()
-            }
-            logger.info("[translation-cache] Loaded %d entries from disk.", len(_title_translation_cache))
-        except Exception as e:
-            logger.error("[translation-cache] Failed to load cache: %s", e)
-
-
-def _save_translation_cache() -> None:
-    """Persist translation cache to disk."""
-    try:
-        serialisable = {f"{lang}|{cid}": title for (lang, cid), title in _title_translation_cache.items()}
-        with open(_TRANSLATION_CACHE_FILE, "w", encoding="utf-8") as f:
-            json.dump(serialisable, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        logger.error("[translation-cache] Failed to save cache: %s", e)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _configure_logging()
     validate_required_env_vars()
-    global _chunk_knowledge_svc, _openai_client, _cache_write_lock
-    _cache_write_lock = asyncio.Lock()
+    global _chunk_knowledge_svc, _openai_client
+
     logger.info("Initializing PostgreSQL...")
     await init_db()
     # Chunk-based knowledge service (PostgreSQL + graph.json — no ChromaDB)
@@ -134,7 +102,6 @@ async def lifespan(app: FastAPI):
         api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL
     )
     _openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
-    _load_translation_cache()
 
     # ── Verify tables exist (helpful error if migrations haven't run) ───────────
     try:
@@ -251,7 +218,6 @@ async def lifespan(app: FastAPI):
 
     logger.info("Services loaded. API ready.")
     yield
-    _save_translation_cache()
     await close_db()
     logger.info("Shutting down.")
 
@@ -454,7 +420,7 @@ async def get_concept(concept_id: str, book_slug: str = Query("prealgebra", patt
     """Full detail for a single concept including prerequisites and dependents."""
     from db.connection import get_db as _get_db
     async for _db in _get_db():
-        detail = await _chunk_knowledge_svc.get_concept_detail(_db, concept_id, book_slug)
+        detail = await _chunk_knowledge_svc.get_concept_detail(_db, concept_id, book_slug, lang="en")
         break
     if not detail:
         raise HTTPException(status_code=404, detail=f"Concept not found: {concept_id}")
@@ -481,7 +447,7 @@ async def get_concept_images(concept_id: str, book_slug: str = Query("prealgebra
     """List all extracted images for a concept."""
     from db.connection import get_db as _get_db
     async for _db in _get_db():
-        detail = await _chunk_knowledge_svc.get_concept_detail(_db, concept_id, book_slug)
+        detail = await _chunk_knowledge_svc.get_concept_detail(_db, concept_id, book_slug, lang="en")
         break
     images = detail.get("images", []) if detail else []
     return {"concept_id": concept_id, "images": images, "count": len(images)}
@@ -562,10 +528,39 @@ async def learning_path(request: Request, req: LearningPathRequest, book_slug: s
 
 
 @app.get("/api/v1/graph/full")
-async def graph_full(book_slug: str = Query("prealgebra", pattern=r"^[a-z0-9_().+-]+$"), db: AsyncSession = Depends(get_db)):
+async def graph_full(
+    request: Request,
+    book_slug: str = Query("prealgebra", pattern=r"^[a-z0-9_().+-]+$"),
+    db: AsyncSession = Depends(get_db),
+):
     """Full graph with nodes and edges for frontend visualization."""
+    from db.models import ConceptChunk as _CC
+    from api.dependencies import get_request_language, resolve_translation
     await _require_visible_book(book_slug, db)
-    nodes = _chunk_knowledge_svc.get_all_nodes(book_slug)
+    lang = await get_request_language(request, student=None)
+
+    # Fetch heading translations in one query — do NOT mutate the cached graph dict.
+    chunk_rows = (await db.execute(
+        select(_CC.concept_id, _CC.heading, _CC.heading_translations)
+        .where(_CC.book_slug == book_slug)
+    )).all()
+    heading_map: dict[str, tuple[str, dict]] = {
+        row.concept_id: (row.heading, row.heading_translations or {})
+        for row in chunk_rows
+    }
+
+    base_nodes = _chunk_knowledge_svc.get_all_nodes(book_slug)
+    if lang != "en":
+        nodes = []
+        for node in base_nodes:
+            cid = node["concept_id"]
+            if cid in heading_map:
+                en_heading, translations = heading_map[cid]
+                node = {**node, "title": resolve_translation(en_heading, translations, lang)}
+            nodes.append(node)
+    else:
+        nodes = base_nodes
+
     edges = _chunk_knowledge_svc.get_all_edges(book_slug)
     return {"nodes": nodes, "edges": edges}
 
@@ -579,8 +574,11 @@ async def topological_order(book_slug: str = Query("prealgebra", pattern=r"^[a-z
 
 
 @app.get("/api/v1/books")
-async def list_books_v1(db: AsyncSession = Depends(get_db)):
+async def list_books_v1(request: Request, db: AsyncSession = Depends(get_db)):
     from db.models import Book as BookModel, Subject
+    from api.dependencies import get_request_language, resolve_translation
+    lang = await get_request_language(request, student=None)
+
     # Exclude books whose subject is hidden
     hidden_subj_rows = (await db.execute(
         select(Subject.slug).where(Subject.is_hidden == True)
@@ -597,102 +595,16 @@ async def list_books_v1(db: AsyncSession = Depends(get_db)):
         query.order_by(BookModel.subject, BookModel.title)
     )).scalars().all()
     return [
-        {"slug": b.book_slug, "title": b.title, "subject": b.subject, "processed": True}
+        {
+            "slug": b.book_slug,
+            "title": resolve_translation(b.title, b.title_translations or {}, lang),
+            "subject": resolve_translation(b.subject, b.subject_translations or {}, lang),
+            "subject_slug": b.subject,
+            "processed": True,
+            "has_translations": bool((b.title_translations or {}).get(lang)),
+        }
         for b in rows
     ]
-
-
-# ═══════════════════════════════════════════════════════════════════
-# CONCEPT TITLE TRANSLATION
-# ═══════════════════════════════════════════════════════════════════
-
-
-class TranslateTitlesRequest(BaseModel):
-    titles: dict[str, str]  # { concept_id: english_title }
-    language: str  # target language code
-
-
-@app.post("/api/v2/concepts/translate-titles")
-@limiter.limit("20/minute")
-async def translate_concept_titles(request: Request, req: TranslateTitlesRequest):
-    """Translate concept titles in batch using LLM, with in-memory caching."""
-    if not req.titles or req.language == "en":
-        return {"translations": req.titles}
-
-    lang_name = LANGUAGE_NAMES.get(req.language, req.language)
-
-    # Check cache for already-translated titles
-    translations = {}
-    untranslated = {}
-    for cid, title in req.titles.items():
-        cached = _title_translation_cache.get((req.language, cid))
-        if cached:
-            translations[cid] = cached
-        else:
-            untranslated[cid] = title
-
-    # If all cached, return immediately
-    if not untranslated:
-        return {"translations": translations}
-
-    # Build a numbered list for the LLM
-    items = list(untranslated.items())
-    numbered = "\n".join(f"{i+1}. {title}" for i, (_, title) in enumerate(items))
-
-    try:
-        translation_model = OPENAI_MODEL_MINI  # mini is sufficient for mechanical JSON translation
-        response = await _openai_client.chat.completions.create(
-            model=translation_model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        f"Translate the following math concept titles to {lang_name}. "
-                        "These are educational math topic names for children. "
-                        "Return ONLY a JSON object with key 'titles' containing a list "
-                        "of translations in the same order. No extra text. Example: "
-                        '{"titles": ["translated1", "translated2"]}'
-                    ),
-                },
-                {"role": "user", "content": numbered},
-            ],
-            temperature=0.3,
-            max_tokens=1000,
-            timeout=20.0,
-        )
-
-        if not response.choices:
-            raise ValueError("LLM returned empty response for translation")
-        raw = (response.choices[0].message.content or "").strip()
-        if not raw:
-            raise ValueError("LLM returned empty response")
-        # Extract JSON from response (handle markdown code blocks)
-        if "```" in raw:
-            import re as _re
-            m = _re.search(r"```(?:json)?\s*(.*?)```", raw, _re.DOTALL)
-            if m:
-                raw = m.group(1).strip()
-        result = json.loads(raw)
-        translated_list = result.get("titles", [])
-
-        async with _cache_write_lock:
-            for i, (cid, _) in enumerate(items):
-                if i < len(translated_list):
-                    translated = translated_list[i]
-                    _title_translation_cache[(req.language, cid)] = translated
-                    translations[cid] = translated
-                else:
-                    translations[cid] = untranslated[cid]  # fallback to English
-        # Persist after each batch so cache survives crashes — run blocking I/O off event loop
-        await asyncio.get_event_loop().run_in_executor(None, _save_translation_cache)
-
-    except Exception as e:
-        logger.error("[translate-titles] ERROR: %s", e, exc_info=True)
-        # On error, return English titles as fallback
-        for cid, title in untranslated.items():
-            translations[cid] = title
-
-    return {"translations": translations}
 
 
 # ── Run with uvicorn ───────────────────────────────────────────────

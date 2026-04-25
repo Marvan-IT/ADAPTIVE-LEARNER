@@ -298,6 +298,8 @@ async def generate_adaptive_lesson(
         language=language,
         generate_as=generate_as,
     )
+    from api.prompts import _language_instruction
+    user_prompt += _language_instruction(language)
 
     # ── h) Call LLM ───────────────────────────────────────────────────────
     messages = [
@@ -785,6 +787,8 @@ async def generate_next_card(
         blended_state_score=blended_score,
         engagement_strategy=_strategy,
     )
+    from api.prompts import _language_instruction
+    usr_p += _language_instruction(language)
 
     messages = [
         {"role": "system", "content": sys_p},

@@ -35,7 +35,6 @@ export default function AdminSupportPage() {
     setReplyText("");
     try {
       const res = await getAdminTicketDetail(ticket.id);
-      console.log("[AdminSupport] Ticket detail response:", res.data);
       setMessages(res.data.messages || []);
       setSelectedTicket(res.data);
       try { await markTicketRead(ticket.id); } catch { /* ignore */ }

@@ -33,14 +33,6 @@ class StartSessionRequest(BaseModel):
         default="prealgebra",
         description="Book slug matching the processed output directory, e.g. 'prealgebra', 'elementary_algebra'",
     )
-    style: str = Field(
-        default="default",
-        pattern="^(default|pirate|astronaut|gamer)$",
-    )
-    lesson_interests: list[str] = Field(
-        default_factory=list,
-        description="Per-lesson interest override (empty = use student profile interests)",
-    )
 
 
 class StudentResponseRequest(BaseModel):
@@ -49,10 +41,6 @@ class StudentResponseRequest(BaseModel):
     )
     engagement_signal: str | None = None
     strategy_applied: str | None = None
-
-
-class SwitchStyleRequest(BaseModel):
-    style: str = Field(..., pattern="^(default|pirate|astronaut|gamer)$")
 
 
 # ── Response Schemas ──────────────────────────────────────────────
@@ -70,11 +58,23 @@ class StudentResponse(BaseModel):
     display_name: str
     age: int | None = None
     interests: list[str]
+    custom_interests: list[str] = []
     preferred_style: str
     preferred_language: str
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class ValidateCustomInterestRequest(BaseModel):
+    text: str
+    language: str | None = None
+
+
+class ValidateCustomInterestResponse(BaseModel):
+    ok: bool
+    reason: str | None = None
+    normalized: str
 
 
 class StudentLanguageResponse(StudentResponse):
@@ -165,13 +165,6 @@ class CardsResponse(BaseModel):
     concepts_total: int = 0                   # Total sub-sections in this concept
     concepts_covered_count: int = 0           # How many covered so far (including this batch)
     cache_version: int = 0                    # Internal generation version for staleness detection
-
-
-class UpdateSessionInterestsRequest(BaseModel):
-    interests: list[str] = Field(
-        default_factory=list,
-        description="Per-session interest override (empty = use student profile interests)"
-    )
 
 
 class RegenerateMCQRequest(BaseModel):

@@ -30,7 +30,7 @@ function buildNavItems(t) {
 
 export default function StudentSidebar({ collapsed, onToggleCollapse }) {
   const { t } = useTranslation();
-  const { student } = useStudent();
+  const { student, isHydrated } = useStudent();
   const navigate = useNavigate();
   const location = useLocation();
   const { phase, reset: resetSession } = useSession();
@@ -155,21 +155,21 @@ export default function StudentSidebar({ collapsed, onToggleCollapse }) {
                   display: "flex", alignItems: "center", justifyContent: "center",
                   color: "#fff", fontSize: "10px", fontWeight: 700,
                 }}>
-                  {level}
+                  {isHydrated ? level : "—"}
                 </div>
-                <span style={{ fontSize: "13px", color: "#64748b" }}>{t("nav.level", { level, defaultValue: "Level {{level}}" })}</span>
+                <span style={{ fontSize: "13px", color: "#64748b" }}>{isHydrated ? t("nav.level", { level }) : "—"}</span>
               </div>
             </div>
           </div>
           <div style={{ marginTop: "14px" }}>
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", fontWeight: 600, color: "#94a3b8", marginBottom: "6px" }}>
-              <span>{t("nav.levelShort", { level })}</span>
-              <span>{t("nav.xpProgress", { current: xp % 100, max: 100 })}</span>
+              <span>{isHydrated ? t("nav.levelShort", { level }) : "—"}</span>
+              <span>{isHydrated ? t("nav.xpProgress", { current: xp % 100, max: 100 }) : "—"}</span>
             </div>
             <div style={{ width: "100%", height: "10px", borderRadius: "5px", background: "rgba(251,146,60,0.2)", overflow: "hidden" }}>
               <motion.div
                 style={{ height: "100%", borderRadius: "5px", background: "linear-gradient(90deg, #fb923c, #f97316)" }}
-                initial={{ width: 0 }} animate={{ width: `${xp % 100}%` }}
+                initial={{ width: 0 }} animate={{ width: isHydrated ? `${xp % 100}%` : "0%" }}
                 transition={{ type: "spring", stiffness: 100, damping: 20 }}
               />
             </div>

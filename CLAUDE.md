@@ -41,7 +41,7 @@ Use `python -m uvicorn`, not bare `uvicorn` — bare loses venv deps.
 - Port **8889** is the backend's canonical port. `vite.config.js` proxy and `FRONTEND_URL` env var both depend on it — don't change without updating both.
 - LLM output can return invalid JSON (LaTeX `\ldots` etc.). Card parsing uses `json-repair` as fallback — preserve it.
 - Per-card cards have a `cache_version` check in `teaching_service.py`. Bump the version whenever you change card-generation prompts or the schema, or stale cards survive forever.
-- Settings (style, interests, language) are **locked at session start**. Changing them mid-session returns HTTP 409. Don't loosen this — it was a real source of lesson corruption.
+- Settings (style, interests) are locked at session start. Changing them mid-session returns HTTP 409 — don't loosen this. **Language is the exception**: `PATCH /students/{id}/language` allows mid-session change and swaps the per-language card cache (no lesson corruption).
 - `.venv/` is at **project root**, activated as `source ../.venv/bin/activate` from `backend/` (on macOS/Linux; `../.venv/Scripts/activate` on Windows).
 
 ## Workflows

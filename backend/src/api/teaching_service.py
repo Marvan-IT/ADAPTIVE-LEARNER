@@ -23,6 +23,7 @@ from config import (
     NEXT_CARD_MAX_TOKENS,
     CHUNK_MAX_TOKENS_STRUGGLING, CHUNK_MAX_TOKENS_NORMAL, CHUNK_MAX_TOKENS_FAST, CHUNK_MAX_TOKENS_RECOVERY,
 )
+from api.cache_accessor import CacheAccessor
 from api.chunk_knowledge_service import ChunkKnowledgeService
 from api.prompts import (
     build_presentation_system_prompt,
@@ -483,17 +484,21 @@ class TeachingService:
         student_id: uuid.UUID,
         concept_id: str,
         book_slug: str = "prealgebra",
-        style: str = "default",
-        lesson_interests: list[str] | None = None,
     ) -> TeachingSession:
-        """Create a new teaching session for a student + concept."""
+        """Create a new teaching session. Style and interests are snapshotted from
+        the student profile at creation time so the session row remains the
+        authoritative source for prompt builders even if the student later edits
+        their profile in Settings."""
+        student = await db.get(Student, student_id)
+        if not student:
+            raise ValueError(f"Student not found: {student_id}")
         session = TeachingSession(
             student_id=student_id,
             concept_id=concept_id,
             book_slug=book_slug,
             phase="PRESENTING",
-            style=style,
-            lesson_interests=lesson_interests or None,
+            style=student.preferred_style or "default",
+            lesson_interests=list(student.interests or []),
         )
         db.add(session)
         await db.flush()
@@ -518,7 +523,8 @@ class TeachingService:
         # 1. Retrieve concept chunks from PostgreSQL
         # Build a synthetic concept dict from the first chunks of the concept for presentation
         chunks = await self._chunk_ksvc.get_chunks_for_concept(
-            db, session.book_slug or "prealgebra", session.concept_id
+            db, session.book_slug or "prealgebra", session.concept_id,
+            lang=student.preferred_language or "en",
         )
         if not chunks:
             raise ValueError(f"Concept not found: {session.concept_id}")
@@ -576,28 +582,6 @@ class TeachingService:
 
         await db.flush()
         return presentation
-
-    # ── Style Switching ───────────────────────────────────────────
-
-    async def switch_style(
-        self,
-        db: AsyncSession,
-        session: TeachingSession,
-        new_style: str,
-        student: Student,
-    ) -> str:
-        """
-        Switch the teaching style mid-session.
-        Regenerates the presentation if in PRESENTING phase.
-        """
-        session.style = new_style
-
-        if session.phase == "PRESENTING" and session.presentation_text is not None:
-            session.presentation_text = None
-            return await self.generate_presentation(db, session, student)
-
-        await db.flush()
-        return f"Style switched to {new_style}. The new style will apply to future responses."
 
     # ── Card-Based Learning ──────────────────────────────────────
 
@@ -667,12 +651,15 @@ class TeachingService:
                        "Cannot start card-based learning for this concept.",
             )
 
-        session.presentation_text = json.dumps({
+        student_lang = getattr(session, "_student_lang", "en") or "en"
+        _cache = CacheAccessor(session.presentation_text, language=student_lang)
+        _cache.cache_version = 3  # bumped 2026-04-24: language instruction tightened (bug 5a)
+        _cache.set_slice({
             "concepts_queue": queue,
             "concepts_covered": [],
             "concepts_total": len(queue),
-            "cache_version": 1,
         })
+        session.presentation_text = _cache.to_json()
         session.phase = "CARDS"
         db.add(session)
         await db.flush()
@@ -694,17 +681,17 @@ class TeachingService:
         from api.teaching_schemas import NextCardRequest
 
         # Parse existing cache, if any.
-        try:
-            cached = json.loads(session.presentation_text or "{}")
-            if not isinstance(cached, dict):
-                cached = {}
-        except (json.JSONDecodeError, TypeError):
-            cached = {}
+        _student_lang = getattr(student, "preferred_language", "en") or "en"
+        # Attach language hint so _initialize_queue can read it without a DB round-trip.
+        session._student_lang = _student_lang  # type: ignore[attr-defined]
+        _ca = CacheAccessor(session.presentation_text, language=_student_lang)
+        cached = _ca.get_slice()
 
         # Build queue if missing or empty.
         if not cached.get("concepts_queue"):
             await self._initialize_queue(db, session)
-            cached = json.loads(session.presentation_text or "{}")
+            _ca = CacheAccessor(session.presentation_text, language=_student_lang)
+            cached = _ca.get_slice()
 
         # Generate the first card using zero-signal baseline request.
         zero_req = NextCardRequest(
@@ -724,7 +711,7 @@ class TeachingService:
             "phase": "CARDS",
             "cards": [result["card"]] if result.get("card") else [],
             "total_questions": 0,
-            "cache_version": 1,
+            "cache_version": 3,  # bumped 2026-04-24: language instruction tightened (bug 5a)
             "has_more_concepts": result["has_more_concepts"],
             "concepts_total": result["concepts_total"],
             "concepts_covered_count": result["concepts_covered_count"],
@@ -757,40 +744,30 @@ class TeachingService:
         _t0 = _time.monotonic()
 
         # ── Step 1: Parse session cache ─────────────────────────────────────────
-        try:
-            _raw_cache = json.loads(session.presentation_text or "{}")
-            cached = _raw_cache if isinstance(_raw_cache, dict) else {}
-        except (json.JSONDecodeError, TypeError):
-            logger.exception(
-                "[per-card] cache_parse_failed: session_id=%s — returning has_more=False",
-                session.id,
-            )
-            return {
-                "session_id": str(session.id),
-                "card": None,
-                "has_more_concepts": False,
-                "current_mode": "NORMAL",
-                "concepts_covered_count": 0,
-                "concepts_total": 1,
-            }
+        _student_lang = getattr(student, "preferred_language", "en") or "en"
+        _ca = CacheAccessor(session.presentation_text, language=_student_lang)
+        cached = _ca.get_slice()
 
         concepts_queue = list(cached.get("concepts_queue", []))
         concepts_covered = list(cached.get("concepts_covered", []))
         all_sections_count = cached.get("concepts_total", 1)
 
         # ── Step 1a: Language-change cache bust ──────────────────────────────────
-        # When the student changes language, the PATCH /language endpoint sets
-        # cache_version = -1.  Clear the cache so cards are regenerated in the
-        # new language instead of serving stale English content.
-        if cached.get("cache_version") == -1:
+        # When the student switches language, mark_stale() clears that language's
+        # slice.  CacheAccessor.get_slice() returns {} on cache_version == -1 or a
+        # missing slice, so concepts_queue will already be empty — trigger re-init.
+        if _ca.cache_version == -1:
             logger.info(
                 "[per-card] language_cache_bust: session_id=%s — clearing cache for language change",
                 session.id,
             )
-            session.presentation_text = None
+            _ca.invalidate_all()
+            session.presentation_text = _ca.to_json()
             db.add(session)
             await db.flush()
-            cached = {}
+            # Re-read the (now empty) slice
+            _ca = CacheAccessor(session.presentation_text, language=_student_lang)
+            cached = _ca.get_slice()
             concepts_queue = []
             concepts_covered = []
             all_sections_count = 1
@@ -805,7 +782,8 @@ class TeachingService:
                 "[per-card] stale_session_reset: session_id=%s last_updated=%s — clearing cache",
                 session.id, _updated.isoformat(),
             )
-            session.presentation_text = None
+            _ca.mark_stale(_student_lang)
+            session.presentation_text = _ca.to_json()
             db.add(session)
             await db.flush()
             cached = {}
@@ -825,12 +803,10 @@ class TeachingService:
                     "[per-card] queue_empty_auto_init: session_id=%s — initialising queue from DB",
                     session.id,
                 )
+                session._student_lang = _student_lang  # type: ignore[attr-defined]
                 await self._initialize_queue(db, session)  # raises 422 if DB has no chunks
-                try:
-                    _raw_cache = json.loads(session.presentation_text or "{}")
-                    cached = _raw_cache if isinstance(_raw_cache, dict) else {}
-                except (json.JSONDecodeError, TypeError):
-                    cached = {}
+                _ca = CacheAccessor(session.presentation_text, language=_student_lang)
+                cached = _ca.get_slice()
                 concepts_queue = list(cached.get("concepts_queue", []))
                 all_sections_count = cached.get("concepts_total", 1)
 
@@ -961,10 +937,18 @@ class TeachingService:
         # ── Step 10: Build prompts (Bug 6 fix — pass content_piece_images) ───────
         language = getattr(student, "preferred_language", "en") or "en"
         _card_style = getattr(session, "style", "default") or "default"
-        _card_interests = (
+        # Session-locked interests list — do NOT read student.interests here; mid-session
+        # Settings changes return 409 and must not affect the current session.
+        _card_interests = list(
             getattr(session, "lesson_interests", None)
             or getattr(student, "interests", None)
             or []
+        )
+        # Per-card rotation: cycle through interests by card index so each card uses a
+        # different primary context, avoiding the stale "always Sports" problem.
+        _primary_interest = (
+            _card_interests[req.card_index % len(_card_interests)]
+            if _card_interests else None
         )
         system_prompt, user_prompt = build_next_card_prompt(
             concept_detail=piece_concept_detail,
@@ -980,6 +964,7 @@ class TeachingService:
             content_piece_images=content_piece_images if content_piece_images else None,
             style=_card_style,
             interests=_card_interests,
+            primary_interest=_primary_interest,
         )
 
         # ── Step 10b: Inject already-used image note ──────────────────────────
@@ -990,6 +975,9 @@ class TeachingService:
                 f"\n\nNOTE: Images at indices {sorted(already_assigned)} were already used on "
                 "previous cards. Use ONLY the images listed in RELEVANT IMAGES above."
             )
+
+        from api.prompts import _language_instruction
+        user_prompt += _language_instruction(language)
 
         # ── Step 11: Call LLM ──────────────────────────────────────────────────
         # Vision parts for per-card — same pattern as generate_per_chunk
@@ -1089,7 +1077,8 @@ class TeachingService:
         cached_cards.append(card_dict)
         cached["cards"] = cached_cards
         cached["assigned_image_indices"] = list(already_assigned | new_assigned)
-        session.presentation_text = json.dumps(cached)
+        _ca.set_slice(cached, _student_lang)
+        session.presentation_text = _ca.to_json()
         await db.flush()
 
         # ── Step 15: Optional — persist section_count increment to DB ────────
@@ -1156,6 +1145,9 @@ class TeachingService:
         if not chunk:
             raise HTTPException(status_code=404, detail=f"Chunk not found: {chunk_id}")
 
+        _student_for_lang = await db.get(Student, session.student_id)
+        _student_lang = (_student_for_lang.preferred_language or "en") if _student_for_lang else "en"
+
         chunk_text = (chunk.get("text") or "").strip()
         if not chunk_text:
             logger.warning("[per-chunk] chunk has no text content, using fallback card: chunk_id=%s", chunk_id)
@@ -1196,7 +1188,7 @@ class TeachingService:
         if not images:
             try:
                 concept_detail_for_images = await self._chunk_ksvc.get_concept_detail(
-                    db, chunk.get("concept_id", ""), chunk.get("book_slug", "")
+                    db, chunk.get("concept_id", ""), chunk.get("book_slug", ""), lang="en"
                 )
                 if concept_detail_for_images and concept_detail_for_images.get("images"):
                     images = concept_detail_for_images["images"][:8]
@@ -1296,7 +1288,8 @@ class TeachingService:
             SKIP_HEADINGS = ("learning objectives", "key terms", "summary", "chapter review", "review exercises", "practice test")
             try:
                 all_concept_chunks = await self._chunk_ksvc.get_chunks_for_concept(
-                    db, chunk.get("book_slug", ""), chunk.get("concept_id", "")
+                    db, chunk.get("book_slug", ""), chunk.get("concept_id", ""),
+                    lang=_student_lang,
                 )
                 # Get chunks that come before this one (lower order_index), excluding non-teaching chunks
                 current_order = chunk.get("order_index", 9999)
@@ -1561,6 +1554,7 @@ class TeachingService:
         card_index: int = 0,
         wrong_answers: list[str] | None = None,
         is_exercise: bool = False,
+        language: str = "en",
     ) -> dict | None:
         """Generate a single recovery TEACH card for a chunk the student failed.
 
@@ -1631,6 +1625,9 @@ class TeachingService:
             f"{image_note}{wrong_ctx}"
             "Return ONLY the JSON object."
         )
+
+        from api.prompts import _language_instruction
+        user_prompt += _language_instruction(language)
 
         raw = await self._chat(
             messages=[
@@ -1715,8 +1712,9 @@ class TeachingService:
         # 3. Generate recovery card if needed
         recovery_card = None
         if req.wrong_attempts >= 2 and req.re_explain_card_title:
-            cached = json.loads(session.presentation_text or "{}")
-            seen_titles = cached.get("concepts_covered", [])
+            _cc_lang = getattr(student, "preferred_language", "en") or "en"
+            _cc_ca = CacheAccessor(session.presentation_text, language=_cc_lang)
+            seen_titles = _cc_ca.get_slice().get("concepts_covered", [])
             # Generate recovery card using ChunkKnowledgeService directly
             try:
                 recovery_card = await generate_recovery_card(
@@ -1946,25 +1944,21 @@ class TeachingService:
         card_content = ""
         concept_title = session.concept_id
 
+        # Get student language (needed for CacheAccessor)
+        student = await db.get(Student, session.student_id)
+        language = getattr(student, "preferred_language", "en") or "en" if student else "en"
+
         if session.presentation_text:
             try:
-                cached = json.loads(session.presentation_text)
-                if isinstance(cached, dict):
-                    concept_title = cached.get("concept_title", session.concept_id)
-                    cards = cached.get("cards", [])
-                elif isinstance(cached, list):
-                    cards = cached
-                else:
-                    cards = []
+                _assist_ca = CacheAccessor(session.presentation_text, language=language)
+                _assist_slice = _assist_ca.get_slice()
+                concept_title = _assist_slice.get("concept_title", session.concept_id)
+                cards = _assist_slice.get("cards", [])
                 if 0 <= card_index < len(cards):
                     card_title = cards[card_index].get("title", card_title)
                     card_content = cards[card_index].get("content", "")
-            except (json.JSONDecodeError, TypeError, AttributeError):
+            except Exception:
                 pass
-
-        # Get student language
-        student = await db.get(Student, session.student_id)
-        language = getattr(student, "preferred_language", "en") or "en" if student else "en"
 
         # Build system prompt
         effective_interests = session.lesson_interests if session.lesson_interests else []
@@ -2047,15 +2041,17 @@ class TeachingService:
             raise ValueError(f"Session not found: {session_id}")
 
         failed_topics = json.loads(session.remediation_context or '["key concepts"]')
+        student = await db.get(Student, session.student_id)
+        _rem_lang = (student.preferred_language or "en") if student else "en"
         # Retrieve concept context from PostgreSQL chunks
         _rem_chunks = await self._chunk_ksvc.get_chunks_for_concept(
-            db, session.book_slug or "prealgebra", session.concept_id
+            db, session.book_slug or "prealgebra", session.concept_id,
+            lang=_rem_lang,
         )
         concept = {
             "concept_title": _rem_chunks[0].get("heading", session.concept_id) if _rem_chunks else session.concept_id,
             "text": "\n\n".join(c["text"] for c in _rem_chunks[:3]) if _rem_chunks else "",
         }
-        student = await db.get(Student, session.student_id)
 
         system_prompt = self._build_remediation_cards_prompt(failed_topics, concept, student, session=session)
         concept_title = concept.get("concept_title", session.concept_id)
@@ -2070,6 +2066,9 @@ class TeachingService:
             f"NO QUESTION cards in remediation — this is re-teaching, not testing.\n"
             f"Respond with valid JSON only."
         )
+
+        from api.prompts import _language_instruction
+        user_prompt += _language_instruction(_rem_lang)
 
         raw_json = await self._chat(
             messages=[
@@ -2619,6 +2618,7 @@ class TeachingService:
             "Return ONLY valid JSON (no markdown, no code block): "
             "{\"text\": \"...\", \"options\": [\"A\", \"B\", \"C\", \"D\"], "
             "\"correct_index\": 0, \"explanation\": \"...\"}"
+            + _language_instruction(req.language or "en")
         )
         user = (
             f"Card title: {req.card_title}\n"
@@ -2647,4 +2647,102 @@ class TeachingService:
             logger.exception("regenerate_mcq failed, returning fallback")
             # Fallback: slightly rephrase the original question
             raise
+
+
+# ── Cache Invalidation ────────────────────────────────────────────────────────
+
+async def invalidate_chunk_cache(
+    db: AsyncSession,
+    chunk_ids: list[str],
+) -> int:
+    """Clear cached card + exam-question slices for the given chunk_ids across all
+    active TeachingSession rows.
+
+    For every active session (completed_at IS NULL) whose presentation_text
+    references any of the given chunk_ids, this function:
+      1. Clears the exam_questions_by_chunk entry for each affected chunk in every
+         language slice.
+      2. Removes cached card entries whose chunk_id matches any affected chunk.
+
+    Returns the count of sessions modified.
+    Called by admin mutation handlers and audit undo/redo helpers.
+    Does NOT call db.commit() — the caller owns the transaction.
+    """
+    if not chunk_ids:
+        return 0
+
+    chunk_id_set = {str(cid) for cid in chunk_ids}
+
+    if len(chunk_ids) > 50:
+        logger.warning(
+            "[cache-invalidate] large_scope chunk_count=%d — consider batching",
+            len(chunk_ids),
+        )
+
+    # Use a conservative LIKE-based search across presentation_text.
+    # This is a low-frequency admin operation so a full-text scan is acceptable.
+    # We build OR conditions to match any of the chunk_ids.
+    from sqlalchemy import or_
+    like_clauses = [
+        TeachingSession.presentation_text.like(f"%{cid}%")
+        for cid in chunk_id_set
+    ]
+    result = await db.execute(
+        select(TeachingSession).where(
+            TeachingSession.completed_at.is_(None),
+            or_(*like_clauses),
+        )
+    )
+    sessions = result.scalars().all()
+
+    langs_touched: set[str] = set()
+    modified = 0
+    for session in sessions:
+        try:
+            ca = CacheAccessor(session.presentation_text, language="en")
+            by_lang: dict = ca._data.get("by_language", {})
+            if not by_lang:
+                continue
+
+            changed = False
+            for lang_code, sl in by_lang.items():
+                # Clear exam question entries for affected chunks
+                eq_map: dict = sl.get("exam_questions_by_chunk", {})
+                for cid in chunk_id_set:
+                    if cid in eq_map:
+                        eq_map.pop(cid)
+                        changed = True
+                        langs_touched.add(lang_code)
+                if eq_map != sl.get("exam_questions_by_chunk", {}):
+                    sl["exam_questions_by_chunk"] = eq_map
+
+                # Clear cached cards that originated from affected chunks
+                old_cards = sl.get("cards", [])
+                new_cards = [
+                    c for c in old_cards
+                    if str(c.get("chunk_id", "")) not in chunk_id_set
+                ]
+                if len(new_cards) != len(old_cards):
+                    sl["cards"] = new_cards
+                    changed = True
+                    langs_touched.add(lang_code)
+
+            if changed:
+                session.presentation_text = ca.to_json()
+                modified += 1
+        except Exception:
+            logger.warning(
+                "[cache-invalidate] failed to process session %s — skipping",
+                session.id,
+                exc_info=True,
+            )
+
+    if sessions:
+        await db.flush()
+
+    logger.info(
+        "[cache-invalidate] chunks=%s sessions=%d langs=%s",
+        list(chunk_id_set), modified, sorted(langs_touched),
+    )
+    return modified
 

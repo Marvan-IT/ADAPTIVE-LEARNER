@@ -392,6 +392,50 @@ def run_all_books(no_mathpix: bool = False, use_llm: bool = False) -> dict:
     return results
 
 
+def _run_translation_step(book_slug: str) -> None:
+    """Run the i18n translation step for *book_slug* after ingestion.
+
+    Failures are logged as warnings — they never propagate to the caller so that
+    a translation outage cannot abort an otherwise-successful ingestion run.
+    """
+    import asyncio as _asyncio
+    from config import OPENAI_API_KEY as _OPENAI_API_KEY
+
+    if not _OPENAI_API_KEY:
+        logger.warning(
+            "OPENAI_API_KEY is not set — skipping translation step for %s. "
+            "Re-run via: python scripts/translate_catalog.py --book %s --languages all",
+            book_slug, book_slug,
+        )
+        return
+
+    # Import here so the pipeline does not hard-depend on the scripts package
+    # when --skip-translation is used.
+    try:
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
+        from translate_catalog import translate_book as _translate_book  # type: ignore[import]
+    except ImportError as exc:
+        logger.warning("Could not import translate_catalog — skipping translation step: %s", exc)
+        return
+
+    logger.info("Starting translation step for %s ...", book_slug)
+    try:
+        summary = _asyncio.run(_translate_book(book_slug=book_slug))
+        logger.info("Translation step complete: %s", summary)
+        failures = summary.get("total_failures_after_all_retries", 0)
+        if failures > 0:
+            logger.error(
+                "Translation step completed with %d unresolved failures for book=%s — investigate and retry",
+                failures, book_slug,
+            )
+    except Exception as exc:
+        logger.warning(
+            "Translation step failed for %s — book is usable in English. "
+            "Re-run via: python scripts/translate_catalog.py --book %s --languages all  (%s)",
+            book_slug, book_slug, exc,
+        )
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Adaptive Learner Hybrid Engine Pipeline")
     parser.add_argument(
@@ -484,6 +528,16 @@ if __name__ == "__main__":
             "Only relevant with --chunks."
         ),
     )
+    parser.add_argument(
+        "--skip-translation",
+        action="store_true",
+        default=False,
+        help=(
+            "Skip the automatic i18n translation step that runs after ingestion. "
+            "Useful for development or when OPENAI_API_KEY is not set. "
+            "Translations can be added later via: python scripts/translate_catalog.py --book <slug> --languages all"
+        ),
+    )
     args = parser.parse_args()
 
     if args.list_books:
@@ -573,6 +627,10 @@ if __name__ == "__main__":
         from extraction.graph_builder import build_graph as _build_graph
         _asyncio.run(_run_graph())
         logger.info("graph.json written: %s", _graph_path)
+
+        if not args.skip_translation:
+            _run_translation_step(_book_slug)
+
         sys.exit(0)
 
     # Clear Mathpix cache if requested (legacy pipeline only)
@@ -611,6 +669,9 @@ if __name__ == "__main__":
                     print(f"  {code:12s}: {status} — {result.get('error', 'unknown')}")
         else:
             run_whole_pdf_pipeline(args.book, force=args.force, pdf_id=args.pdf_id, max_sections=args.max_sections)
+            if not args.skip_translation:
+                _book_slug_for_translation = get_book_config(args.book)["book_slug"]
+                _run_translation_step(_book_slug_for_translation)
     else:
         # ── Legacy pipeline (opt-in via --legacy) ────────────────────
         if args.book == "ALL":
@@ -624,3 +685,6 @@ if __name__ == "__main__":
                     print(f"  {code:12s}: {status} — {result.get('error', 'unknown')}")
         else:
             run_pipeline(args.book, no_mathpix=args.no_mathpix, use_llm=args.use_llm)
+            if not args.skip_translation:
+                _book_slug_for_translation = get_book_config(args.book)["book_slug"]
+                _run_translation_step(_book_slug_for_translation)

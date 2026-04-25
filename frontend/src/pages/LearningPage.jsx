@@ -37,11 +37,6 @@ export default function LearningPage() {
   const [prereqWarning, setPrereqWarning] = useState(null);
   const [chunkAnswers, setChunkAnswers] = useState({});
 
-  // Per-chunk picker state
-  const [selectedChunkId, setSelectedChunkId] = useState(null);
-  const [chunkStyle, setChunkStyle] = useState(student?.preferred_style || "default");
-  const [chunkInterests, setChunkInterests] = useState(student?.interests || []);
-  const [chunkInterestInput, setChunkInterestInput] = useState("");
 
   // Track which concept we've already initiated to prevent duplicate starts
   const [startedForConcept, setStartedForConcept] = useState(null);
@@ -87,7 +82,7 @@ export default function LearningPage() {
     let cancelled = false;
     const decodedConceptId = decodeURIComponent(conceptId);
 
-    const launchLesson = () => { if (!cancelled) startLesson(decodedConceptId, null, []); };
+    const launchLesson = () => { if (!cancelled) startLesson(decodedConceptId); };
 
     const tryResume = () => {
       const savedSessionId = localStorage.getItem(`ada_session_${student?.id}_${decodedConceptId}`);
@@ -173,7 +168,7 @@ export default function LearningPage() {
                 dispatch({ type: "CLEAR_ERROR" });
               } else {
                 reset();
-                startLesson(decodeURIComponent(conceptId), null, []);
+                startLesson(decodeURIComponent(conceptId));
               }
             }}
             style={{ padding: "10px 24px", borderRadius: "10px", border: "none", background: "#EA580C", color: "#FFFFFF", fontSize: "16px", fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}
@@ -369,20 +364,8 @@ export default function LearningPage() {
       return (a.order_index ?? 0) - (b.order_index ?? 0);
     });
 
-    const handleStartClick = (chunkId) => {
-      if (selectedChunkId === chunkId) {
-        setSelectedChunkId(null); // collapse if already open
-      } else {
-        setSelectedChunkId(chunkId);
-        setChunkStyle(student?.preferred_style || "default");
-        setChunkInterests(student?.interests || []);
-        setChunkInterestInput("");
-      }
-    };
-
     const handleStartLearning = async (chunkId) => {
-      setSelectedChunkId(null);
-      await startChunk(chunkId, chunkStyle, chunkInterests);
+      await startChunk(chunkId);
     };
 
     // Mode badge helpers
@@ -453,7 +436,7 @@ export default function LearningPage() {
                   style={{ flex: "1 1 auto", padding: "10px 20px", borderRadius: "var(--radius-md)", border: "none", background: "#EA580C", color: "#FFFFFF", fontSize: "0.95rem", fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>
                   {t("learning.learnPrereqFirst")}
                 </button>
-                <button onClick={() => { setPrereqWarning(null); startLesson(decodeURIComponent(conceptId), null, []); }}
+                <button onClick={() => { setPrereqWarning(null); startLesson(decodeURIComponent(conceptId)); }}
                   style={{ flex: "1 1 auto", padding: "10px 20px", borderRadius: "var(--radius-md)", border: "1px solid var(--color-border)", background: "transparent", color: "#94A3B8", fontSize: "0.95rem", fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
                   {t("learning.startAnyway")}
                 </button>
@@ -512,7 +495,6 @@ export default function LearningPage() {
             const isOptional = chunk.is_optional === true;
             const isInfoPanel = chunk.chunk_type === "learning_objective";
             const isReview = chunk.chunk_type === "chapter_review";
-            const isExpanded = selectedChunkId === chunk.chunk_id;
             const prevRequired = visibleChunks.slice(0, idx).filter(
               (c) => c.chunk_type !== "learning_objective" && !c.is_optional
             );
@@ -555,25 +537,18 @@ export default function LearningPage() {
               <div
                 style={{
                   borderRadius: "16px",
-                  border: isExpanded
-                    ? "2px solid #F97316"
-                    : isDone
-                      ? "1.5px solid rgba(74,222,128,0.25)"
-                      : "1.5px solid #e2e8f0",
-                  background: isExpanded
-                    ? "#FFF7ED"
-                    : isDone
-                      ? "rgba(240,253,244,0.5)"
-                      : "#ffffff",
+                  border: isDone
+                    ? "1.5px solid rgba(74,222,128,0.25)"
+                    : "1.5px solid #e2e8f0",
+                  background: isDone
+                    ? "rgba(240,253,244,0.5)"
+                    : "#ffffff",
                   overflow: "hidden",
                   transition: "all 0.15s",
-                  boxShadow: isExpanded
-                    ? "0 4px 20px rgba(249,115,22,0.15)"
-                    : "0 1px 4px rgba(0,0,0,0.04)",
-                  padding: isExpanded ? "4px" : "0",
+                  boxShadow: "0 1px 4px rgba(0,0,0,0.04)",
                 }}
-                onMouseEnter={(e) => { if (!isExpanded) e.currentTarget.style.boxShadow = "0 4px 12px rgba(0,0,0,0.08)"; }}
-                onMouseLeave={(e) => { if (!isExpanded) e.currentTarget.style.boxShadow = "0 1px 4px rgba(0,0,0,0.04)"; }}
+                onMouseEnter={(e) => { e.currentTarget.style.boxShadow = "0 4px 12px rgba(0,0,0,0.08)"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.boxShadow = "0 1px 4px rgba(0,0,0,0.04)"; }}
               >
                 {/* Main row */}
                 <div style={{ display: "flex", alignItems: "center", gap: "14px", padding: "14px 20px" }}>
@@ -666,11 +641,7 @@ export default function LearningPage() {
                   {!isLocked && !isGate && (
                     <button
                       disabled={loading}
-                      onClick={() =>
-                        isInfoPanel
-                          ? handleStartLearning(chunk.chunk_id)
-                          : handleStartClick(chunk.chunk_id)
-                      }
+                      onClick={() => handleStartLearning(chunk.chunk_id)}
                       style={{
                         padding: "7px 18px",
                         borderRadius: "9999px",
@@ -679,14 +650,10 @@ export default function LearningPage() {
                           : "none",
                         background: isDone
                           ? "transparent"
-                          : isExpanded
-                            ? "rgba(99,102,241,0.15)"
-                            : "var(--color-primary)",
+                          : "var(--color-primary)",
                         color: isDone
                           ? "var(--color-text-muted)"
-                          : isExpanded
-                            ? "var(--color-primary)"
-                            : "#fff",
+                          : "#fff",
                         fontSize: "13px",
                         fontWeight: 700,
                         cursor: loading ? "not-allowed" : "pointer",
@@ -699,9 +666,7 @@ export default function LearningPage() {
                     >
                       {isDone
                         ? t("map.reviewLesson", "Review")
-                        : isExpanded
-                          ? "▲"
-                          : t("learning.startSubsection", "Start")
+                        : t("learning.startSubsection", "Start")
                       }
                     </button>
                   )}
@@ -711,144 +676,6 @@ export default function LearningPage() {
                     </div>
                   )}
                 </div>
-
-                {/* Expanded customization panel */}
-                {isExpanded && (
-                  <div style={{
-                    margin: "0 16px 16px",
-                    padding: "18px 20px",
-                    borderRadius: "12px",
-                    background: "#ffffff",
-                    border: "1px solid #f1f5f9",
-                    display: "flex", flexDirection: "column", gap: "16px",
-                  }}>
-                    {/* Style picker */}
-                    <div>
-                      <div style={{ fontSize: "11px", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "#94A3B8", marginBottom: "8px" }}>
-                        {t("customize.style", "Tutor style")}
-                      </div>
-                      <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-                        {[
-                          { id: "default", label: t("style.default", "Default"), emoji: "📖" },
-                          { id: "pirate", label: t("style.pirate", "Pirate"), emoji: "🏴‍☠️" },
-                          { id: "astronaut", label: t("style.astronaut", "Space"), emoji: "🚀" },
-                          { id: "gamer", label: t("style.gamer", "Gamer"), emoji: "🎮" },
-                        ].map(({ id, label, emoji }) => (
-                          <button
-                            key={id}
-                            onClick={() => setChunkStyle(id)}
-                            style={{
-                              padding: "6px 14px",
-                              borderRadius: "9999px",
-                              border: chunkStyle === id
-                                ? "2px solid var(--color-primary)"
-                                : "1.5px solid var(--color-border-strong, var(--color-border))",
-                              background: chunkStyle === id ? "var(--color-primary-light)" : "transparent",
-                              color: chunkStyle === id ? "var(--color-primary)" : "var(--color-text-muted)",
-                              fontSize: "12px", fontWeight: 600,
-                              cursor: "pointer", fontFamily: "inherit",
-                              transition: "all 0.15s",
-                            }}
-                          >
-                            {emoji} {label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Interests */}
-                    <div>
-                      <div style={{ fontSize: "11px", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "#94A3B8", marginBottom: "8px" }}>
-                        {t("customize.interests", "Interests")} <span style={{ fontWeight: 400, textTransform: "none", letterSpacing: "normal" }}>({t("customize.interestsHint", "optional — makes examples fun")})</span>
-                      </div>
-                      {/* Preset interest chips */}
-                      <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", marginBottom: "8px" }}>
-                        {[
-                          { id: "Sports", emoji: "⚽" },
-                          { id: "Gaming", emoji: "🎮" },
-                          { id: "Music", emoji: "🎵" },
-                          { id: "Movies", emoji: "🎬" },
-                          { id: "Food", emoji: "🍕" },
-                          { id: "Animals", emoji: "🐾" },
-                          { id: "Space", emoji: "🚀" },
-                          { id: "Technology", emoji: "💻" },
-                          { id: "Art", emoji: "🎨" },
-                          { id: "Nature", emoji: "🌿" },
-                        ].map(({ id, emoji }) => {
-                          const selected = chunkInterests.includes(id);
-                          return (
-                            <button
-                              key={id}
-                              onClick={() => setChunkInterests((prev) =>
-                                selected ? prev.filter((i) => i !== id) : [...new Set([...prev, id])]
-                              )}
-                              style={{
-                                padding: "4px 10px",
-                                borderRadius: "9999px",
-                                border: selected
-                                  ? "2px solid var(--color-primary)"
-                                  : "1.5px solid var(--color-border-strong, var(--color-border))",
-                                background: selected ? "var(--color-primary-light)" : "transparent",
-                                color: selected ? "var(--color-primary)" : "var(--color-text-muted)",
-                                fontSize: "12px", fontWeight: 600,
-                                cursor: "pointer", fontFamily: "inherit",
-                                transition: "all 0.15s",
-                              }}
-                            >
-                              {emoji} {id}
-                            </button>
-                          );
-                        })}
-                      </div>
-                      <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginBottom: chunkInterests.length > 0 ? "8px" : "0" }}>
-                        {chunkInterests.map((interest) => (
-                          <span
-                            key={interest}
-                            onClick={() => setChunkInterests((prev) => prev.filter((i) => i !== interest))}
-                            style={{ padding: "4px 10px", borderRadius: "9999px", background: "var(--color-primary-light)", color: "var(--color-primary)", fontSize: "12px", fontWeight: 600, cursor: "pointer", border: "1px solid rgba(99,102,241,0.3)" }}
-                          >
-                            {interest} ✕
-                          </span>
-                        ))}
-                      </div>
-                      <input
-                        value={chunkInterestInput}
-                        onChange={(e) => setChunkInterestInput(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" && chunkInterestInput.trim()) {
-                            setChunkInterests((prev) => [...new Set([...prev, chunkInterestInput.trim()])]);
-                            setChunkInterestInput("");
-                          }
-                        }}
-                        placeholder={t("customize.addInterest", "Type topic and press Enter...")}
-                        style={{ width: "100%", padding: "8px 12px", borderRadius: "10px", border: "1.5px solid var(--color-border-strong, var(--color-border))", background: "var(--color-surface)", color: "var(--color-text)", fontSize: "13px", fontFamily: "inherit", outline: "none", boxSizing: "border-box" }}
-                      />
-                    </div>
-
-                    {/* Start button */}
-                    <button
-                      onClick={() => handleStartLearning(chunk.chunk_id)}
-                      disabled={loading}
-                      style={{
-                        padding: "14px",
-                        borderRadius: "14px",
-                        border: "none",
-                        background: "linear-gradient(135deg, #F97316, #EA580C)",
-                        color: "#fff",
-                        fontSize: "15px",
-                        fontWeight: 700,
-                        cursor: loading ? "not-allowed" : "pointer",
-                        fontFamily: "inherit",
-                        opacity: loading ? 0.7 : 1,
-                        boxShadow: "0 4px 16px rgba(249,115,22,0.3)",
-                        transition: "opacity 0.15s",
-                        margin: "0 16px 16px",
-                      }}
-                    >
-                      {loading ? t("learning.gettingReady", "Getting ready...") : `▶  ${t("learning.startLearning", "Start Learning")}`}
-                    </button>
-                  </div>
-                )}
               </div>
               </Fragment>
             );
@@ -948,7 +775,7 @@ export default function LearningPage() {
         {!evalResult && chunkQuestions.map((q, i) => (
           <div key={q.index} style={{ marginBottom: "20px", padding: "16px 20px", borderRadius: "10px", border: "1px solid #E2E8F0", background: "#FFFFFF" }}>
             <p style={{ fontWeight: 700, fontSize: "16px", color: "var(--color-text)", marginBottom: "8px", marginTop: 0, lineHeight: 1.5 }}>
-              Q{i + 1}. {q.text}
+              {t("learning.questionPrefix", { num: i + 1 })} {q.text}
             </p>
             <textarea
               value={chunkAnswers[i] || ""}
@@ -1021,7 +848,7 @@ export default function LearningPage() {
               <button
                 onClick={() => {
                   setChunkAnswers({});
-                  startChunk(currentChunkId, currentChunkMode);
+                  startChunk(currentChunkId);
                 }}
                 style={{ padding: "12px 28px", borderRadius: "10px", border: "none", background: "#F97316", color: "#FFFFFF", fontWeight: 700, fontSize: "16px", cursor: "pointer", fontFamily: "inherit" }}
               >
@@ -1068,7 +895,7 @@ export default function LearningPage() {
                 {t("learning.learnPrereqFirst")}
               </button>
               <button
-                onClick={() => { setPrereqWarning(null); startLesson(decodeURIComponent(conceptId), null, []); }}
+                onClick={() => { setPrereqWarning(null); startLesson(decodeURIComponent(conceptId)); }}
                 style={{ flex: "1 1 auto", padding: "10px 20px", borderRadius: "8px", border: "1px solid #E2E8F0", backgroundColor: "transparent", color: "#64748B", fontSize: "15px", fontWeight: 600, cursor: "pointer" }}
               >
                 {t("learning.startAnyway")}

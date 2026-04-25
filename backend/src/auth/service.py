@@ -88,6 +88,8 @@ async def register(db: AsyncSession, req: RegisterRequest) -> User:
         display_name=req.display_name,
         age=req.age,
         preferred_language=req.preferred_language,
+        preferred_style=req.preferred_style,
+        interests=req.interests,
         user_id=user.id,
     )
     db.add(student)

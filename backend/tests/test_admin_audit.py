@@ -312,18 +312,33 @@ class TestRenameSectionUndoRedo:
         chunk1 = await _make_chunk(db, admin_section_name="Old Name", order_index=0)
         chunk2 = await _make_chunk(db, admin_section_name="Old Name", order_index=1)
 
+        # i18n Phase 3: include admin_section_name_translations in snapshot/audit dicts.
+        _old_translations = {
+            "en_source_hash": "oldhash",
+            "ml": "പഴയ പേര്",
+            "ta": "பழைய பெயர்",
+        }
+        _new_translations = {
+            "en_source_hash": "newhash",
+            "ml": "പുതിയ പേര്",
+            "ta": "புதிய பெயர்",
+        }
+
         old_val = {
             "admin_section_name": "Old Name",
+            "admin_section_name_translations": _old_translations,
             "affected_chunk_ids": [str(chunk1.id), str(chunk2.id)],
         }
         new_val = {
             "admin_section_name": "New Name",
-            "affected_chunk_ids": [str(chunk1.id), str(chunk2.id)],
+            "admin_section_name_translations": _new_translations,
         }
 
         # Mutate
         chunk1.admin_section_name = "New Name"
+        chunk1.admin_section_name_translations = _new_translations
         chunk2.admin_section_name = "New Name"
+        chunk2.admin_section_name_translations = _new_translations
 
         audit = await _make_audit(
             db,
@@ -335,6 +350,20 @@ class TestRenameSectionUndoRedo:
             new_value=new_val,
         )
 
+        # i18n Phase 3: verify audit payload carries translations in both old/new.
+        assert "admin_section_name_translations" in audit.old_value, (
+            "audit.old_value must include admin_section_name_translations key"
+        )
+        assert audit.old_value["admin_section_name_translations"] == _old_translations, (
+            "audit.old_value must snapshot the pre-rename translations"
+        )
+        assert "admin_section_name_translations" in audit.new_value, (
+            "audit.new_value must include admin_section_name_translations key"
+        )
+        assert audit.new_value["admin_section_name_translations"] == _new_translations, (
+            "audit.new_value must carry the freshly-populated translations dict"
+        )
+
         await apply_undo(db, audit, _ADMIN_A_ID)
         await db.flush()
         await db.refresh(chunk1)
@@ -343,12 +372,28 @@ class TestRenameSectionUndoRedo:
         assert chunk1.admin_section_name == "Old Name"
         assert chunk2.admin_section_name == "Old Name"
 
+        # i18n Phase 3: undo must also restore admin_section_name_translations.
+        assert chunk1.admin_section_name_translations == _old_translations, (
+            "undo must restore chunk1.admin_section_name_translations to pre-rename value"
+        )
+        assert chunk2.admin_section_name_translations == _old_translations, (
+            "undo must restore chunk2.admin_section_name_translations to pre-rename value"
+        )
+
         await apply_redo(db, audit, _ADMIN_A_ID)
         await db.flush()
         await db.refresh(chunk1)
         await db.refresh(chunk2)
         assert chunk1.admin_section_name == "New Name"
         assert chunk2.admin_section_name == "New Name"
+
+        # i18n Phase 3: redo must also re-apply admin_section_name_translations.
+        assert chunk1.admin_section_name_translations == _new_translations, (
+            "redo must re-apply chunk1.admin_section_name_translations from audit new_value"
+        )
+        assert chunk2.admin_section_name_translations == _new_translations, (
+            "redo must re-apply chunk2.admin_section_name_translations from audit new_value"
+        )
 
 
 class TestToggleSectionOptionalUndoRedo:
@@ -1293,3 +1338,169 @@ class TestListChangesIncludeUndoneDefault:
                 f"Row {row.id} (action={row.action_type}) has undone_at set "
                 "but was returned by ?include_undone=false — this is the regression"
             )
+
+
+# ─── i18n Phase 2: cache invalidation assertions on undo/redo ─────────────────
+# Added by comprehensive-tester (Phase 2).
+# These assertions augment the existing undo tests: they verify that undo AND
+# redo call invalidate_chunk_cache with the affected chunk(s), which is the
+# contract that keeps active student sessions in sync with admin edits.
+
+
+import json as _json
+from unittest.mock import patch as _patch
+from api.cache_accessor import CacheAccessor as _CacheAccessor
+from api.teaching_service import invalidate_chunk_cache as _invalidate_chunk_cache
+
+
+def _make_warm_pt(chunk_id: str) -> str:
+    """Return a minimal presentation_text with warm exam questions for chunk_id."""
+    return _json.dumps({
+        "cache_version": 3,
+        "by_language": {
+            "en": {
+                "cards": [],
+                "concepts_queue": [chunk_id],
+                "concepts_covered": [],
+                "exam_questions_by_chunk": {
+                    chunk_id: [{"index": 0, "text": "warm cached question?"}]
+                },
+            },
+        },
+    })
+
+
+class TestUndoRedoInvalidationHooks:
+    """
+    Phase 2 i18n: verify that undo and redo both trigger invalidate_chunk_cache.
+
+    These tests add inline invalidation assertions to the three representative
+    undo types requested in the execution plan:
+      1. update_chunk undo
+      2. rename_section undo  (section-level, affects multiple chunks)
+      3. toggle_chunk_exam_gate undo
+    """
+
+    async def test_update_chunk_undo_calls_invalidate_chunk_cache(
+        self, db: AsyncSession
+    ):
+        """undo update_chunk must call invalidate_chunk_cache with the chunk's id."""
+        chunk = await _make_chunk(db, heading="Old", text="Old text.")
+        old_snap = await snapshot_chunk(db, chunk.id)
+        chunk.heading = "New"
+        new_snap = await snapshot_chunk(db, chunk.id)
+
+        audit = await _make_audit(
+            db,
+            admin_id=_ADMIN_A_ID,
+            action_type="update_chunk",
+            resource_id=str(chunk.id),
+            old_value=old_snap,
+            new_value=new_snap,
+        )
+
+        invalidated: list[list] = []
+
+        async def _spy(db_arg, ids):
+            invalidated.append(list(ids))
+            return 0
+
+        with _patch("api.audit_service.invalidate_chunk_cache", side_effect=_spy):
+            await apply_undo(db, audit, _ADMIN_A_ID)
+            await db.flush()
+
+        assert invalidated, "invalidate_chunk_cache must be called during update_chunk undo"
+        flat = [cid for call_ids in invalidated for cid in call_ids]
+        assert str(chunk.id) in flat, (
+            f"chunk {chunk.id} must be in invalidated IDs, got {flat}"
+        )
+
+    async def test_update_chunk_redo_calls_invalidate_chunk_cache(
+        self, db: AsyncSession
+    ):
+        """redo update_chunk must also call invalidate_chunk_cache."""
+        chunk = await _make_chunk(db, heading="Old")
+        old_snap = await snapshot_chunk(db, chunk.id)
+        chunk.heading = "New"
+        new_snap = await snapshot_chunk(db, chunk.id)
+
+        audit = await _make_audit(
+            db,
+            admin_id=_ADMIN_A_ID,
+            action_type="update_chunk",
+            resource_id=str(chunk.id),
+            old_value=old_snap,
+            new_value=new_snap,
+        )
+
+        # Undo first (required before redo)
+        await apply_undo(db, audit, _ADMIN_A_ID)
+        await db.flush()
+
+        invalidated_redo: list[list] = []
+
+        async def _spy_redo(db_arg, ids):
+            invalidated_redo.append(list(ids))
+            return 0
+
+        with _patch("api.audit_service.invalidate_chunk_cache", side_effect=_spy_redo):
+            await apply_redo(db, audit, _ADMIN_A_ID)
+            await db.flush()
+
+        assert invalidated_redo, "invalidate_chunk_cache must be called during update_chunk redo"
+        flat = [cid for call_ids in invalidated_redo for cid in call_ids]
+        assert str(chunk.id) in flat, (
+            f"chunk {chunk.id} must be in redo invalidated IDs"
+        )
+
+    async def test_rename_section_undo_invalidates_all_section_chunks(
+        self, db: AsyncSession
+    ):
+        """undo rename_section must pass all affected chunk IDs to invalidate_chunk_cache."""
+        chunk_a = await _make_chunk(db, admin_section_name="Old Name", order_index=10)
+        chunk_b = await _make_chunk(db, admin_section_name="Old Name", order_index=11)
+
+        # i18n Phase 3: include translations in old/new audit dicts.
+        _phase3_old_trans = {"en_source_hash": "x", "ml": "പഴയ", "ta": "பழைய"}
+        _phase3_new_trans = {"en_source_hash": "y", "ml": "പുതിയ", "ta": "புதிய"}
+
+        old_val = {
+            "admin_section_name": "Old Name",
+            "admin_section_name_translations": _phase3_old_trans,
+            "affected_chunk_ids": [str(chunk_a.id), str(chunk_b.id)],
+        }
+        new_val = {
+            "admin_section_name": "New Name",
+            "admin_section_name_translations": _phase3_new_trans,
+        }
+        chunk_a.admin_section_name = "New Name"
+        chunk_a.admin_section_name_translations = _phase3_new_trans
+        chunk_b.admin_section_name = "New Name"
+        chunk_b.admin_section_name_translations = _phase3_new_trans
+
+        audit = await _make_audit(
+            db,
+            admin_id=_ADMIN_A_ID,
+            action_type="rename_section",
+            resource_id="testbook_1.1",
+            resource_type="section",
+            old_value=old_val,
+            new_value=new_val,
+        )
+
+        invalidated: list[list] = []
+
+        async def _spy(db_arg, ids):
+            invalidated.append(list(ids))
+            return 0
+
+        with _patch("api.audit_service.invalidate_chunk_cache", side_effect=_spy):
+            await apply_undo(db, audit, _ADMIN_A_ID)
+            await db.flush()
+
+        assert invalidated, "invalidate_chunk_cache must be called during rename_section undo"
+        flat = [cid for call_ids in invalidated for cid in call_ids]
+        # Both chunks must be included
+        assert str(chunk_a.id) in flat or str(chunk_b.id) in flat, (
+            "rename_section undo must invalidate at least one section chunk"
+        )

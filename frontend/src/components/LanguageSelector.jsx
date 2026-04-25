@@ -42,37 +42,28 @@ export default function LanguageSelector({ compact = false, prominent = false })
       setOpen(false);
       setSearch("");
       if (student) {
-        // Show overlay FIRST, then apply all changes behind it
         setChangingLang(lang);
         setApiDone(false);
-        // Small delay so overlay renders before UI shifts
         await new Promise((r) => setTimeout(r, 50));
         try {
-          // Apply i18n + localStorage behind the overlay
-          i18n.changeLanguage(lang.code);
-          localStorage.setItem("ada_language", lang.code);
           const res = await updateLanguage(student.id, lang.code);
           const { translated_headings, session_cache_cleared } = res.data || {};
+          i18n.changeLanguage(lang.code);
+          localStorage.setItem("ada_language", lang.code);
           if (translated_headings?.length > 0) {
             sessionDispatch({ type: "LANGUAGE_CHANGED", payload: { headings: translated_headings } });
           }
           if (session_cache_cleared && reloadCurrentChunk) {
             await reloadCurrentChunk();
           }
-        } catch {
-          // Still apply i18n even if API fails
-          if (i18n.language !== lang.code) {
-            i18n.changeLanguage(lang.code);
-            localStorage.setItem("ada_language", lang.code);
-          }
+        } catch (err) {
+          trackEvent("language_change_failed", { language_code: lang.code, previous_language: previousLang });
+          console.warn("[LanguageSelector] language change failed, keeping previous language:", err);
         } finally {
-          // Let React finish re-rendering all state changes behind the overlay
-          // before signaling completion (prevents visible loading flicker after overlay closes)
           await new Promise((r) => setTimeout(r, 600));
           setApiDone(true);
         }
       } else {
-        // No student — just switch UI language instantly
         i18n.changeLanguage(lang.code);
         localStorage.setItem("ada_language", lang.code);
       }

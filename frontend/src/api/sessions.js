@@ -32,17 +32,12 @@ export const getBookSlugFromConceptId = (conceptId) => {
   return BOOK_CODE_TO_SLUG[code] ?? "prealgebra";
 };
 
-export const startSession = (studentId, conceptId, style = "default", lessonInterests = []) =>
+export const startSession = (studentId, conceptId) =>
   api.post("/api/v2/sessions", {
     student_id: studentId,
     concept_id: conceptId,
-    style,
-    lesson_interests: lessonInterests.length > 0 ? lessonInterests : [],
     book_slug: getBookSlugFromConceptId(conceptId),
   });
-
-export const switchStyle = (sessionId, style) =>
-  api.put(`/api/v2/sessions/${sessionId}/style`, { style }, { timeout: LLM_TIMEOUT });
 
 export const getSession = (sessionId) =>
   api.get(`/api/v2/sessions/${sessionId}`);
@@ -87,10 +82,6 @@ export const completeCardAndGetNext = (sessionId, signals) =>
     },
     { timeout: COMPLETE_CARD_TIMEOUT }
   );
-
-export const updateSessionInterests = (sessionId, interests) =>
-  api.put(`/api/v2/sessions/${sessionId}/interests`, { interests });
-
 
 export const regenerateMCQ = (sessionId, body) =>
   api.post(`/api/v2/sessions/${sessionId}/regenerate-mcq`, body, { timeout: LLM_TIMEOUT });

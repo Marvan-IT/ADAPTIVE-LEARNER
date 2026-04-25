@@ -197,7 +197,7 @@ export default function AssistantPanel() {
         )}
 
         <AnimatePresence initial={false}>
-          {assistMessages.map((msg, idx) => (
+          {assistMessages.filter(m => !m.isSystemPrompt).map((msg, idx) => (
             <motion.div
               key={idx}
               initial={{ opacity: 0, y: 8 }}

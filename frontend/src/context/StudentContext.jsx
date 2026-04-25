@@ -12,6 +12,7 @@ export function StudentProvider({ children }) {
   const [student, setStudentState] = useState(null);
   const [masteredConcepts, setMasteredConcepts] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [isHydrated, setIsHydrated] = useState(false);
 
   const initAdaptive = useAdaptiveStore((s) => s.init);
 
@@ -21,13 +22,15 @@ export function StudentProvider({ children }) {
     if (!studentId) {
       setStudentState(null);
       setMasteredConcepts([]);
+      setIsHydrated(false);
       setLoading(false);
       return;
     }
 
     setLoading(true);
-    getStudent(studentId)
-      .then((res) => {
+    (async () => {
+      try {
+        const res = await getStudent(studentId);
         setStudentState(res.data);
         identifyStudent(res.data);
         trackEvent("existing_student_resumed", { student_id: res.data.id });
@@ -44,15 +47,15 @@ export function StudentProvider({ children }) {
             daily_streak_best: res.data.daily_streak_best ?? 0,
           });
         }
-        return getStudentMastery(studentId);
-      })
-      .then((res) => {
-        setMasteredConcepts(res.data.mastered_concepts || []);
-      })
-      .catch((err) => {
+        const masteryRes = await getStudentMastery(studentId);
+        setMasteredConcepts(masteryRes.data.mastered_concepts || []);
+        setIsHydrated(true);
+      } catch (err) {
         console.error("[StudentContext] Failed to load student:", err);
-      })
-      .finally(() => setLoading(false));
+      } finally {
+        setLoading(false);
+      }
+    })();
   }, [user?.student_id, initAdaptive]);
 
   // setStudent kept for compatibility — updates local state only
@@ -79,6 +82,7 @@ export function StudentProvider({ children }) {
       }
       const masteryRes = await getStudentMastery(user.student_id);
       setMasteredConcepts(masteryRes.data.mastered_concepts || []);
+      setIsHydrated(true);
     } catch (err) {
       console.error("[StudentContext] refreshStudent failed:", err);
     }
@@ -120,6 +124,7 @@ export function StudentProvider({ children }) {
           daily_streak: studentData.daily_streak ?? 0,
           daily_streak_best: studentData.daily_streak_best ?? 0,
         });
+        setIsHydrated(true);
       }
       try {
         const res = await getStudentMastery(studentData.id);
@@ -144,6 +149,7 @@ export function StudentProvider({ children }) {
     <StudentContext.Provider
       value={{
         student,
+        isHydrated,
         setStudent,
         selectStudent,
         masteredConcepts,

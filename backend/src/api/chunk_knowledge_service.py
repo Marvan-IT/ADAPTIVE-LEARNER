@@ -129,8 +129,14 @@ class ChunkKnowledgeService:
     async def get_chunks_for_concept(
         self, db: AsyncSession, book_slug: str, concept_id: str,
         include_hidden: bool = False,
+        lang: str = "en",
     ) -> list[dict]:
-        """Return all chunks for a concept in order_index order."""
+        """Return all chunks for a concept in order_index order.
+
+        If *lang* is not 'en', heading and image captions are resolved from
+        their respective JSONB translation columns, falling back to English.
+        """
+        from api.dependencies import resolve_translation
         query = (
             select(ConceptChunk)
             .where(ConceptChunk.book_slug == book_slug, ConceptChunk.concept_id == concept_id)
@@ -145,6 +151,26 @@ class ChunkKnowledgeService:
         # "Practice Makes Perfect (Exercises)") are extracted with < 100 chars of text and cannot
         # generate meaningful cards. This rule applies to all books and all sections.
         all_chunks = [c for c in all_chunks if len((c.get("text") or "").strip()) >= 100]
+
+        if lang != "en":
+            # Overlay translated headings and image captions from the source ORM objects.
+            chunk_orm_map: dict[str, ConceptChunk] = {str(c.id): c for c in chunks}
+            for chunk_dict in all_chunks:
+                orm = chunk_orm_map.get(chunk_dict["id"])
+                if orm is None:
+                    continue
+                chunk_dict["heading"] = resolve_translation(
+                    orm.heading, orm.heading_translations or {}, lang
+                )
+                for img in chunk_dict.get("images", []):
+                    # Images are dicts with 'caption' key; caption may be None.
+                    if img.get("caption") is None:
+                        continue
+                    # Find the matching ChunkImage ORM object via order_index if available.
+                    # Since images are populated separately, we apply overlay at call-sites
+                    # that call get_chunk_images — the dict here is always empty ("images": []).
+                    # Caption overlay for images is handled in get_chunk_images.
+
         return all_chunks
 
     async def get_chunk(self, db: AsyncSession, chunk_id: str) -> dict | None:
@@ -160,8 +186,15 @@ class ChunkKnowledgeService:
         chunk = result.scalar_one_or_none()
         return self._chunk_to_dict(chunk) if chunk else None
 
-    async def get_chunk_images(self, db: AsyncSession, chunk_id: str) -> list[dict]:
-        """Return all images for a chunk in order."""
+    async def get_chunk_images(
+        self, db: AsyncSession, chunk_id: str, lang: str = "en"
+    ) -> list[dict]:
+        """Return all images for a chunk in order.
+
+        If *lang* is not 'en', captions are resolved from caption_translations,
+        falling back to the English caption when the translation is absent.
+        """
+        from api.dependencies import resolve_translation
         try:
             chunk_uuid = UUID(chunk_id)
         except ValueError:
@@ -173,7 +206,13 @@ class ChunkKnowledgeService:
             .order_by(ChunkImage.order_index)
         )
         images = result.scalars().all()
-        return [{"image_url": _normalize_image_url(img.image_url), "caption": img.caption} for img in images]
+        out = []
+        for img in images:
+            caption = img.caption
+            if caption is not None and lang != "en":
+                caption = resolve_translation(caption, img.caption_translations or {}, lang)
+            out.append({"image_url": _normalize_image_url(img.image_url), "caption": caption})
+        return out
 
     async def get_active_books(self, db: AsyncSession) -> set[str]:
         """Return set of book_slugs that have concept_chunks rows."""
@@ -367,8 +406,9 @@ class ChunkKnowledgeService:
 
     # ── Async concept-detail methods ──────────────────────────────────────────
 
-    async def get_concept_detail(self, db: AsyncSession, concept_id: str, book_slug: str) -> dict | None:
+    async def get_concept_detail(self, db: AsyncSession, concept_id: str, book_slug: str, lang: str = "en") -> dict | None:
         """Aggregate all chunks for a concept: longest text, all latex, all images."""
+        from api.dependencies import resolve_translation
         result = await db.execute(
             select(ConceptChunk)
             .where(ConceptChunk.book_slug == book_slug, ConceptChunk.concept_id == concept_id)
@@ -402,10 +442,11 @@ class ChunkKnowledgeService:
         num = concept_id.split("_")[-1]
         dot_idx = num.find(".")
         chapter = num[:dot_idx] if dot_idx != -1 else num
+        heading = resolve_translation(primary.heading, primary.heading_translations or {}, lang)
         return {
             "concept_id": concept_id,
-            "concept_title": primary.heading,   # keep 'concept_title' key for compat with adaptive_engine
-            "title": primary.heading,
+            "concept_title": heading,   # keep 'concept_title' key for compat with adaptive_engine
+            "title": heading,
             "chapter": chapter,
             "section": num,
             "text": primary.text,

@@ -31,6 +31,7 @@ class Student(Base):
     )
     display_name: Mapped[str] = mapped_column(String(100), nullable=False)
     interests: Mapped[list[str]] = mapped_column(ARRAY(String), default=list)
+    custom_interests: Mapped[list] = mapped_column(JSONB, default=list, server_default=text("'[]'::jsonb"), nullable=False)
     preferred_style: Mapped[str] = mapped_column(String(20), default="default")
     preferred_language: Mapped[str] = mapped_column(String(10), default="en")
     age: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -318,8 +319,10 @@ class ConceptChunk(Base):
     exam_disabled = Column(Boolean, nullable=False, server_default="false")
     chunk_type_locked = Column(Boolean, default=False, server_default="false", nullable=False)
     admin_section_name = Column(Text, nullable=True)
+    admin_section_name_translations = Column(JSONB, nullable=False, server_default="'{}'::jsonb")
     embedding   = Column(Vector(1536), nullable=True)
     created_at  = Column(TIMESTAMPTZ(timezone=True), server_default=func.now())
+    heading_translations = Column(JSONB, nullable=False, server_default="'{}'::jsonb")
 
     images = relationship("ChunkImage", back_populates="chunk", cascade="all, delete-orphan")
 
@@ -332,6 +335,7 @@ class ChunkImage(Base):
     image_url   = Column(Text, nullable=False)
     caption     = Column(Text, nullable=True)
     order_index = Column(Integer, default=0)
+    caption_translations = Column(JSONB, nullable=False, server_default="'{}'::jsonb")
 
     chunk = relationship("ConceptChunk", back_populates="images")
 
@@ -348,6 +352,8 @@ class Book(Base):
     is_hidden    = Column(Boolean, nullable=False, server_default="false")
     created_at   = Column(DateTime(timezone=True), server_default=func.now())
     published_at = Column(DateTime(timezone=True), nullable=True)
+    title_translations   = Column(JSONB, nullable=False, server_default="'{}'::jsonb")
+    subject_translations = Column(JSONB, nullable=False, server_default="'{}'::jsonb")
 
 
 class Subject(Base):
@@ -358,6 +364,7 @@ class Subject(Base):
     label      = Column(Text, nullable=False)
     is_hidden  = Column(Boolean, nullable=False, server_default="false")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    label_translations = Column(JSONB, nullable=False, server_default="'{}'::jsonb")
 
 
 class AdminGraphOverride(Base):

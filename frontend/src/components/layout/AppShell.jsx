@@ -1,11 +1,11 @@
 import { useState, useRef, useEffect } from "react";
+import { useDialog } from "../../context/DialogProvider";
 import { Outlet, Navigate, NavLink, useNavigate, useLocation } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { useTranslation } from "react-i18next";
 import { useStudent } from "../../context/StudentContext";
 import { useAuth } from "../../context/AuthContext";
 import { useTheme } from "../../context/ThemeContext";
-import LanguageSelector from "../LanguageSelector";
 import {
   Brain, Map, BookOpen, LogOut, Trophy,
   ChevronLeft, ChevronRight, Sun, Moon,
@@ -116,6 +116,7 @@ export default function AppShell() {
     }
   }, [location.pathname]);
 
+  const dialog = useDialog();
   const xp    = useAdaptiveStore((s) => s.xp);
   const level = useAdaptiveStore((s) => s.level);
 
@@ -299,11 +300,6 @@ export default function AppShell() {
             </AnimatePresence>
           </div>
 
-          {/* Language selector */}
-          <div style={{ paddingLeft: collapsed ? 0 : "var(--sp-1)", display: "flex", justifyContent: collapsed ? "center" : "flex-start" }}>
-            <LanguageSelector compact />
-          </div>
-
           {/* Dark/light toggle */}
           <button
             onClick={toggleTheme}
@@ -356,7 +352,18 @@ export default function AppShell() {
 
           {/* Sign out */}
           <button
-            onClick={async () => { await logout(); navigate("/login"); }}
+            onClick={async () => {
+              const confirmed = await dialog.confirm({
+                title: t("confirm.logoutTitle"),
+                message: t("confirm.logoutMessage"),
+                confirmLabel: t("nav.logout"),
+                cancelLabel: t("confirm.cancel"),
+                variant: "danger",
+              });
+              if (!confirmed) return;
+              await logout();
+              navigate("/login");
+            }}
             className="sidebar-item"
             style={{ color: "var(--color-danger)", justifyContent: collapsed ? "center" : "flex-start" }}
           >

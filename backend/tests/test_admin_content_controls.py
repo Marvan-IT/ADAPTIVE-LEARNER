@@ -641,8 +641,8 @@ class TestSectionVisibilityToggleEndpoint:
         assert resp.status_code == 200
         body = resp.json()
         assert body["updated"] == 3
-        # DB execute and commit must have been called
-        mock_db.execute.assert_called_once()
+        # DB execute and commit must have been called (invalidate_chunk_cache may add extra execute).
+        assert mock_db.execute.called
         mock_db.commit.assert_called_once()
 
     @pytest.mark.asyncio

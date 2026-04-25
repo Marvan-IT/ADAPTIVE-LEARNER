@@ -469,6 +469,7 @@ def build_next_card_prompt(
     content_piece_images: list[dict] | None = None,
     style: str = "default",
     interests: list[str] | None = None,
+    primary_interest: str | None = None,
 ) -> tuple[str, str]:
     """
     Build (system_prompt, user_prompt) for a single adaptive next-card LLM call.
@@ -481,7 +482,7 @@ def build_next_card_prompt(
     _style_prefix = f"{_style_modifier}\n\n" if _style_modifier else ""
 
     # ── Interests block (appended at end of system prompt) ────────────────────────
-    _interests_block = _build_interests_block(interests or [])
+    _interests_block = _build_interests_block(interests or [], primary_interest)
 
     # Reuse existing system prompt, then override schema and card rules
     base_sys = _build_system_prompt(learning_profile, gen_profile, language)

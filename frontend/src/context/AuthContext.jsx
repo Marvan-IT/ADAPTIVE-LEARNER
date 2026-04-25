@@ -137,6 +137,7 @@ export function AuthProvider({ children }) {
     accessTokenRef.current = null;
     localStorage.removeItem("ada_refresh_token");
     localStorage.removeItem("ada_student_id");
+    localStorage.removeItem("ada_language");
     setUser(null);
     if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
   }, []);

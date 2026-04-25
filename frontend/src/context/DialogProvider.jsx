@@ -9,42 +9,101 @@ export function useDialog() {
 }
 
 export function DialogProvider({ children }) {
-  const [state, setState] = useState({ open: false, title: "", message: "", confirmLabel: "OK", cancelLabel: "Cancel", variant: "primary" });
-  const resolverRef = useRef(null);
+  const [confirmState, setConfirmState] = useState({ open: false, title: "", message: "", confirmLabel: "OK", cancelLabel: "Cancel", variant: "primary" });
+  const [promptState, setPromptState] = useState({ open: false, title: "", defaultValue: "", cancelLabel: "Cancel", confirmLabel: "OK" });
+  const [promptValue, setPromptValue] = useState("");
+  const confirmResolverRef = useRef(null);
+  const promptResolverRef = useRef(null);
 
   const confirm = useCallback(({ title = "Confirm", message, confirmLabel = "OK", cancelLabel = "Cancel", variant = "primary" } = {}) => {
     return new Promise((resolve) => {
-      resolverRef.current = resolve;
-      setState({ open: true, title, message, confirmLabel, cancelLabel, variant });
+      confirmResolverRef.current = resolve;
+      setConfirmState({ open: true, title, message, confirmLabel, cancelLabel, variant });
+    });
+  }, []);
+
+  const prompt = useCallback(({ title = "", defaultValue = "", confirmLabel = "OK", cancelLabel = "Cancel" } = {}) => {
+    return new Promise((resolve) => {
+      promptResolverRef.current = resolve;
+      setPromptValue(defaultValue);
+      setPromptState({ open: true, title, defaultValue, confirmLabel, cancelLabel });
     });
   }, []);
 
   const handleConfirm = useCallback(() => {
-    resolverRef.current?.(true);
-    setState((s) => ({ ...s, open: false }));
+    confirmResolverRef.current?.(true);
+    setConfirmState((s) => ({ ...s, open: false }));
   }, []);
 
   const handleCancel = useCallback(() => {
-    resolverRef.current?.(false);
-    setState((s) => ({ ...s, open: false }));
+    confirmResolverRef.current?.(false);
+    setConfirmState((s) => ({ ...s, open: false }));
+  }, []);
+
+  const handlePromptConfirm = useCallback(() => {
+    promptResolverRef.current?.(promptValue);
+    setPromptState((s) => ({ ...s, open: false }));
+  }, [promptValue]);
+
+  const handlePromptCancel = useCallback(() => {
+    promptResolverRef.current?.(null);
+    setPromptState((s) => ({ ...s, open: false }));
   }, []);
 
   return (
-    <DialogContext.Provider value={{ confirm }}>
+    <DialogContext.Provider value={{ confirm, prompt }}>
       {children}
-      <Modal open={state.open} onClose={handleCancel} size="sm">
-        <ModalHeader>{state.title}</ModalHeader>
+
+      {/* Confirm dialog */}
+      <Modal open={confirmState.open} onClose={handleCancel} size="md">
+        <ModalHeader>{confirmState.title}</ModalHeader>
         <ModalBody>
-          <p style={{ fontSize: "0.875rem", color: "var(--color-text-muted)", lineHeight: 1.6, whiteSpace: "pre-line" }}>
-            {state.message}
+          <p style={{ fontSize: "0.9375rem", color: "var(--color-text-muted)", lineHeight: 1.6, whiteSpace: "pre-line" }}>
+            {confirmState.message}
           </p>
         </ModalBody>
         <ModalFooter>
-          <Button variant="secondary" size="sm" onClick={handleCancel}>
-            {state.cancelLabel}
+          <Button variant="secondary" size="md" onClick={handleCancel} className="min-w-[96px] whitespace-nowrap">
+            {confirmState.cancelLabel}
           </Button>
-          <Button variant={state.variant === "danger" ? "danger" : "primary"} size="sm" onClick={handleConfirm}>
-            {state.confirmLabel}
+          <Button variant={confirmState.variant === "danger" ? "danger" : "primary"} size="md" onClick={handleConfirm} className="min-w-[96px] whitespace-nowrap">
+            {confirmState.confirmLabel}
+          </Button>
+        </ModalFooter>
+      </Modal>
+
+      {/* Prompt dialog */}
+      <Modal open={promptState.open} onClose={handlePromptCancel} size="md">
+        <ModalHeader>{promptState.title}</ModalHeader>
+        <ModalBody>
+          <input
+            autoFocus
+            type="text"
+            value={promptValue}
+            onChange={(e) => setPromptValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") handlePromptConfirm();
+              if (e.key === "Escape") handlePromptCancel();
+            }}
+            style={{
+              width: "100%",
+              padding: "8px 12px",
+              fontSize: "0.9375rem",
+              border: "1.5px solid var(--color-border, #E2E8F0)",
+              borderRadius: "8px",
+              outline: "none",
+              boxSizing: "border-box",
+              color: "var(--color-text, #0F172A)",
+              background: "var(--color-surface, #FFFFFF)",
+            }}
+          />
+        </ModalBody>
+        <ModalFooter>
+          <Button variant="secondary" size="md" onClick={handlePromptCancel} className="min-w-[96px] whitespace-nowrap">
+            {promptState.cancelLabel}
+          </Button>
+          <Button variant="primary" size="md" onClick={handlePromptConfirm} className="min-w-[96px] whitespace-nowrap">
+            {promptState.confirmLabel}
           </Button>
         </ModalFooter>
       </Modal>

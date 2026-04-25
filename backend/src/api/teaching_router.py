@@ -26,7 +26,9 @@ from config import (
     CARD_HISTORY_DEFAULT_LIMIT,
     CARD_HISTORY_MAX_LIMIT,
     CHUNK_EXAM_PASS_RATE,
+    CUSTOM_INTERESTS_MAX,
     OPENAI_MODEL_MINI,
+    PREDEFINED_INTEREST_IDS,
 )
 
 def _get_book_title(book_slug: str) -> str:
@@ -44,7 +46,6 @@ from api.teaching_schemas import (
     CreateStudentRequest, StudentResponse,
     StartSessionRequest, SessionResponse,
     PresentationResponse,
-    SwitchStyleRequest,
     SessionHistoryResponse, MessageResponse,
     CardsResponse, LessonCard,
     AssistRequest, AssistResponse,
@@ -52,7 +53,6 @@ from api.teaching_schemas import (
     StudentAnalyticsResponse,
     ConceptReadinessResponse,
     RegenerateMCQRequest, RegenerateMCQResponse,
-    UpdateSessionInterestsRequest,
     CompleteCardRequest, CompleteCardResponse,
     ChunkCardsRequest, ChunkCardsResponse,
     ChunkExamQuestion,
@@ -65,7 +65,9 @@ from api.teaching_schemas import (
     ChunkSummary, ChunkListResponse,
     StudentLanguageResponse,
     ChunkPreviewItem, ChunkPreviewResponse,
+    ValidateCustomInterestRequest, ValidateCustomInterestResponse,
 )
+from api.cache_accessor import CacheAccessor
 from api.rate_limiter import limiter
 from api.prompts import _language_instruction
 
@@ -289,7 +291,9 @@ async def get_student(
     return {
         "id": str(student.id),
         "display_name": student.display_name,
+        "age": student.age,
         "interests": student.interests or [],
+        "custom_interests": student.custom_interests or [],
         "preferred_style": student.preferred_style,
         "preferred_language": student.preferred_language or "en",
         "created_at": student.created_at.isoformat(),
@@ -299,6 +303,49 @@ async def get_student(
         "daily_streak_best": student.daily_streak_best or 0,
         "last_active_date": student.last_active_date.isoformat() if student.last_active_date else None,
     }
+
+
+@router.post(
+    "/students/{student_id}/custom-interests/validate",
+    response_model=ValidateCustomInterestResponse,
+    summary="Validate a custom interest text (format + LLM semantic check)",
+)
+@limiter.limit("30/minute")
+async def validate_custom_interest_endpoint(
+    request: Request,
+    student_id: UUID,
+    body: ValidateCustomInterestRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Validate a single custom interest text before persisting it.
+
+    Always returns HTTP 200. The `ok` field indicates whether the text is acceptable.
+    When `ok=False`, `reason` contains a stable error code that the frontend maps to
+    a localised message (e.g. "too_short", "too_long", "invalid_chars", "duplicate_predefined",
+    "duplicate_custom", "limit_reached", "unrecognized", "validator_unavailable").
+    """
+    from api.interest_validator import validate_custom_interest as _validate
+
+    await _validate_student_ownership(user, student_id, db)
+    student = await db.get(Student, student_id)
+    if not student:
+        raise HTTPException(404, "Student not found")
+
+    language = body.language or student.preferred_language or "en"
+
+    result = await _validate(
+        text=body.text,
+        language=language,
+        existing_custom=list(student.custom_interests or []),
+        predefined_ids=PREDEFINED_INTEREST_IDS,
+    )
+    return ValidateCustomInterestResponse(
+        ok=result.ok,
+        reason=result.reason,
+        normalized=result.normalized,
+    )
 
 
 @router.get("/students/{student_id}/mastery")
@@ -497,51 +544,23 @@ async def get_concept_readiness(
     )
 
 
-async def _translate_summaries_headings(
-    headings: list[str],
+async def _get_translated_headings_from_db(
+    db: AsyncSession,
+    book_slug: str,
+    concept_id: str,
     language: str,
-    client,
 ) -> list[str]:
-    """Translate a list of chunk headings to the target language via a single LLM call.
-    Returns the original list unchanged on any error (timeout, parse failure).
-    """
-    import time
-    from api.prompts import LANGUAGE_NAMES
-    language_name = LANGUAGE_NAMES.get(language, "English")
-    system_prompt = (
-        f"You are a math education translator. Translate each heading in the JSON array to "
-        f"{language_name}. Return a JSON array of the same length in the same order. "
-        "Headings only — do not translate concept IDs or numbers."
-    )
-    user_prompt = json.dumps(headings)
-    t0 = time.monotonic()
-    try:
-        resp = await client.chat.completions.create(
-            model=OPENAI_MODEL_MINI,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user",   "content": user_prompt},
-            ],
-            max_tokens=500,
-            temperature=0.1,
-            timeout=10.0,
-        )
-        raw = (resp.choices[0].message.content or "").strip()
-        if raw.startswith("```"):
-            raw = re.sub(r"^```(?:json)?\s*", "", raw)
-            raw = re.sub(r"\s*```$", "", raw)
-        translated = json.loads(raw)
-        if isinstance(translated, list) and len(translated) == len(headings):
-            duration_ms = int((time.monotonic() - t0) * 1000)
-            logger.info(
-                "[lang-translate] lang=%s heading_count=%d duration_ms=%d",
-                language, len(headings), duration_ms,
-            )
-            return [str(h) for h in translated]
-        logger.warning("[lang-translate] unexpected response shape for lang=%s", language)
-    except Exception as exc:
-        logger.warning("[lang-translate] failed for lang=%s: %s", language, exc)
-    return headings
+    """Return ordered chunk headings for a concept, resolved to the target language via DB."""
+    from api.dependencies import resolve_translation
+    rows = (await db.execute(
+        select(ConceptChunk.heading, ConceptChunk.heading_translations)
+        .where(ConceptChunk.book_slug == book_slug, ConceptChunk.concept_id == concept_id)
+        .order_by(ConceptChunk.order_index)
+    )).all()
+    return [
+        resolve_translation(row.heading, row.heading_translations or {}, language)
+        for row in rows
+    ]
 
 
 @router.patch("/students/{student_id}/language", response_model=StudentLanguageResponse)
@@ -577,33 +596,35 @@ async def update_student_language(
     )
     active_session = session_result.scalar_one_or_none()
 
-    if active_session and chunk_ksvc:
+    if active_session:
         try:
-            raw_chunks = await chunk_ksvc.get_chunks_for_concept(
-                db, active_session.book_slug or "prealgebra", active_session.concept_id
-            )
-            headings = [c.get("heading", "") for c in sorted(raw_chunks, key=lambda c: c.get("order_index", 0))]
-            if headings:
-                translated_headings = await _translate_summaries_headings(
-                    headings, req.language, teaching_svc.openai
+            async with asyncio.timeout(3.0):
+                book_slug = active_session.book_slug or "prealgebra"
+                translated_headings = await _get_translated_headings_from_db(
+                    db, book_slug, active_session.concept_id, req.language
                 )
-
-            # Bust the card generation cache so cards regenerate in the new language
-            if active_session.presentation_text:
-                try:
-                    cache = json.loads(active_session.presentation_text)
-                    cache["cache_version"] = -1
-                    cache["cards"] = []
-                    active_session.presentation_text = json.dumps(cache)
-                except Exception:
-                    active_session.presentation_text = json.dumps({"cache_version": -1, "cards": []})
-            else:
-                active_session.presentation_text = json.dumps({"cache_version": -1, "cards": []})
-            session_cache_cleared = True
-            logger.info(
-                "[lang-translate] cache busted: session_id=%s student_id=%s new_lang=%s",
-                active_session.id, student_id, req.language,
-            )
+                logger.info(
+                    "[lang-translate] db headings resolved: session_id=%s lang=%s count=%d",
+                    active_session.id, req.language, len(translated_headings),
+                )
+                # Bust the card generation cache so cards regenerate in the new language.
+                # mark_stale() clears only the new language's slice; other language slices
+                # are preserved so switching back is instant.
+                _lang_ca = CacheAccessor(active_session.presentation_text, language=req.language)
+                _lang_ca.mark_stale(req.language)
+                # Explicitly clear exam questions for the new language slice.
+                # mark_stale already deleted the slice, so this is a safeguard
+                # against schema drift where exam questions might survive elsewhere.
+                _lang_ca.clear_exam_questions(None)
+                active_session.presentation_text = _lang_ca.to_json()
+                session_cache_cleared = True
+                logger.info(
+                    "[lang-translate] cache busted: session_id=%s student_id=%s new_lang=%s",
+                    active_session.id, student_id, req.language,
+                )
+        except asyncio.TimeoutError:
+            await db.rollback()
+            raise HTTPException(503, "Language update temporarily unavailable")
         except Exception as exc:
             logger.warning("[lang-translate] session update failed: %s", exc)
 
@@ -671,14 +692,14 @@ async def start_session(
         active_books = await chunk_ksvc.get_active_books(db)
         if req.book_slug not in active_books:
             raise HTTPException(400, f"Book '{req.book_slug}' not loaded. Available: {sorted(active_books)}")
-        concept_detail = await chunk_ksvc.get_concept_detail(db, req.concept_id, req.book_slug)
+        concept_detail = await chunk_ksvc.get_concept_detail(db, req.concept_id, req.book_slug, lang="en")
         if not concept_detail:
             raise HTTPException(
                 status_code=400,
                 detail=f"Concept '{req.concept_id}' not found in book '{req.book_slug}'"
             )
         session = await teaching_svc.start_session(
-            db, req.student_id, req.concept_id, req.book_slug, req.style, req.lesson_interests
+            db, req.student_id, req.concept_id, req.book_slug
         )
         return session
     except HTTPException:
@@ -709,7 +730,7 @@ async def get_presentation(
     student = await db.get(Student, session.student_id)
     presentation = await teaching_svc.generate_presentation(db, session, student)
 
-    concept = await chunk_ksvc.get_concept_detail(db, session.concept_id, session.book_slug or "prealgebra")
+    concept = await chunk_ksvc.get_concept_detail(db, session.concept_id, session.book_slug or "prealgebra", lang=student.preferred_language or "en")
 
     # Filter images: only DIAGRAM-type with reasonable dimensions
     raw_images = concept.get("images", []) if concept else []
@@ -743,49 +764,6 @@ async def get_presentation(
         images=useful_images,
         latex_expressions=[],
     )
-
-
-@router.put("/sessions/{session_id}/style")
-@limiter.limit("30/minute")
-async def switch_style(
-    request: Request,
-    session_id: UUID,
-    req: SwitchStyleRequest,
-    user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Switch teaching style mid-session."""
-    session = await db.get(TeachingSession, session_id)
-    if not session:
-        raise HTTPException(404, "Session not found")
-    await _validate_student_ownership(user, session.student_id, db)
-    if session.phase == "COMPLETED":
-        raise HTTPException(400, "Cannot switch style on a completed session")
-
-    student = await db.get(Student, session.student_id)
-    result = await teaching_svc.switch_style(db, session, req.style, student)
-
-    return {"session_id": str(session.id), "new_style": req.style, "result": result}
-
-
-@router.put("/sessions/{session_id}/interests")
-@limiter.limit("30/minute")
-async def update_session_interests(
-    request: Request,
-    session_id: UUID,
-    req: UpdateSessionInterestsRequest,
-    user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Update per-session interest override. Used by in-section customize panel."""
-    session = await db.get(TeachingSession, session_id)
-    if not session:
-        raise HTTPException(404, "Session not found")
-    await _validate_student_ownership(user, session.student_id, db)
-    session.lesson_interests = [i[:50] for i in req.interests[:10]]
-    await db.commit()
-    logger.info("session=%s interests updated count=%d", session_id, len(session.lesson_interests))
-    return {"session_id": str(session_id), "lesson_interests": session.lesson_interests}
 
 
 @router.get("/sessions/resume", response_model=SessionResponse)
@@ -986,7 +964,9 @@ async def generate_chunk_cards(
                 cards.append(LessonCard(**_c))
             except Exception as _val_err:
                 logger.warning("[chunk-cards] skipping invalid card dict: %s", _val_err)
-        _chunks = await chunk_ksvc.get_chunks_for_concept(db, session.book_slug or "prealgebra", session.concept_id)
+        _cc_student = await db.get(Student, session.student_id)
+        _cc_lang = (_cc_student.preferred_language or "en") if _cc_student else "en"
+        _chunks = await chunk_ksvc.get_chunks_for_concept(db, session.book_slug or "prealgebra", session.concept_id, lang=_cc_lang)
         chunk_index = next((i for i, c in enumerate(_chunks) if c["id"] == req.chunk_id), 0)
 
         # Fetch the chunk object to determine type and get text for question generation
@@ -1010,53 +990,56 @@ async def generate_chunk_cards(
                 req.chunk_id,
             )
         elif chunk_type == "teaching" and chunk and chunk_text.strip():
-            # Dynamic question count based on chunk text length
-            _text_len = len(chunk_text.strip()) if chunk_text else 0
-            _target_q = 1 if _text_len < 400 else (2 if _text_len < 1200 else 3)
-            # Read student language for exam questions
+            # ── Exam question cache read ──────────────────────────────────────
             _exam_student = await db.get(Student, session.student_id)
             _exam_lang = getattr(_exam_student, "preferred_language", "en") or "en"
-            _q_system = (
-                "You are a friendly quiz writer for math students. "
-                "Based ONLY on the content provided, generate exactly "
-                f"{_target_q} short, direct question{'s' if _target_q > 1 else ''}.\n"
-                "RULES:\n"
-                "- Ask DIRECT questions with ONE clear correct answer.\n"
-                "- GOOD forms: 'Does X include zero — yes or no?', "
-                "'True or false: [simple statement].', "
-                "'What is the name for numbers that start at 1, 2, 3?'\n"
-                "- NEVER use 'explain', 'discuss', 'describe', 'how does X help', "
-                "'what is the significance of' — too abstract.\n"
-                "- Simple vocabulary (age 10–14). One sentence per question.\n"
-                "Return ONLY valid JSON with no markdown: "
-                '{"questions": [{"index": 0, "text": "..."}, ...]}'
-            ) + _language_instruction(_exam_lang)
-            _q_user = f"Section: {chunk_heading}\n\n{chunk_text[:900]}"
-            try:
-                _q_result = await _call_llm_json(
-                    teaching_svc.openai,
-                    _q_system,
-                    _q_user,
-                    max_tokens=400,
+            _ca = CacheAccessor(session.presentation_text, language=_exam_lang)
+            _cached_q = _ca.get_exam_questions(str(req.chunk_id))
+            if _cached_q is not None:
+                # Cache hit — reconstruct question objects from stored dicts
+                logger.info(
+                    "[exam-cache] hit chunk_id=%s lang=%s count=%d",
+                    req.chunk_id, _exam_lang, len(_cached_q),
                 )
-                for _qi, _q in enumerate((_q_result.get("questions") or [])[:_target_q]):
-                    _qtext = (_q.get("text") or "").strip()
-                    if _qtext:
-                        questions.append(ChunkExamQuestion(
-                            index=_qi,
-                            text=_qtext,
-                            chunk_id=str(req.chunk_id),
-                        ))
-            except Exception:
-                logger.exception("[chunk-cards] question generation failed on first try — retrying")
+                for _q_dict in _cached_q:
+                    questions.append(ChunkExamQuestion(
+                        index=_q_dict.get("index", 0),
+                        text=_q_dict.get("text", ""),
+                        chunk_id=str(req.chunk_id),
+                    ))
+            else:
+                # Cache miss — generate via LLM then store result
+                logger.info(
+                    "[exam-cache] miss chunk_id=%s lang=%s — generating",
+                    req.chunk_id, _exam_lang,
+                )
+                # Dynamic question count based on chunk text length
+                _text_len = len(chunk_text.strip()) if chunk_text else 0
+                _target_q = 1 if _text_len < 400 else (2 if _text_len < 1200 else 3)
+                _q_system = (
+                    "You are a friendly quiz writer for math students. "
+                    "Based ONLY on the content provided, generate exactly "
+                    f"{_target_q} short, direct question{'s' if _target_q > 1 else ''}.\n"
+                    "RULES:\n"
+                    "- Ask DIRECT questions with ONE clear correct answer.\n"
+                    "- GOOD forms: 'Does X include zero — yes or no?', "
+                    "'True or false: [simple statement].', "
+                    "'What is the name for numbers that start at 1, 2, 3?'\n"
+                    "- NEVER use 'explain', 'discuss', 'describe', 'how does X help', "
+                    "'what is the significance of' — too abstract.\n"
+                    "- Simple vocabulary (age 10–14). One sentence per question.\n"
+                    "Return ONLY valid JSON with no markdown: "
+                    '{"questions": [{"index": 0, "text": "..."}, ...]}'
+                ) + _language_instruction(_exam_lang)
+                _q_user = f"Section: {chunk_heading}\n\n{chunk_text[:900]}"
                 try:
-                    _q_result2 = await _call_llm_json(
+                    _q_result = await _call_llm_json(
                         teaching_svc.openai,
                         _q_system,
                         _q_user,
                         max_tokens=400,
                     )
-                    for _qi, _q in enumerate((_q_result2.get("questions") or [])[:_target_q]):
+                    for _qi, _q in enumerate((_q_result.get("questions") or [])[:_target_q]):
                         _qtext = (_q.get("text") or "").strip()
                         if _qtext:
                             questions.append(ChunkExamQuestion(
@@ -1065,8 +1048,33 @@ async def generate_chunk_cards(
                                 chunk_id=str(req.chunk_id),
                             ))
                 except Exception:
-                    logger.exception("[chunk-cards] question generation failed after retry — skipping exam")
-                    questions = []
+                    logger.exception("[chunk-cards] question generation failed on first try — retrying")
+                    try:
+                        _q_result2 = await _call_llm_json(
+                            teaching_svc.openai,
+                            _q_system,
+                            _q_user,
+                            max_tokens=400,
+                        )
+                        for _qi, _q in enumerate((_q_result2.get("questions") or [])[:_target_q]):
+                            _qtext = (_q.get("text") or "").strip()
+                            if _qtext:
+                                questions.append(ChunkExamQuestion(
+                                    index=_qi,
+                                    text=_qtext,
+                                    chunk_id=str(req.chunk_id),
+                                ))
+                    except Exception:
+                        logger.exception("[chunk-cards] question generation failed after retry — skipping exam")
+                        questions = []
+
+                # ── Exam question cache write (only on successful generation) ─
+                if questions:
+                    _ca.set_exam_questions(
+                        str(req.chunk_id),
+                        [{"index": q.index, "text": q.text} for q in questions],
+                    )
+                    session.presentation_text = _ca.to_json()
 
         await db.commit()
         return ChunkCardsResponse(
@@ -1116,6 +1124,8 @@ async def generate_chunk_recovery_card(
 
     images = await chunk_ksvc.get_chunk_images(db, req.chunk_id)
 
+    _rec_student = await db.get(Student, session.student_id)
+    _rec_lang = getattr(_rec_student, "preferred_language", "en") or "en"
     recovery = await teaching_svc.generate_recovery_card_for_chunk(
         session=session,
         chunk=chunk,
@@ -1123,6 +1133,7 @@ async def generate_chunk_recovery_card(
         card_index=req.card_index,
         wrong_answers=req.wrong_answers,
         is_exercise=req.is_exercise,
+        language=_rec_lang,
     )
 
     if not recovery:
@@ -1202,15 +1213,19 @@ async def complete_chunk(
     # Update presentation_text cache with next mode
     if session.presentation_text:
         try:
-            cache = json.loads(session.presentation_text)
-            cache["current_mode"] = next_mode
-            session.presentation_text = json.dumps(cache)
+            _cm_student = await db.get(Student, session.student_id)
+            _cm_lang = getattr(_cm_student, "preferred_language", "en") or "en" if _cm_student else "en"
+            _cm_ca = CacheAccessor(session.presentation_text, language=_cm_lang)
+            _cm_slice = _cm_ca.get_slice()
+            _cm_slice["current_mode"] = next_mode
+            _cm_ca.set_slice(_cm_slice)
+            session.presentation_text = _cm_ca.to_json()
         except Exception:
             pass
 
     # Get all chunks for this concept
     all_chunks = await chunk_ksvc.get_chunks_for_concept(
-        db, session.book_slug, session.concept_id
+        db, session.book_slug, session.concept_id, lang=_cm_lang
     )
     all_sorted = sorted(all_chunks, key=lambda c: c["order_index"])
 
@@ -1307,7 +1322,7 @@ async def complete_chunk_item(
 
     # Verify chunk belongs to this session's concept
     all_chunks = await chunk_ksvc.get_chunks_for_concept(
-        db, session.book_slug or "prealgebra", session.concept_id
+        db, session.book_slug or "prealgebra", session.concept_id, lang="en"
     )
     all_sorted = sorted(all_chunks, key=lambda c: c.get("order_index", 0))
     chunk_ids_in_concept = {str(c["id"]) for c in all_sorted}
@@ -1497,7 +1512,7 @@ async def evaluate_chunk_answers(
         # Hidden and optional chunks are excluded — they must not block mastery
         try:
             all_chunks = await chunk_ksvc.get_chunks_for_concept(
-                db, session.book_slug or "prealgebra", session.concept_id
+                db, session.book_slug or "prealgebra", session.concept_id, lang="en"
             )
             all_sorted = sorted(all_chunks, key=lambda c: c["order_index"])
             required_ids = {
@@ -1699,23 +1714,25 @@ async def list_chunks(
         # Prefer admin-supplied section name over the raw DB section field
         section_title = chunks[0].admin_section_name or chunks[0].section if chunks else ""
 
-        # Translate headings + section_title if student language is not English
+        # Resolve headings + section_title from DB translations
         student = await db.get(Student, session.student_id)
         lang = getattr(student, "preferred_language", "en") or "en"
-        if lang != "en" and teaching_svc and summaries:
-            try:
-                raw_headings = [s.heading for s in summaries]
-                to_translate = raw_headings + ([section_title] if section_title else [])
-                translated = await _translate_summaries_headings(
-                    to_translate, lang, teaching_svc.openai
+        if lang != "en":
+            from api.dependencies import resolve_translation
+            for i, (s, c) in enumerate(zip(summaries, chunks)):
+                s.heading = resolve_translation(c.heading or "", c.heading_translations or {}, lang)
+            if section_title and chunks:
+                # Use admin-set translations if available; fall back to heading_translations.
+                trans = (
+                    chunks[0].admin_section_name_translations or {}
+                    if chunks[0].admin_section_name
+                    else chunks[0].heading_translations or {}
                 )
-                if translated and len(translated) == len(to_translate):
-                    for i, s in enumerate(summaries):
-                        s.heading = translated[i]
-                    if section_title:
-                        section_title = translated[-1]
-            except Exception as exc:
-                logger.warning("[chunks] heading translation failed for lang=%s: %s", lang, exc)
+                section_title = resolve_translation(
+                    chunks[0].admin_section_name or chunks[0].section or "",
+                    trans,
+                    lang,
+                )
 
         logger.info(
             "[chunks] session_id=%s concept_id=%s total=%d current_index=%d lang=%s",
@@ -1998,29 +2015,70 @@ async def get_student_sessions(
     db: AsyncSession = Depends(get_db),
 ):
     """List all meaningful teaching sessions for a student (any phase past PRESENTING)."""
+    from sqlalchemy import text as sa_text
+    from api.dependencies import resolve_translation
     await _validate_student_ownership(user, student_id, db)
-    result = await db.execute(
-        select(TeachingSession)
-        .where(TeachingSession.student_id == student_id)
-        .where(TeachingSession.phase.in_(["PRESENTING", "CARDS", "CARDS_DONE", "SELECTING_CHUNK", "CHECKING", "COMPLETED"]))
-        .order_by(TeachingSession.started_at.desc())
-        .limit(50)
-    )
-    sessions = result.scalars().all()
+    student = await db.get(Student, student_id)
+    lang = (student.preferred_language or "en") if student else "en"
+
+    # Single query with LATERAL join to fetch chunk heading and book title translations.
+    rows = (await db.execute(
+        sa_text("""
+            SELECT
+                ts.id,
+                ts.concept_id,
+                ts.book_slug,
+                ts.phase,
+                ts.check_score,
+                ts.concept_mastered,
+                ts.started_at,
+                ts.completed_at,
+                cc.heading          AS chunk_heading,
+                cc.heading_translations AS chunk_heading_tr,
+                b.title             AS book_title_en,
+                b.title_translations AS book_title_tr
+            FROM teaching_sessions ts
+            LEFT JOIN LATERAL (
+                SELECT heading, heading_translations
+                FROM concept_chunks
+                WHERE book_slug = ts.book_slug
+                  AND concept_id = ts.concept_id
+                ORDER BY order_index ASC
+                LIMIT 1
+            ) cc ON true
+            LEFT JOIN books b ON b.book_slug = ts.book_slug
+            WHERE ts.student_id = :student_id
+              AND ts.phase IN ('PRESENTING','CARDS','CARDS_DONE','SELECTING_CHUNK','CHECKING','COMPLETED')
+            ORDER BY ts.started_at DESC
+            LIMIT 50
+        """),
+        {"student_id": str(student_id)},
+    )).mappings().all()
+
     return {
         "student_id": str(student_id),
         "sessions": [
             {
-                "id": str(s.id),
-                "concept_id": s.concept_id,
-                "book_slug": s.book_slug,
-                "phase": s.phase,
-                "check_score": s.check_score,
-                "mastered": s.concept_mastered,
-                "started_at": s.started_at.isoformat() if s.started_at else None,
-                "completed_at": s.completed_at.isoformat() if s.completed_at else None,
+                "id": str(row["id"]),
+                "concept_id": row["concept_id"],
+                "book_slug": row["book_slug"],
+                "phase": row["phase"],
+                "check_score": row["check_score"],
+                "mastered": row["concept_mastered"],
+                "started_at": row["started_at"].isoformat() if row["started_at"] else None,
+                "completed_at": row["completed_at"].isoformat() if row["completed_at"] else None,
+                "concept_title": resolve_translation(
+                    row["chunk_heading"] or row["concept_id"] or "",
+                    row["chunk_heading_tr"] or {},
+                    lang,
+                ),
+                "book_title": resolve_translation(
+                    row["book_title_en"] or row["book_slug"] or "",
+                    row["book_title_tr"] or {},
+                    lang,
+                ),
             }
-            for s in sessions
+            for row in rows
         ],
     }
 
@@ -2405,6 +2463,51 @@ async def update_student_profile(
             raise HTTPException(400, "interests must be a list")
         student.interests = [str(i).strip() for i in interests if str(i).strip()][:20]
 
+    if "custom_interests" in body:
+        from api.interest_validator import validate_custom_interest
+        incoming = body["custom_interests"]
+        if not isinstance(incoming, list):
+            raise HTTPException(400, "custom_interests must be a list")
+
+        existing_custom = list(student.custom_interests or [])
+        cleaned: list[str] = []
+
+        for raw_item in incoming:
+            item = str(raw_item).strip()
+            if not item:
+                continue
+            # Items already persisted in this student's custom_interests are trusted —
+            # skip LLM re-validation (defence in depth without re-billing).
+            if any(ec.lower() == item.lower() for ec in existing_custom):
+                cleaned.append(item)
+                continue
+            # New item — run full validation (format + LLM).
+            result = await validate_custom_interest(
+                text=item,
+                language=student.preferred_language or "en",
+                existing_custom=cleaned,  # growing list prevents intra-request dupes
+                predefined_ids=PREDEFINED_INTEREST_IDS,
+            )
+            if not result.ok:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "field": "custom_interests",
+                        "item": item,
+                        "reason": result.reason,
+                    },
+                )
+            cleaned.append(result.normalized)
+
+        # Dedupe case-insensitively, preserve first occurrence, cap at max.
+        seen_lower: set[str] = set()
+        deduped: list[str] = []
+        for c in cleaned:
+            if c.lower() not in seen_lower:
+                seen_lower.add(c.lower())
+                deduped.append(c)
+        student.custom_interests = deduped[:CUSTOM_INTERESTS_MAX]
+
     await db.commit()
     await db.refresh(student)
     logger.info("[profile] Student %s updated own profile", student_id)
@@ -2414,4 +2517,5 @@ async def update_student_profile(
         "age": student.age,
         "preferred_style": student.preferred_style,
         "interests": student.interests or [],
+        "custom_interests": student.custom_interests or [],
     }
