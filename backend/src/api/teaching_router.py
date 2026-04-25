@@ -1210,11 +1210,17 @@ async def complete_chunk(
         from api.teaching_service import _mode_from_chunk_score
         next_mode = _mode_from_chunk_score(score)
 
+    # Resolve student language up-front so it's available even when
+    # presentation_text is NULL (e.g. after a cache bust).
+    _cm_student = await db.get(Student, session.student_id)
+    _cm_lang = (
+        (getattr(_cm_student, "preferred_language", "en") or "en")
+        if _cm_student else "en"
+    )
+
     # Update presentation_text cache with next mode
     if session.presentation_text:
         try:
-            _cm_student = await db.get(Student, session.student_id)
-            _cm_lang = getattr(_cm_student, "preferred_language", "en") or "en" if _cm_student else "en"
             _cm_ca = CacheAccessor(session.presentation_text, language=_cm_lang)
             _cm_slice = _cm_ca.get_slice()
             _cm_slice["current_mode"] = next_mode

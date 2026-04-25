@@ -387,12 +387,26 @@ export default function SettingsPage() {
             </div>
           )}
           {/* autoComplete="new-password" kills Chrome profile autofill on this text input; see DLD Follow-ups v2 */}
+          {/* Honeypot to absorb Chrome's autofill heuristic — keeps the real input clean */}
           <input
             type="text"
-            name="custom-interest"
-            autoComplete="new-password"
+            name="email"
+            autoComplete="username"
+            tabIndex={-1}
+            aria-hidden="true"
+            style={{ position: "absolute", left: "-9999px", width: 1, height: 1, opacity: 0 }}
+            readOnly
+          />
+          <input
+            type="text"
+            name="ada-topic-tag"
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck="false"
             role="textbox"
             data-lpignore="true"
+            data-form-type="other"
             value={customInterest}
             onChange={(e) => { setCustomInterest(e.target.value); setInterestErr(null); }}
             onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addCustomInterest(); } }}

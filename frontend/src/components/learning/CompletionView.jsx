@@ -53,13 +53,14 @@ export default function CompletionView() {
   }, [score, mastered]);
 
   useEffect(() => {
-    getNextConcepts(masteredConcepts)
+    if (!session?.book_slug) return;
+    getNextConcepts(masteredConcepts, session.book_slug)
       .then((res) => {
         const ready = res.data.ready_to_learn || [];
         if (ready.length > 0) setNextConcept(ready[0]);
       })
       .catch(() => {});
-  }, [masteredConcepts]);
+  }, [masteredConcepts, session?.book_slug]);
 
   const scoreLabel =
     score >= 90 ? t("completion.excellent") || "Excellent!" :
