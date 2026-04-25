@@ -229,6 +229,26 @@ class ChunkKnowledgeService:
         result = await db.execute(q)
         return result.scalar() or 0
 
+    @staticmethod
+    def _rewrite_image_urls(text: str | None, book_slug: str) -> str | None:
+        """Rewrite Mathpix-style relative image refs in chunk Markdown to absolute paths
+        served by the backend's /images/{book_slug}/mathpix_extracted mount.
+
+        Mathpix puts ![alt](./images/<uuid>-<page>_<crop>.jpg) into the MMD output.
+        Without rewriting, the browser resolves './images/...' against the current
+        page URL (e.g. /learn/...) → 404.
+        """
+        if not text or "images/" not in text:
+            return text
+        import re as _re
+        # Match  ![alt](./images/<file>)  OR  ![alt](images/<file>)
+        # Capture only the trailing filename segment (handles spaces/parens via greedy chars-without-)).
+        return _re.sub(
+            r'(!\[[^\]]*\]\()(?:\./)?images/([^)\s]+)(\))',
+            lambda m: f"{m.group(1)}/images/{book_slug}/mathpix_extracted/{m.group(2)}{m.group(3)}",
+            text,
+        )
+
     def _chunk_to_dict(self, chunk: ConceptChunk) -> dict:
         return {
             "id": str(chunk.id),
@@ -237,7 +257,7 @@ class ChunkKnowledgeService:
             "section": chunk.section,
             "order_index": chunk.order_index,
             "heading": chunk.heading,
-            "text": chunk.text,
+            "text": self._rewrite_image_urls(chunk.text, chunk.book_slug),
             "latex": chunk.latex or [],
             "images": [],  # populated separately via get_chunk_images()
             "chunk_type": chunk.chunk_type,

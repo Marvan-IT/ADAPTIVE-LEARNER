@@ -2610,6 +2610,7 @@ class TeachingService:
 
     async def regenerate_mcq(self, req: RegenerateMCQRequest) -> CardMCQ:
         """Generate a replacement MCQ after a wrong answer — same concept, different numbers/scenario."""
+        _lang = req.language or "en"
         system = (
             "You generate replacement MCQ questions for a K-12 math adaptive learning app. "
             "Generate ONE new multiple-choice question that tests the SAME concept as the previous "
@@ -2618,13 +2619,14 @@ class TeachingService:
             "Return ONLY valid JSON (no markdown, no code block): "
             "{\"text\": \"...\", \"options\": [\"A\", \"B\", \"C\", \"D\"], "
             "\"correct_index\": 0, \"explanation\": \"...\"}"
-            + _language_instruction(req.language or "en")
+            + _language_instruction(_lang)
         )
         user = (
             f"Card title: {req.card_title}\n"
             f"Card content:\n{req.card_content[:800]}\n\n"
             f"Previous question (do NOT reuse this exact question): {req.previous_question}\n\n"
             "Generate a new MCQ testing the same concept with different numbers or scenario."
+            + _language_instruction(_lang)
         )
         try:
             response = await self._chat(
