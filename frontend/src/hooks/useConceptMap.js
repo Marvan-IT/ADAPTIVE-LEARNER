@@ -3,16 +3,24 @@ import { useTranslation } from "react-i18next";
 import { getGraphFull, getNextConcepts } from "../api/concepts";
 import { useStudent } from "../context/StudentContext";
 
-export function useConceptMap(bookSlug = "prealgebra") {
+export function useConceptMap(bookSlug) {
   const { masteredConcepts } = useStudent();
   const { i18n } = useTranslation();
   const [nodes, setNodes] = useState([]);
   const [edges, setEdges] = useState([]);
   const [nodeStatuses, setNodeStatuses] = useState({});
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
   const fetchData = useCallback(async () => {
+    if (!bookSlug) {
+      setNodes([]);
+      setEdges([]);
+      setNodeStatuses({});
+      setLoading(false);
+      setError(null);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
