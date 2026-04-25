@@ -46,6 +46,16 @@ backend/uvicorn_stdout.log
 # ── Translation cache (runtime artifact) ───────────────────────────
 backend/translation_cache.json
 
+# ── Test files (kept local, never deployed) ────────────────────────
+backend/tests/
+frontend/e2e/
+frontend/vitest.config.js
+frontend/vitest.setup.js
+**/*.test.js
+**/*.test.jsx
+**/*.test.ts
+**/*.test.tsx
+
 # ── Node / frontend ────────────────────────────────────────────────
 node_modules/
 frontend/dist/
