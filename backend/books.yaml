@@ -33,7 +33,7 @@ books:
   book_slug: intermediate_algebra
   pdf_filename: maths/intermediate_algebra.pdf
   title: Intermediate Algebra 2e
-  subject: mathematics
+  subject: maths
   section_header_font: RobotoSlab-Bold
   section_header_size_min: 14.0
   section_header_size_max: 14.6
