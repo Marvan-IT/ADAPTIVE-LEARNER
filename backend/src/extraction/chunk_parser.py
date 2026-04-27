@@ -1218,6 +1218,23 @@ def _postprocess_chunks(
             _reassigned,
         )
 
+    # ── Step 0b: Reorder so reassigned exercise chunks land at end of chapter ──
+    # Step 0 changed concept_id/section on exercise chunks but not order_index. Without
+    # this re-sort the validator sees label sequences like 1.1 → 1.10 → 1.2 (out of
+    # order) because reassigned chunks keep their original parse-time order_index.
+    # Sort by (chapter, section_in_chapter parsed from concept_id, teaching-first,
+    # original_order_index) so monotonic section ordering is restored.
+    def _natural_sort_key(c: ParsedChunk) -> tuple[int, int, int, int]:
+        m = re.search(r"_(\d+)\.(\d+)$", c.concept_id)
+        ch_num = int(m.group(1)) if m else 9999
+        sub_num = int(m.group(2)) if m else 9999
+        type_priority = 0 if c.chunk_type == "teaching" else 1
+        return (ch_num, sub_num, type_priority, c.order_index)
+
+    raw_chunks.sort(key=_natural_sort_key)
+    for _new_idx, _c in enumerate(raw_chunks):
+        _c.order_index = _new_idx
+
     # ── Step 1: 3-copy deduplication ─────────────────────────────────────────
     # Include chunk_type in key so teaching + exercise chunks with same heading coexist
     seen: dict[tuple[str, str, str], ParsedChunk] = {}
