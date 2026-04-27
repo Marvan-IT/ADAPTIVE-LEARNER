@@ -3,6 +3,7 @@ import ReactMarkdown from "react-markdown";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import { Brain, User } from "lucide-react";
+import { resolveImageUrl } from "../../api/client";
 
 export default function ChatBubble({ role, content }) {
   const { t } = useTranslation();
@@ -50,7 +51,16 @@ export default function ChatBubble({ role, content }) {
           }}
         >
           {isAda ? (
-            <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]} skipHtml={true}>
+            <ReactMarkdown
+              remarkPlugins={[remarkMath]}
+              rehypePlugins={[rehypeKatex]}
+              skipHtml={true}
+              components={{
+                img: ({ src, alt, ...props }) => (
+                  <img src={resolveImageUrl(src)} alt={alt} {...props} />
+                ),
+              }}
+            >
               {content}
             </ReactMarkdown>
           ) : (

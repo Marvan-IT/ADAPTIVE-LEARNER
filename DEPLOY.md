@@ -40,6 +40,27 @@ PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -U $DB_USER -d $DB_NAME -c \
 
 This is **safe**: the next API request from each affected student will lazily regenerate their cards with the new (correct-language) prompt.
 
+## 3b. One-time stale-mastery cleanup (REQUIRED for mastery-rebuild release)
+
+Before the mastery rewrite, `complete-chunk` auto-mastered any concept where the student walked through all sub-chunks — regardless of MCQ/exam-gate score. Some students may now show mastered concepts they shouldn't have. Clear those rows so the new flow can re-evaluate them:
+
+```bash
+# Drop StudentMastery rows where the corresponding session has no chunk_progress
+# entries with passed=True (i.e., auto-mastered with score=0 under the old code).
+docker compose exec db psql -U postgres -d AdaptiveLearner -c "
+DELETE FROM student_mastery sm
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM teaching_sessions ts,
+       jsonb_each(ts.chunk_progress) AS prog(chunk_id, data)
+  WHERE ts.id = sm.session_id
+    AND (prog.data->>'passed')::boolean = TRUE
+);
+"
+```
+
+Students with cleared rows will need to retry the chunk's exam-gate (or finish its MCQs ≥50% for exam_disabled chunks) to remaster the concept.
+
 ## 4. Smoke test
 
 Open the app in a browser, log in, switch language to Malayalam, navigate to Settings:
@@ -52,10 +73,17 @@ If any of the above shows English: hard-refresh (Cmd+Shift+R / Ctrl+F5) to bypas
 
 ## What's in this release
 
-- Backend: per-card LLM prompts now include the strong language directive across all 6 student-facing paths (per-card, recovery, remediation, exam questions, MCQ regen, adaptive engine).
-- Backend: cache invalidation hooks on every admin content-edit handler + undo/redo paths. Students see admin edits on their next card fetch in their own language.
-- Backend: pipeline Stage 7 auto-translates new books into all 13 languages at ingestion time. No manual `translate_catalog.py` runs needed.
-- Backend: admin section-rename now translates the new name to all 12 non-English languages and stores in `admin_section_name_translations` JSONB column.
+- Backend: mastery flow rebuilt. `complete-chunk` no longer auto-masters; mastery requires every required (non-hidden, non-optional) chunk to have `passed=True` in `chunk_progress`. For exam_disabled or exercise chunks, pass = card MCQ score ≥ 50%. For exam-enabled teaching chunks, pass = exam-gate evaluate ≥ 50%. Single helper `_check_concept_mastered` is the only path to `StudentMastery` insert + `award_mastery_xp`; uses `_mastery_awarded` sentinel in JSONB for idempotency.
+- Backend: per-card LLM upgraded from `gpt-4o-mini` to `gpt-4o` for higher language fidelity (fixes English titles for non-English students).
+- Backend: image URLs in LLM-generated `card.content` post-processed via `_rewrite_image_urls` so inline Markdown images resolve to `/images/<book>/mathpix_extracted/<file>` and get served by nginx + backend mount.
+- Backend: per-card LLM prompts now include the strong language directive across all 6 student-facing paths.
+- Backend: cache invalidation hooks on every admin content-edit handler + undo/redo paths.
+- Backend: pipeline Stage 7 auto-translates new books into all 13 languages.
+- Backend: admin section-rename auto-translates into 12 non-English languages.
+- Frontend: `adaptiveCardLoading` now cleared on terminal reducer cases (`CHUNK_COMPLETED`, `SHOW_CHUNK_QUESTIONS`, `RETURN_TO_PICKER`). Fixes stuck "preparing your lesson cards" skeleton after chunk completion.
+- Frontend: recovery-card double-wrong on the last card no longer leaves the student stuck — routes to exam gate or chunk completion.
+- Frontend: every `<ReactMarkdown>` instance now uses a custom `img` component that runs URLs through `resolveImageUrl()`, defending against any URL format the LLM produces.
+- Frontend: `useConceptMap` and `concepts.js` no longer accept null book_slug (legacy default removed; throws explicitly).
 - Frontend: AdminBookContentPage + AdminReviewPage popups translatable via `dialog.prompt()`.
 - Frontend: tutor styles + interests render translated labels.
 - Locale files: 0 missing keys across all 13.

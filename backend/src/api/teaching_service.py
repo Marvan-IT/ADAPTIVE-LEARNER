@@ -1002,7 +1002,7 @@ class TeachingService:
                 {"role": "user", "content": _pc_user_content},
             ],
             max_tokens=NEXT_CARD_MAX_TOKENS,
-            model="mini",
+            model=None,  # use gpt-4o for per-card: title/body language fidelity
             timeout=30.0,
         )
 
@@ -1069,6 +1069,26 @@ class TeachingService:
         if resolved_image:
             card_dict["image_url"] = resolved_image.get("url") or resolved_image.get("image_url")
             card_dict["caption"]   = resolved_image.get("caption") or resolved_image.get("description")
+
+        # ── Step 13b: Rewrite any relative image URLs in card content/image_url ─
+        # LLM output may contain ./images/<file> or bare Mathpix filenames.
+        # Rewrite to absolute /images/{book_slug}/mathpix_extracted/<file> paths
+        # before caching so the frontend never has to resolve relative refs.
+        try:
+            from api.chunk_knowledge_service import ChunkKnowledgeService as _CKS
+            if card_dict.get("content"):
+                card_dict["content"] = _CKS._rewrite_image_urls(card_dict["content"], _pc_book_slug) or card_dict["content"]
+            if card_dict.get("image_url"):
+                _rewritten_iu = _CKS._rewrite_image_urls(
+                    f"![img]({card_dict['image_url']})", _pc_book_slug
+                )
+                if _rewritten_iu and _rewritten_iu != f"![img]({card_dict['image_url']})":
+                    import re as _re_iu
+                    _m = _re_iu.search(r'\(([^)]+)\)', _rewritten_iu)
+                    if _m:
+                        card_dict["image_url"] = _m.group(1)
+        except Exception:
+            logger.warning("[per-card] image URL rewrite failed, using original URLs")
 
         # ── Step 14: Update cache and flush ──────────────────────────────────
         cached["concepts_queue"] = concepts_queue
@@ -1539,6 +1559,25 @@ class TeachingService:
                 "chunk_id": chunk_id,
             }
             cards = [fallback]
+
+        # Rewrite any relative image URLs produced by the LLM in card content
+        try:
+            from api.chunk_knowledge_service import ChunkKnowledgeService as _CKS
+            _slug_for_rewrite = chunk.get("book_slug", "prealgebra")
+            for _card in cards:
+                if _card.get("content"):
+                    _card["content"] = _CKS._rewrite_image_urls(_card["content"], _slug_for_rewrite) or _card["content"]
+                if _card.get("image_url"):
+                    _rw = _CKS._rewrite_image_urls(
+                        f"![img]({_card['image_url']})", _slug_for_rewrite
+                    )
+                    if _rw and _rw != f"![img]({_card['image_url']})":
+                        import re as _re_pc
+                        _m = _re_pc.search(r'\(([^)]+)\)', _rw)
+                        if _m:
+                            _card["image_url"] = _m.group(1)
+        except Exception:
+            logger.warning("[per-chunk] image URL rewrite failed, using original URLs")
 
         logger.info(
             "[per-chunk] generated: session_id=%s chunk_id=%s cards=%d mode=%s",

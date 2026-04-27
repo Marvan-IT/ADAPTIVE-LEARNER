@@ -237,17 +237,38 @@ class ChunkKnowledgeService:
         Mathpix puts ![alt](./images/<uuid>-<page>_<crop>.jpg) into the MMD output.
         Without rewriting, the browser resolves './images/...' against the current
         page URL (e.g. /learn/...) → 404.
+
+        Also handles bare filenames the LLM occasionally emits when it copies the
+        filename without the ``images/`` prefix, e.g. ``![alt](<uuid>-1_0_0_100_200.jpg)``.
         """
-        if not text or "images/" not in text:
+        if not text:
             return text
         import re as _re
-        # Match  ![alt](./images/<file>)  OR  ![alt](images/<file>)
-        # Capture only the trailing filename segment (handles spaces/parens via greedy chars-without-)).
-        return _re.sub(
-            r'(!\[[^\]]*\]\()(?:\./)?images/([^)\s]+)(\))',
-            lambda m: f"{m.group(1)}/images/{book_slug}/mathpix_extracted/{m.group(2)}{m.group(3)}",
-            text,
+
+        # Pass 1: ./images/<file>  OR  images/<file>
+        if "images/" in text:
+            text = _re.sub(
+                r'(!\[[^\]]*\]\()(?:\./)?images/([^)\s]+)(\))',
+                lambda m: f"{m.group(1)}/images/{book_slug}/mathpix_extracted/{m.group(2)}{m.group(3)}",
+                text,
+            )
+
+        # Pass 2: bare Mathpix filenames — UUID pattern without any path prefix.
+        # Pattern: <hex>-<digits>_<digits>_<digits>_<digits>_<digits>.jpg
+        # Only rewrite if not already an absolute path.
+        _bare_pat = _re.compile(
+            r'(!\[[^\]]*\]\()([0-9a-f]{8,}-\d+_\d+_\d+_\d+_\d+\.(?:jpg|jpeg|png))(\))',
+            _re.IGNORECASE,
         )
+        def _bare_replacer(m: "_re.Match[str]") -> str:
+            url = m.group(2)
+            # Skip if already absolute (starts with / or http)
+            if url.startswith("/") or url.lower().startswith("http"):
+                return m.group(0)
+            return f"{m.group(1)}/images/{book_slug}/mathpix_extracted/{url}{m.group(3)}"
+
+        text = _bare_pat.sub(_bare_replacer, text)
+        return text
 
     def _chunk_to_dict(self, chunk: ConceptChunk) -> dict:
         return {

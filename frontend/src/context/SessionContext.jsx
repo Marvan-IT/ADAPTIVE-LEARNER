@@ -273,6 +273,7 @@ function sessionReducer(state, action) {
         nextChunkCards: null,
         nextChunkInFlight: false,
         loading: false,
+        adaptiveCardLoading: false,
         chunkEvalResult: null,
         chunkQuestions: [],
         cardAnswers: {},
@@ -318,7 +319,7 @@ function sessionReducer(state, action) {
       };
 
     case "SHOW_CHUNK_QUESTIONS":
-      return { ...state, phase: "CHUNK_QUESTIONS", chunkEvalResult: null };
+      return { ...state, phase: "CHUNK_QUESTIONS", chunkEvalResult: null, adaptiveCardLoading: false };
 
     case "CHUNK_EVAL_RESULT": {
       const { passed, all_study_complete, chunk_progress, next_mode, ...rest } = action.payload;
@@ -364,6 +365,7 @@ function sessionReducer(state, action) {
       const newMode = action.payload.next_mode || prevMode;
       return {
         ...state,
+        adaptiveCardLoading: false,
         chunkProgress: {
           ...state.chunkProgress,
           [action.payload.chunk_id]: {
@@ -523,8 +525,43 @@ export function SessionProvider({ children }) {
       // CASE A: second MCQ fail → recovery card via chunk-recovery-card endpoint
       if (signals?.wrongAttempts >= 2 && signals?.reExplainCardTitle) {
         const currentCard = state.cards[state.currentCardIndex];
-        // Anti-loop: if current card is already a recovery card, just advance — no nested recovery
+        // Anti-loop: if current card is already a recovery card and it IS the last card,
+        // exit the cards phase cleanly instead of clamping in place.
         if (currentCard?.is_recovery || currentCard?.card_type === "recovery") {
+          const isLastRecovery = state.currentCardIndex >= state.cards.length - 1;
+          if (isLastRecovery) {
+            // Exit cards phase: route to exam gate if questions exist, else complete the chunk.
+            if (state.chunkQuestions.length > 0) {
+              dispatch({ type: "SHOW_CHUNK_QUESTIONS" });
+            } else {
+              if (state.currentChunkId) {
+                try {
+                  const _answers = Object.values(state.cardAnswers);
+                  const _correct = _answers.filter(a => a.correct).length;
+                  const _total = _answers.length > 0 ? _answers.length : 1;
+                  const res = await completeChunk(state.session.id, {
+                    chunk_id: state.currentChunkId,
+                    correct: _correct,
+                    total: _total,
+                    mode_used: state.currentChunkMode || "NORMAL",
+                  });
+                  dispatch({ type: "CHUNK_COMPLETED", payload: res.data });
+                  if (res.data.next_mode) {
+                    useAdaptiveStore.getState().setMode(res.data.next_mode);
+                  }
+                  if (res.data.all_study_complete) {
+                    refreshMastery();
+                    dispatch({ type: "SESSION_COMPLETED" });
+                    return;
+                  }
+                } catch (err) {
+                  console.error("[SessionContext] recovery-card last-card completeChunk failed:", err);
+                }
+              }
+              dispatch({ type: "RETURN_TO_PICKER" });
+            }
+            return;
+          }
           dispatch({ type: "NEXT_CARD" });
           return;
         }
@@ -589,12 +626,15 @@ export function SessionProvider({ children }) {
     },
     [
       state.session,
-      state.cards.length,
+      state.cards,
       state.currentCardIndex,
       state.adaptiveCallInFlight,
       state.chunkList,
       state.currentChunkId,
       state.currentChunkMode,
+      state.chunkQuestions,
+      state.cardAnswers,
+      refreshMastery,
     ]
   );
 

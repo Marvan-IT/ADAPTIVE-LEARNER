@@ -59,5 +59,9 @@ export default api;
 export const resolveImageUrl = (url) => {
   if (!url) return url;
   if (url.startsWith("http://") || url.startsWith("https://")) return url;
-  return `${API_BASE_URL}${url}`;
+  // Already absolute path served by nginx — pass through unchanged.
+  if (url.startsWith("/images/")) return url;
+  // Relative paths: prepend API base so axios/browser can resolve them.
+  // The real fix is on the backend (_rewrite_image_urls); this is defensive only.
+  return `${API_BASE_URL}${url.startsWith("/") ? "" : "/"}${url}`;
 };

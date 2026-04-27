@@ -61,7 +61,16 @@ function CheckInCard({ card, onSelect }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "1rem", paddingTop: "1rem", paddingBottom: "1rem" }}>
       <div className="markdown-content" style={{ textAlign: "center", maxWidth: "480px" }}>
-        <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]} skipHtml={true}>
+        <ReactMarkdown
+          remarkPlugins={[remarkMath]}
+          rehypePlugins={[rehypeKatex]}
+          skipHtml={true}
+          components={{
+            img: ({ src, alt, ...props }) => (
+              <img src={resolveImageUrl(src)} alt={alt} {...props} />
+            ),
+          }}
+        >
           {card.content}
         </ReactMarkdown>
       </div>
@@ -690,7 +699,16 @@ export default function CardLearningView({ remediationMode = false, onCardStates
             <>
                 {/* Card content — markdown with math support */}
                 <div className="markdown-content">
-                  <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]} skipHtml={true}>
+                  <ReactMarkdown
+                    remarkPlugins={[remarkMath]}
+                    rehypePlugins={[rehypeKatex]}
+                    skipHtml={true}
+                    components={{
+                      img: ({ src, alt, ...props }) => (
+                        <img src={resolveImageUrl(src)} alt={alt} {...props} />
+                      ),
+                    }}
+                  >
                     {card.content}
                   </ReactMarkdown>
                 </div>
@@ -1063,7 +1081,12 @@ function MCQBlock({ question, index, feedback, isCorrect, onAnswer }) {
         <ReactMarkdown
           remarkPlugins={[remarkMath]}
           rehypePlugins={[rehypeKatex]}
-          components={{ p: ({ children }) => <span>{children}</span> }}
+          components={{
+            p: ({ children }) => <span>{children}</span>,
+            img: ({ src, alt, ...props }) => (
+              <img src={resolveImageUrl(src)} alt={alt} {...props} />
+            ),
+          }}
           skipHtml={true}
         >
           {question.question}
@@ -1130,7 +1153,12 @@ function MCQBlock({ question, index, feedback, isCorrect, onAnswer }) {
               <ReactMarkdown
                 remarkPlugins={[remarkMath]}
                 rehypePlugins={[rehypeKatex]}
-                components={{ p: ({ children }) => <span>{children}</span> }}
+                components={{
+                  p: ({ children }) => <span>{children}</span>,
+                  img: ({ src, alt, ...props }) => (
+                    <img src={resolveImageUrl(src)} alt={alt} {...props} />
+                  ),
+                }}
                 skipHtml={true}
               >
                 {opt}

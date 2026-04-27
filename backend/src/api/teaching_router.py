@@ -184,6 +184,106 @@ teaching_svc = None
 chunk_ksvc = None  # ChunkKnowledgeService — injected by main.py lifespan
 
 
+async def _check_concept_mastered(
+    session: "TeachingSession",
+    db: "AsyncSession",
+    exam_score: int | None = None,
+) -> tuple[bool, dict | None]:
+    """Single source of truth for concept-level mastery.
+
+    Reads all required chunks (non-hidden, non-optional) for the session's concept
+    and returns ``(True, xp_data)`` only when every required chunk has
+    ``passed=True`` in ``session.chunk_progress``.
+
+    On first mastery: inserts/updates StudentMastery, sets session flags, and
+    calls ``award_mastery_xp``.  Idempotent — the ``_mastery_awarded`` sentinel
+    in ``chunk_progress`` prevents double-XP.
+
+    Args:
+        session: the active TeachingSession (mutated in place on mastery).
+        db: async database session.
+        exam_score: optional integer score (0-100) passed to award_mastery_xp
+            for bonus XP calculation.
+
+    Returns:
+        Tuple of (mastered: bool, xp_data: dict | None).
+    """
+    from datetime import datetime, timezone as _tz
+
+    # Guard: don't re-award if we already did it this session
+    progress = dict(session.chunk_progress or {})
+    if progress.get("_mastery_awarded"):
+        return True, None
+
+    try:
+        all_chunks = await chunk_ksvc.get_chunks_for_concept(
+            db, session.book_slug or "prealgebra", session.concept_id, lang="en"
+        )
+    except Exception:
+        logger.exception("[_check_concept_mastered] failed to load chunks for concept_id=%s", session.concept_id)
+        return False, None
+
+    required = [
+        c for c in all_chunks
+        if not c.get("is_hidden", False) and not c.get("is_optional", False)
+    ]
+
+    if not required:
+        return False, None
+
+    for chunk in required:
+        chunk_prog = progress.get(str(chunk["id"]), {})
+        if not chunk_prog.get("passed"):
+            return False, None
+
+    # All required chunks passed — award mastery
+    now = datetime.now(_tz.utc)
+    session.concept_mastered = True
+    session.phase = "COMPLETED"
+    session.completed_at = now
+
+    _existing_result = await db.execute(
+        select(StudentMastery).where(
+            StudentMastery.student_id == session.student_id,
+            StudentMastery.concept_id == session.concept_id,
+        )
+    )
+    _existing_mastery = _existing_result.scalar_one_or_none()
+    if _existing_mastery:
+        _existing_mastery.session_id = session.id
+        _existing_mastery.mastered_at = now
+    else:
+        db.add(StudentMastery(
+            student_id=session.student_id,
+            concept_id=session.concept_id,
+            session_id=session.id,
+        ))
+
+    # Mark sentinel before flush so concurrent calls skip double-award
+    progress["_mastery_awarded"] = True
+    session.chunk_progress = progress
+
+    logger.info(
+        "[_check_concept_mastered] MASTERED: session_id=%s concept_id=%s",
+        session.id, session.concept_id,
+    )
+
+    await db.flush()
+    xp_data: dict | None = None
+    try:
+        from gamification.xp_engine import award_mastery_xp
+        xp_data = await award_mastery_xp(
+            db=db,
+            student_id=session.student_id,
+            session_id=session.id,
+            score=exam_score,
+        )
+    except Exception:
+        logger.exception("[_check_concept_mastered] mastery XP award failed")
+
+    return True, xp_data
+
+
 async def _validate_student_ownership(user: User, student_id: UUID, db: AsyncSession) -> None:
     """Ensure the authenticated user owns the student profile.
 
@@ -1173,12 +1273,43 @@ async def complete_chunk(
 
     # Record progress — full dict reassignment required for JSONB change detection
     existing_progress = dict(session.chunk_progress or {})
+
+    # Determine whether this chunk's completion counts as "passed" immediately.
+    # Teaching chunks with exam gate enabled are NOT marked passed here — that
+    # happens in evaluate-chunk when the student submits exam answers.
+    _cc_chunk = await chunk_ksvc.get_chunk(db, req.chunk_id)
+    _cc_exam_disabled = (
+        _cc_chunk.get("exam_disabled", False) if isinstance(_cc_chunk, dict)
+        else getattr(_cc_chunk, "exam_disabled", False)
+    ) if _cc_chunk else False
+    _cc_chunk_type = (
+        _cc_chunk.get("chunk_type", "") if isinstance(_cc_chunk, dict)
+        else getattr(_cc_chunk, "chunk_type", "")
+    ) if _cc_chunk else ""
+    from api.teaching_service import EXERCISE_HEADING_PATTERNS as _EXERCISE_PATTERNS
+    _cc_is_exercise = (
+        _cc_chunk_type == "exercise"
+        or (_cc_chunk and any(
+            p in (_cc_chunk.get("heading") or "").lower()
+            for p in _EXERCISE_PATTERNS
+        ))
+    )
+
+    # exam_disabled OR exercise: decide pass/fail from MCQ score right now
+    _cc_passed: bool | None
+    if _cc_exam_disabled or _cc_is_exercise:
+        _cc_passed = score >= round(CHUNK_EXAM_PASS_RATE * 100)
+    else:
+        # Teaching chunk with exam gate: mark not-yet-passed until evaluate-chunk runs
+        _cc_passed = False
+
     existing_progress[req.chunk_id] = {
         "mode": req.mode_used,
         "score": score,
         "correct": req.correct,
         "total": req.total,
         "completed_at": datetime.now(timezone.utc).isoformat(),
+        "passed": _cc_passed,
     }
     session.chunk_progress = existing_progress
 
@@ -1249,49 +1380,9 @@ async def complete_chunk(
         None,
     )
 
-    # all_study_complete: all visible, required teaching chunks completed
-    # Hidden and optional chunks are excluded — they must not block mastery
-    completed_ids = set(existing_progress.keys())
-    required_ids = {
-        str(c["id"]) for c in all_sorted
-        if _effective_chunk_type(c) == "teaching"
-        and not c.get("is_optional", False)
-        and not c.get("is_hidden", False)
-    }
-    all_study_complete = required_ids.issubset(completed_ids)
-
-    # Record mastery when all required chunks are complete (mirrors evaluate_chunk_answers logic)
-    if all_study_complete:
-        from datetime import datetime, timezone as _tz
-        session.concept_mastered = True
-        session.phase = "COMPLETED"
-        session.completed_at = datetime.now(_tz.utc)
-        _existing_result = await db.execute(
-            select(StudentMastery).where(
-                StudentMastery.student_id == session.student_id,
-                StudentMastery.concept_id == session.concept_id,
-            )
-        )
-        _existing_mastery = _existing_result.scalar_one_or_none()
-        if _existing_mastery:
-            _existing_mastery.session_id = session.id
-            _existing_mastery.mastered_at = datetime.now(_tz.utc)
-        else:
-            db.add(StudentMastery(
-                student_id=session.student_id,
-                concept_id=session.concept_id,
-                session_id=session.id,
-            ))
-        logger.info(
-            "[complete-chunk] concept MASTERED: session_id=%s concept_id=%s score=%s",
-            session_id, session.concept_id, score,
-        )
-        await db.flush()
-        try:
-            from gamification.xp_engine import award_mastery_xp
-            await award_mastery_xp(db=db, student_id=session.student_id, session_id=session.id, score=score)
-        except Exception:
-            logger.exception("[complete-chunk] mastery XP award failed")
+    # all_study_complete: all required chunks have passed=True (replaces old completion check)
+    # This now requires real pass marks, not just "visited".
+    all_study_complete, _ = await _check_concept_mastered(session, db)
 
     await db.commit()
     return CompleteChunkResponse(
@@ -1502,7 +1593,7 @@ async def evaluate_chunk_answers(
             mcq_pct = round((req.mcq_correct / req.mcq_total) * 100) if req.mcq_total > 0 else 50
             next_mode = _mode_from_chunk_score(mcq_pct)
 
-        # Record chunk progress
+        # Record chunk progress — mark passed=True since exam gate was cleared
         existing_progress = dict(session.chunk_progress or {})
         score_pct = round(score_frac * 100)
         existing_progress[chunk_id] = {
@@ -1510,66 +1601,28 @@ async def evaluate_chunk_answers(
             "score": score_pct,
             "correct": correct_count,
             "total": total,
+            "passed": True,  # exam gate passed
         }
         session.chunk_progress = existing_progress
         chunk_progress_update = {chunk_id: {"score": score_pct, "mode_used": req.mode_used}}
 
-        # Compute all_study_complete — visible, required teaching chunks only
-        # Hidden and optional chunks are excluded — they must not block mastery
+        # Check concept-level mastery via the single source of truth
         try:
-            all_chunks = await chunk_ksvc.get_chunks_for_concept(
-                db, session.book_slug or "prealgebra", session.concept_id, lang="en"
+            all_study_complete, _mastery_xp = await _check_concept_mastered(
+                session, db, exam_score=int(round(score_frac * 100))
             )
-            all_sorted = sorted(all_chunks, key=lambda c: c["order_index"])
-            required_ids = {
-                str(c["id"]) for c in all_sorted
-                if _effective_chunk_type(c) == "teaching"
-                and not c.get("is_optional", False)
-                and not c.get("is_hidden", False)
-            }
-            completed_ids = set(existing_progress.keys())
-            all_study_complete = required_ids.issubset(completed_ids)
         except Exception:
-            logger.exception("[evaluate-chunk] all_study_complete check failed")
+            logger.exception("[evaluate-chunk] _check_concept_mastered failed")
+            all_study_complete = False
+            _mastery_xp = None
 
-        # Part 2 — StudentMastery insertion when all study complete
         if all_study_complete:
-            from datetime import datetime, timezone as _tz
-            session.concept_mastered = True
-            session.phase = "COMPLETED"
-            session.completed_at = datetime.now(_tz.utc)
-            _existing_result = await db.execute(
-                select(StudentMastery).where(
-                    StudentMastery.student_id == session.student_id,
-                    StudentMastery.concept_id == session.concept_id,
-                )
-            )
-            _existing_mastery = _existing_result.scalar_one_or_none()
-            if _existing_mastery:
-                _existing_mastery.session_id = session.id
-                _existing_mastery.mastered_at = datetime.now(_tz.utc)
-            else:
-                db.add(StudentMastery(
-                    student_id=session.student_id,
-                    concept_id=session.concept_id,
-                    session_id=session.id,
-                ))
             logger.info(
-                "[evaluate-chunk] concept MASTERED via KC: session_id=%s concept_id=%s",
+                "[evaluate-chunk] concept MASTERED via exam gate: session_id=%s concept_id=%s",
                 session_id, session.concept_id,
             )
-
-            # Award mastery XP (flush so the mastery row is visible to badge queries)
-            await db.flush()
-            from gamification.xp_engine import award_mastery_xp
-            mastery_xp_result = await award_mastery_xp(
-                db=db,
-                student_id=session.student_id,
-                session_id=session.id,
-                score=int(round(score_frac * 100)) if score_frac is not None else None,
-            )
-            mastery_xp_data = mastery_xp_result
-            chunk_badges = chunk_badges + mastery_xp_result.get("new_badges", [])
+            mastery_xp_data = _mastery_xp or {}
+            chunk_badges = chunk_badges + (mastery_xp_data.get("new_badges") or [])
 
     await db.commit()
 
