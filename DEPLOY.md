@@ -70,10 +70,15 @@ No Alembic migration is needed — the `chunk_type` column already tolerates the
 
 ### Pre-deploy: wipe prealgebra_2e
 
-Run on the server after `git pull` and before restarting the backend:
+Run on the server after `git pull` and before restarting the backend. Order matters:
+`student_mastery.session_id` does not cascade, so its rows must be deleted before the
+referenced teaching_sessions rows. Other FKs (conversation_messages, card_interactions,
+chunks-via-concepts) cascade automatically.
 
 ```bash
 docker compose exec db psql -U postgres -d AdaptiveLearner -c "
+DELETE FROM student_mastery WHERE session_id IN (SELECT id FROM teaching_sessions WHERE book_slug='prealgebra_2e');
+DELETE FROM student_mastery WHERE concept_id LIKE 'prealgebra_2e%';
 DELETE FROM teaching_sessions WHERE book_slug='prealgebra_2e';
 DELETE FROM concept_chunks WHERE book_slug='prealgebra_2e';
 DELETE FROM concepts WHERE book_slug='prealgebra_2e';
@@ -83,11 +88,12 @@ DELETE FROM books WHERE slug='prealgebra_2e';
 
 ### Re-ingest
 
-Stage 7 auto-translates into all 13 languages. The source MMD/PDF must exist on disk at the path
-the pipeline expects (check `BOOK_REGISTRY` in `backend/src/config.py` if the run fails at Stage A):
+Stage 7 auto-translates into all 13 languages. **The pipeline takes the BOOK CODE
+(registry key in `backend/src/config.py:BOOK_REGISTRY`), not the slug used in DB columns.**
+For prealgebra_2e the code is `PREALG2E` (slug stored in `book_slug` column is `prealgebra_2e`).
 
 ```bash
-docker compose exec backend python -m src.pipeline --book prealgebra_2e
+docker compose exec backend python -m src.pipeline --book PREALG2E
 ```
 
 ### Restart
