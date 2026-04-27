@@ -1871,6 +1871,11 @@ async def update_chunk(
     old_heading = chunk.heading
 
     body = await request.json()
+    if "chunk_type" in body and body["chunk_type"] not in ("teaching", "exercise"):
+        raise HTTPException(
+            status_code=400,
+            detail="chunk_type must be 'teaching' or 'exercise'",
+        )
     _allowed = {"heading", "text", "chunk_type", "is_optional", "is_hidden", "exam_disabled", "chunk_type_locked"}
     for field in _allowed:
         if field not in body:

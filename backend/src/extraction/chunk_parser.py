@@ -273,15 +273,15 @@ def _classify_chunk(raw_heading: str, in_exercises_zone: bool, section_label: st
 
     # Group-tagged headings from exercise zone tagging step
     if raw_heading.endswith(" (ChapterReview)"):
-        return "chapter_review", True
+        return "exercise", True   # review = practice problems, optional
     if raw_heading.endswith(" (Lab)"):
-        return "lab", is_opt
+        return "teaching", is_opt  # lab content maps to teaching
 
     if in_exercises_zone or _EXERCISE_HEADING_PATTERN.match(h):
         is_writing = bool(re.match(r"^writing exercises?", h, re.IGNORECASE))
         return "exercise", is_opt or is_writing
     if is_lab:
-        return "lab", is_opt
+        return "teaching", is_opt  # lab flag also maps to teaching
     return "teaching", is_opt
 
 
@@ -934,7 +934,7 @@ def _build_section_chunks(
                         latex=_intro_latex,
                         image_urls=_intro_images,
                         image_captions=_intro_captions,
-                        chunk_type="chapter_intro",
+                        chunk_type="teaching",
                         is_optional=False,
                     ))
                     global_order += 1
@@ -1072,7 +1072,7 @@ def _build_section_chunks(
                 # Chapter Review zone → override (section label or body content)
                 _sec_lower = sec["section_label"].lower()
                 if _review_zone_start is not None or any(kw in _sec_lower for kw in ("chapter review", "key terms", "key concepts", "review exercises")):
-                    _ctype = "chapter_review"
+                    _ctype = "exercise"   # chapter review zones contain practice problems
                     _opt = True
                 _images = _extract_image_urls(text)
                 _captions = _extract_image_captions(text, len(_images))
@@ -1126,13 +1126,13 @@ def _build_section_chunks(
             _in_zone = heading_text.endswith(" (Exercises)") or heading_text.endswith(" (ChapterReview)") or heading_text.endswith(" (Lab)")
             _ctype, _opt = _classify_chunk(heading_text, _in_zone, sec["section_label"])
 
-            # Chapter Review zone → override to chapter_review type + optional
+            # Chapter Review zone → override to exercise type + optional
             _sec_lower = sec["section_label"].lower()
             if any(kw in _sec_lower for kw in ("chapter review", "key terms", "key concepts", "review exercises")):
-                _ctype = "chapter_review"
+                _ctype = "exercise"   # chapter review zones contain practice problems
                 _opt = True
             elif _review_zone_start is not None and sh_start >= _review_zone_start:
-                _ctype = "chapter_review"
+                _ctype = "exercise"   # chapter review zones contain practice problems
                 _opt = True
             _images = _extract_image_urls(chunk_text)
             _captions = _extract_image_captions(chunk_text, len(_images))
@@ -1182,10 +1182,9 @@ def _postprocess_chunks(
     max_chunk_words = config["max_chunk_words"]
 
     # ── Step 0: Re-assign chapter back matter to last regular section ────────
-    # Chunks with chunk_type "chapter_review" that have their own concept_id
-    # (e.g., a "Chapter Review" section) should be re-assigned to the last
-    # regular teaching section in the same chapter so they appear as subsections
-    # of that section in the admin UI.
+    # Chunks with chunk_type "exercise" from chapter review zones that have their
+    # own concept_id should be re-assigned to the last regular teaching section
+    # in the same chapter so they appear as subsections of that section in the admin UI.
     _last_section_per_chapter: dict[int, str] = {}  # chapter_num → concept_id
     _last_section_label_per_chapter: dict[int, str] = {}
     for chunk in raw_chunks:
@@ -1199,7 +1198,7 @@ def _postprocess_chunks(
 
     _reassigned = 0
     for chunk in raw_chunks:
-        if chunk.chunk_type != "chapter_review":
+        if chunk.chunk_type != "exercise":
             continue
         # Anchor to end so compound slugs like "prealgebra2e_0qbw93r_(1)_1.3" work
         _cid_match = re.search(r"_(\d+)\.\d+$", chunk.concept_id)

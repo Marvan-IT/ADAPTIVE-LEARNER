@@ -61,6 +61,74 @@ WHERE NOT EXISTS (
 
 Students with cleared rows will need to retry the chunk's exam-gate (or finish its MCQs ≥50% for exam_disabled chunks) to remaster the concept.
 
+## 3c. Two-type chunk_type architecture (Round 4)
+
+This section is **required** when deploying the Round 4 commit that collapses `chunk_type` to
+the two-canonical-value alphabet (`teaching`, `exercise`). The prealgebra_2e book must be wiped
+and re-ingested so the DB contains no legacy `chapter_intro`, `chapter_review`, or `lab` rows.
+No Alembic migration is needed — the `chunk_type` column already tolerates the smaller alphabet.
+
+### Pre-deploy: wipe prealgebra_2e
+
+Run on the server after `git pull` and before restarting the backend:
+
+```bash
+docker compose exec db psql -U postgres -d AdaptiveLearner -c "
+DELETE FROM teaching_sessions WHERE book_slug='prealgebra_2e';
+DELETE FROM concept_chunks WHERE book_slug='prealgebra_2e';
+DELETE FROM concepts WHERE book_slug='prealgebra_2e';
+DELETE FROM books WHERE slug='prealgebra_2e';
+"
+```
+
+### Re-ingest
+
+Stage 7 auto-translates into all 13 languages. The source MMD/PDF must exist on disk at the path
+the pipeline expects (check `BOOK_REGISTRY` in `backend/src/config.py` if the run fails at Stage A):
+
+```bash
+docker compose exec backend python -m src.pipeline --book prealgebra_2e
+```
+
+### Restart
+
+```bash
+docker compose restart backend
+```
+
+### Verification SQL
+
+Must return **exactly 2 rows** — one for `teaching`, one for `exercise`. Any other value means a
+legacy type survived ingest and the pipeline fix was not applied:
+
+```bash
+docker compose exec db psql -U postgres -d AdaptiveLearner -c "
+SELECT chunk_type, COUNT(*) FROM concept_chunks WHERE book_slug='prealgebra_2e' GROUP BY chunk_type;
+"
+```
+
+### Smoke test (manual)
+
+1. Log in as a Malayalam student.
+2. Pick prealgebra_2e and navigate to any concept.
+3. Walk through a **teaching** chunk: after all cards, exam-gate questions should appear.
+4. Pass the exam → chunk `passed=True` → concept shows `MASTERED` + 50 XP with `score=<int>` (not `score=None`).
+5. Fail the exam → chunk stays `passed=False` → no mastery granted.
+
+### Rollback
+
+No Alembic migration was added for Round 4 — rollback is a code revert followed by re-ingest:
+
+```bash
+git revert <round-4-commit>
+git push
+# SSH to server:
+#   git pull
+#   docker compose restart backend
+# Re-run the pre-deploy wipe SQL above (clears any partially-ingested data)
+# Re-run the re-ingest command to restore the book under the reverted pipeline
+```
+
 ## 4. Smoke test
 
 Open the app in a browser, log in, switch language to Malayalam, navigate to Settings:
@@ -73,6 +141,7 @@ If any of the above shows English: hard-refresh (Cmd+Shift+R / Ctrl+F5) to bypas
 
 ## What's in this release
 
+- Backend: chunk_type alphabet collapsed to two canonical types (teaching, exercise). Pipeline emits only those two; admin endpoint validates; mastery rule simplified to two-branch.
 - Backend: mastery flow rebuilt. `complete-chunk` no longer auto-masters; mastery requires every required (non-hidden, non-optional) chunk to have `passed=True` in `chunk_progress`. For exam_disabled or exercise chunks, pass = card MCQ score ≥ 50%. For exam-enabled teaching chunks, pass = exam-gate evaluate ≥ 50%. Single helper `_check_concept_mastered` is the only path to `StudentMastery` insert + `award_mastery_xp`; uses `_mastery_awarded` sentinel in JSONB for idempotency.
 - Backend: per-card LLM upgraded from `gpt-4o-mini` to `gpt-4o` for higher language fidelity (fixes English titles for non-English students).
 - Backend: image URLs in LLM-generated `card.content` post-processed via `_rewrite_image_urls` so inline Markdown images resolve to `/images/<book>/mathpix_extracted/<file>` and get served by nginx + backend mount.

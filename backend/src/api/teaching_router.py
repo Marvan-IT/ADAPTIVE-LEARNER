@@ -75,55 +75,37 @@ logger = logging.getLogger(__name__)
 
 
 def _get_chunk_type(heading: str, text: str = "") -> str:
-    """Classify a chunk heading into one of five canonical types.
+    """Classify a chunk heading into one of two canonical types.
     Priority order (first match wins):
-      1. section_review  — matches ^\\d+\\.\\d+\\s+  (e.g. "1.2 Add Whole Numbers")
-      2. learning_objective — contains 'learning objectives', 'be prepared', 'key terms', 'key concepts', 'summary'
-      3. exercise (optional) — contains 'writing exercises'
-      4. exercise — contains 'practice makes perfect', 'everyday math', 'mixed practice'
-      5. section_review (exam source) — matches ^section \\d+ or contains '(exercises)'
-      6. teaching — everything else
+      1. exercise (optional) — contains 'writing exercises'
+      2. exercise — contains 'practice makes perfect', 'everyday math', 'mixed practice'
+      3. exercise — matches ^section \\d+ with 'exercises', or contains '(exercises)'
+      4. exercise — contains 'review exercises' or 'practice test'
+      5. teaching — everything else (section titles, learning objectives, intros, labs)
     Note: 'exercise_gate' is never returned here; it is only injected by list_chunks().
-    Returns: 'learning_objective' | 'section_review' | 'teaching' | 'exercise'
+    Returns: 'teaching' | 'exercise'
     """
     raw = re.sub(r"^[-–—•\s]+", "", heading).strip()
     h = raw.lower()
 
-    # 1. Section title heading (e.g. "1.2 Add Whole Numbers") — classified as section_review
-    if (re.match(r"^\d+\.\d+\s+\w", h)
-            and not h.rstrip().endswith(":")
-            and "exercises" not in h):
-        chunk_type = "section_review"
+    # 1. Optional writing exercise chunks (singular and plural)
+    if "writing exercise" in h:
+        return "exercise"
 
-    # 2. Info/objective panels — non-interactive, non-required
-    elif any(p in h for p in ("learning objectives", "be prepared", "key terms", "key concepts", "summary")):
-        chunk_type = "learning_objective"
+    # 2. Required exercise chunks (practice, everyday math, mixed practice)
+    if any(p in h for p in ("practice makes perfect", "everyday math", "mixed practice")):
+        return "exercise"
 
-    # 3. Optional writing exercise chunks (singular and plural)
-    elif "writing exercise" in h:
-        chunk_type = "exercise"
+    # 3. Review/exam-source chunks
+    if "(exercises)" in h:
+        return "exercise"
+    if re.match(r"^section\s+\d+\.\d+", h) and "exercises" in h:
+        return "exercise"
+    if "review exercises" in h or "practice test" in h:
+        return "exercise"
 
-    # 4. Required exercise chunks (practice, everyday math, mixed practice)
-    elif any(p in h for p in ("practice makes perfect", "everyday math", "mixed practice")):
-        chunk_type = "exercise"
-
-    # 5. Review/exam-source chunks
-    elif "(exercises)" in h:
-        chunk_type = "exercise"
-    elif re.match(r"^section\s+\d+\.\d+", h) and "exercises" in h:
-        chunk_type = "exercise"
-    elif "review exercises" in h or "practice test" in h:
-        chunk_type = "exercise"
-
-    # 6. Default: teaching chunk
-    else:
-        chunk_type = "teaching"
-
-    # section_review (bare section-title headings) with real content → reclassify as teaching
-    # learning_objective is NEVER reclassified — long LO blocks are still info cards
-    if chunk_type == "section_review" and len((text or "").strip()) > 200:
-        return "teaching"
-    return chunk_type
+    # 4. Default: teaching (covers section titles, learning objectives, intros, labs, etc.)
+    return "teaching"
 
 
 def _effective_chunk_type(c: dict) -> str:
@@ -1295,21 +1277,14 @@ async def complete_chunk(
         ))
     )
 
-    # Three-branch pass rule:
+    # Two-branch pass rule (two-type architecture):
     #   1. exam_disabled OR exercise → decide immediately from MCQ score
     #   2. teaching (exam gate enabled) → wait for evaluate-chunk to set passed=True
-    #   3. everything else (chapter_intro, learning_objective, lab, …) →
-    #      informational chunks have no exam questions; auto-pass on study completion
     _cc_passed: bool | None
     if _cc_exam_disabled or _cc_is_exercise:
         _cc_passed = score >= round(CHUNK_EXAM_PASS_RATE * 100)
-    elif _cc_chunk_type == "teaching":
-        # Exam-gate required; passed=False until evaluate-chunk fires
+    else:  # teaching — exam-gate required; passed=False until evaluate-chunk fires
         _cc_passed = False
-    else:
-        # chapter_intro / learning_objective / lab / section_review / etc.
-        # Informational chunks never receive exam questions — auto-pass on completion.
-        _cc_passed = True
 
     existing_progress[req.chunk_id] = {
         "mode": req.mode_used,
@@ -1455,7 +1430,7 @@ async def complete_chunk_item(
     next_chunk = next(
         (c for c in all_sorted
          if c.get("order_index", 0) > current_order
-         and _effective_chunk_type(c) in ("teaching", "exercise", "section_review")),
+         and _effective_chunk_type(c) in ("teaching", "exercise")),
         None,
     )
 

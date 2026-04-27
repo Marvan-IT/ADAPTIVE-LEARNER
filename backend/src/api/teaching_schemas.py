@@ -387,7 +387,7 @@ class ChunkSummary(BaseModel):
     heading:     str         # e.g. "Use Addition Notation"
     has_images:  bool        # True if at least one chunk_images row exists
     has_mcq:     bool        # determined by heading rule (no MCQ for Learning Objectives etc.)
-    chunk_type:  str = "teaching"  # "teaching"|"exercise"|"chapter_review"|"learning_objective"
+    chunk_type:  str = "teaching"  # "teaching"|"exercise"
     is_optional:   bool = False       # True only for "Writing Exercises"
     exam_disabled: bool = False       # True when admin has disabled exam questions for this chunk
     completed:     bool = False
