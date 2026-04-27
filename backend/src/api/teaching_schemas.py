@@ -368,6 +368,7 @@ class CompleteChunkResponse(BaseModel):
     next_mode:          str        # mode for next chunk generation
     next_chunk_id:      str | None # UUID of next teaching chunk; None if all done
     all_study_complete: bool       # True when all teaching chunks completed → unlock EXAM
+    passed:             bool | None = None  # whether this chunk is considered passed
 
 
 class RecoveryCardRequest(BaseModel):
@@ -392,6 +393,7 @@ class ChunkSummary(BaseModel):
     completed:     bool = False
     score:       int | None = None
     mode_used:   str | None = None
+    passed:      bool | None = None  # None = not yet attempted; True/False after completion
 
 
 class ChunkListResponse(BaseModel):

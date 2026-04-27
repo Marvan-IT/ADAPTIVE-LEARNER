@@ -215,7 +215,10 @@
     "keepPracticing": "Weiter üben!",
     "outOf": "von 100",
     "tryAgain": "Nochmal versuchen",
-    "next": "Weiter: {{title}}"
+    "next": "Weiter: {{title}}",
+    "notPassed": "Noch nicht bestanden — versuche die Prüfung erneut",
+    "passedScore": "Bestanden mit {{score}}%",
+    "failedScore": "Nicht bestanden mit {{score}}% — mindestens 50% erforderlich"
   },
   "error": {
     "assistFallback": "Tut mir leid, ich konnte gerade nicht antworten. Versuch es nochmal!",

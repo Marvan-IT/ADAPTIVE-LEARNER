@@ -215,7 +215,10 @@
     "keepPracticing": "अभ्यास जारी रखें!",
     "outOf": "100 में से",
     "tryAgain": "फिर से कोशिश करो",
-    "next": "अगला: {{title}}"
+    "next": "अगला: {{title}}",
+    "notPassed": "अभी पास नहीं हुए — दोबारा परीक्षा दें",
+    "passedScore": "{{score}}% से पास",
+    "failedScore": "{{score}}% से फेल — कम से कम 50% चाहिए"
   },
   "error": {
     "assistFallback": "माफ़ करना, मैं अभी जवाब नहीं दे सका। फिर से कोशिश करो!",

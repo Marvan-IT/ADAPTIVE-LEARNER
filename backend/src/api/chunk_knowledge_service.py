@@ -238,22 +238,58 @@ class ChunkKnowledgeService:
         Without rewriting, the browser resolves './images/...' against the current
         page URL (e.g. /learn/...) → 404.
 
-        Also handles bare filenames the LLM occasionally emits when it copies the
-        filename without the ``images/`` prefix, e.g. ``![alt](<uuid>-1_0_0_100_200.jpg)``.
+        Also handles:
+        - ./images/<file> or images/<file> → /images/<slug>/mathpix_extracted/<file>
+        - output/<slug>/... prefix URLs the LLM sometimes copies from server paths
+        - Already-absolute /images/... URLs → left unchanged
+        - URLs that already contain mathpix_extracted/ → left unchanged
+        - Bare Mathpix hex-dash filenames at any depth
         """
         if not text:
             return text
         import re as _re
 
-        # Pass 1: ./images/<file>  OR  images/<file>
-        if "images/" in text:
+        # Pass 0: output/<book_slug>/... prefix produced by some LLM completions.
+        # These are server-side filesystem paths; strip the prefix and route through /images/.
+        if "output/" in text:
+            def _output_replacer(m: "_re.Match[str]") -> str:
+                url = m.group(2)
+                # Extract everything after output/<slug>/ and treat as a relative path
+                # under /images/<slug>/. Preserve sub-directory structure.
+                _out_idx = url.find("output/")
+                if _out_idx == -1:
+                    return m.group(0)
+                after_output = url[_out_idx + len("output/"):]
+                # after_output is like "prealgebra/images_downloaded/abc.jpg"
+                # or "prealgebra/mathpix_extracted/abc.jpg"
+                # Normalise to /images/<book_slug>/<remainder_after_slug/>
+                parts = after_output.split("/", 1)
+                remainder = parts[1] if len(parts) > 1 else after_output
+                return f"{m.group(1)}/images/{book_slug}/{remainder}{m.group(3)}"
             text = _re.sub(
-                r'(!\[[^\]]*\]\()(?:\./)?images/([^)\s]+)(\))',
-                lambda m: f"{m.group(1)}/images/{book_slug}/mathpix_extracted/{m.group(2)}{m.group(3)}",
+                r'(!\[[^\]]*\]\()((?:[^\s)]*?)output/[^)\s]+)(\))',
+                _output_replacer,
                 text,
             )
 
-        # Pass 2: bare Mathpix filenames — UUID pattern without any path prefix.
+        # Pass 1: ./images/<file>  OR  images/<file>  (skip already-absolute /images/...)
+        if "images/" in text:
+            def _rel_images_replacer(m: "_re.Match[str]") -> str:
+                url = m.group(2)
+                # Already absolute → leave unchanged
+                if url.startswith("/") or url.lower().startswith("http"):
+                    return m.group(0)
+                # Already contains mathpix_extracted/ → already rewritten in a prev pass
+                if "mathpix_extracted/" in url:
+                    return m.group(0)
+                return f"{m.group(1)}/images/{book_slug}/mathpix_extracted/{url}{m.group(3)}"
+            text = _re.sub(
+                r'(!\[[^\]]*\]\()(?:\./)?images/([^)\s]+)(\))',
+                _rel_images_replacer,
+                text,
+            )
+
+        # Pass 2: bare Mathpix filenames — UUID/hex pattern without any path prefix.
         # Pattern: <hex>-<digits>_<digits>_<digits>_<digits>_<digits>.jpg
         # Only rewrite if not already an absolute path.
         _bare_pat = _re.compile(

@@ -382,8 +382,12 @@ export default function LearningPage() {
     const modeBadgeLabel = (mode) => t(`learning.mode.${mode}`, mode);
 
     const completedCount = chunkProgress ? Object.keys(chunkProgress).length : 0;
+    const passedCount = chunkProgress
+      ? Object.values(chunkProgress).filter((p) => p.passed === true).length
+      : 0;
     const totalChunks = visibleChunks.length;
-    const progressPct = totalChunks > 0 ? Math.round((completedCount / totalChunks) * 100) : 0;
+    // Progress ring reflects genuinely passed chunks, not just visited ones
+    const progressPct = totalChunks > 0 ? Math.round((passedCount / totalChunks) * 100) : 0;
     const lockedCount = visibleChunks.filter((c, idx) => {
       const isGate = c.chunk_type === "exercise_gate";
       const isInfo = c.chunk_type === "learning_objective";
@@ -399,11 +403,11 @@ export default function LearningPage() {
         {/* Locked concept overlay */}
         {isPreview && (
           <div style={{
-            position: "sticky", top: "0", zIndex: 50, marginBottom: "0",
+            position: "absolute", top: "24px", left: "24px", right: "344px",
+            zIndex: 50,
             display: "flex", alignItems: "center", gap: "10px",
             padding: "12px 18px", borderRadius: "12px",
             background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)",
-            position: "absolute", top: "24px", left: "24px", right: "344px",
           }}>
             <Lock size={16} style={{ color: "#EF4444", flexShrink: 0 }} />
             <span style={{ fontSize: "13px", fontWeight: 600, color: "#DC2626" }}>
@@ -512,15 +516,23 @@ export default function LearningPage() {
               : chunk.chunk_id in (chunkProgress || {});
 
             const score = isGate ? null : chunkProgress?.[chunk.chunk_id]?.score;
+            const chunkPassed = isGate ? null : chunkProgress?.[chunk.chunk_id]?.passed ?? null;
+
+            // passed===false means completed but not passed (score too low or exam pending)
+            const isFailedChunk = isDone && chunkPassed === false;
 
             const statusColor = isDone
-              ? "#22C55E"
+              ? isFailedChunk
+                ? "#F59E0B"
+                : "#22C55E"
               : isLocked
                 ? "#94A3B8"
                 : "#F97316";
 
             const statusIcon = isDone
-              ? "✓"
+              ? isFailedChunk
+                ? "✗"
+                : "✓"
               : isLocked
                 ? "🔒"
                 : isGate
@@ -538,10 +550,14 @@ export default function LearningPage() {
                 style={{
                   borderRadius: "16px",
                   border: isDone
-                    ? "1.5px solid rgba(74,222,128,0.25)"
+                    ? isFailedChunk
+                      ? "1.5px solid rgba(245,158,11,0.35)"
+                      : "1.5px solid rgba(74,222,128,0.25)"
                     : "1.5px solid #e2e8f0",
                   background: isDone
-                    ? "rgba(240,253,244,0.5)"
+                    ? isFailedChunk
+                      ? "rgba(255,251,235,0.6)"
+                      : "rgba(240,253,244,0.5)"
                     : "#ffffff",
                   overflow: "hidden",
                   transition: "all 0.15s",
@@ -564,12 +580,14 @@ export default function LearningPage() {
                     fontSize: isDone ? "18px" : "15px",
                     fontWeight: 700,
                     backgroundColor: isDone
-                      ? "rgba(74,222,128,0.15)"
+                      ? isFailedChunk
+                        ? "rgba(245,158,11,0.12)"
+                        : "rgba(74,222,128,0.15)"
                       : isLocked
                         ? "rgba(255,255,255,0.06)"
                         : "var(--color-primary-light)",
                     color: statusColor,
-                    border: `1.5px solid ${isDone ? "rgba(74,222,128,0.3)" : isLocked ? "rgba(255,255,255,0.1)" : "rgba(99,102,241,0.3)"}`,
+                    border: `1.5px solid ${isDone ? isFailedChunk ? "rgba(245,158,11,0.35)" : "rgba(74,222,128,0.3)" : isLocked ? "rgba(255,255,255,0.1)" : "rgba(99,102,241,0.3)"}`,
                   }}>
                     {statusIcon}
                   </div>
@@ -580,9 +598,19 @@ export default function LearningPage() {
                       {chunk.heading}
                     </div>
                     <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", alignItems: "center" }}>
-                      {isDone && score != null && (
+                      {isDone && score != null && chunkPassed === true && (
+                        <span style={{ fontSize: "11px", fontWeight: 700, color: score >= 80 ? "#22C55E" : "#F97316" }}>
+                          {t("completion.passedScore", { score })}
+                        </span>
+                      )}
+                      {isDone && score != null && chunkPassed === false && (
+                        <span style={{ fontSize: "11px", fontWeight: 700, color: "#F59E0B" }}>
+                          {t("completion.failedScore", { score })}
+                        </span>
+                      )}
+                      {isDone && score != null && chunkPassed === null && (
                         <span style={{ fontSize: "11px", fontWeight: 700, color: score >= 80 ? "#22C55E" : score >= 50 ? "#F97316" : "#EF4444" }}>
-                          {score}% score
+                          {score}%
                         </span>
                       )}
                       {isDone && chunkProgress?.[chunk.chunk_id]?.mode_used && (
@@ -698,7 +726,7 @@ export default function LearningPage() {
             {/* Stats grid */}
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginBottom: "20px" }}>
               {[
-                { id: "completed", value: completedCount, label: t("sidebar.completed"), color: "#22C55E" },
+                { id: "completed", value: passedCount, label: t("sidebar.completed"), color: "#22C55E" },
                 { id: "available", value: availableCount, label: t("sidebar.available"), color: "#3B82F6" },
                 { id: "locked", value: lockedCount, label: t("sidebar.locked"), color: "#94a3b8" },
                 { id: "estTime", value: `~${totalChunks * 5}m`, label: t("sidebar.estTime"), color: "#8B5CF6" },

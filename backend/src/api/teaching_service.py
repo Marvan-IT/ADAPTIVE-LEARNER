@@ -1074,6 +1074,13 @@ class TeachingService:
         # LLM output may contain ./images/<file> or bare Mathpix filenames.
         # Rewrite to absolute /images/{book_slug}/mathpix_extracted/<file> paths
         # before caching so the frontend never has to resolve relative refs.
+        import re as _re_dbg
+        _imgs_in_card = _re_dbg.findall(r'!\[[^\]]*\]\(([^)]+)\)', card_dict.get("content", ""))
+        if _imgs_in_card:
+            logger.info(
+                "[per-card-image-urls] chunk=%s lang=%s patterns=%s",
+                getattr(session, "concept_id", "?"), language, _imgs_in_card[:5],
+            )
         try:
             from api.chunk_knowledge_service import ChunkKnowledgeService as _CKS
             if card_dict.get("content"):
@@ -1089,6 +1096,23 @@ class TeachingService:
                         card_dict["image_url"] = _m.group(1)
         except Exception:
             logger.warning("[per-card] image URL rewrite failed, using original URLs")
+
+        # ── Step 13c: Guaranteed card title translation ───────────────────────
+        # gpt-4o-mini sometimes ignores the language directive on the title field.
+        # Post-translate it explicitly so the title reliably appears in the target language.
+        if language and language != "en" and card_dict.get("title"):
+            try:
+                async with asyncio.timeout(8.0):
+                    from api.translation_helper import translate_one_string
+                    _title_translations = await translate_one_string(
+                        card_dict["title"], target_langs=[language]
+                    )
+                if _title_translations and _title_translations.get(language):
+                    card_dict["title"] = _title_translations[language]
+            except Exception:
+                logger.warning(
+                    "[per-card] title translation failed for lang=%s — keeping LLM title", language
+                )
 
         # ── Step 14: Update cache and flush ──────────────────────────────────
         cached["concepts_queue"] = concepts_queue
@@ -1561,10 +1585,19 @@ class TeachingService:
             cards = [fallback]
 
         # Rewrite any relative image URLs produced by the LLM in card content
+        import re as _re_chunk_dbg
         try:
             from api.chunk_knowledge_service import ChunkKnowledgeService as _CKS
             _slug_for_rewrite = chunk.get("book_slug", "prealgebra")
             for _card in cards:
+                _chunk_imgs_in_card = _re_chunk_dbg.findall(
+                    r'!\[[^\]]*\]\(([^)]+)\)', _card.get("content", "")
+                )
+                if _chunk_imgs_in_card:
+                    logger.info(
+                        "[per-chunk-image-urls] chunk=%s lang=%s patterns=%s",
+                        chunk_id, _student_lang, _chunk_imgs_in_card[:5],
+                    )
                 if _card.get("content"):
                     _card["content"] = _CKS._rewrite_image_urls(_card["content"], _slug_for_rewrite) or _card["content"]
                 if _card.get("image_url"):
@@ -1578,6 +1611,25 @@ class TeachingService:
                             _card["image_url"] = _m.group(1)
         except Exception:
             logger.warning("[per-chunk] image URL rewrite failed, using original URLs")
+
+        # Guaranteed card title translation for non-English sessions
+        if _student_lang and _student_lang != "en":
+            for _card in cards:
+                if not _card.get("title"):
+                    continue
+                try:
+                    async with asyncio.timeout(8.0):
+                        from api.translation_helper import translate_one_string
+                        _chunk_title_xlat = await translate_one_string(
+                            _card["title"], target_langs=[_student_lang]
+                        )
+                    if _chunk_title_xlat and _chunk_title_xlat.get(_student_lang):
+                        _card["title"] = _chunk_title_xlat[_student_lang]
+                except Exception:
+                    logger.warning(
+                        "[per-chunk] title translation failed for lang=%s card_title=%r — keeping LLM title",
+                        _student_lang, _card.get("title"),
+                    )
 
         logger.info(
             "[per-chunk] generated: session_id=%s chunk_id=%s cards=%d mode=%s",

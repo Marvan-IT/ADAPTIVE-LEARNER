@@ -215,7 +215,10 @@
     "keepPracticing": "Continue à pratiquer !",
     "outOf": "sur 100",
     "tryAgain": "Réessayer",
-    "next": "Suivant : {{title}}"
+    "next": "Suivant : {{title}}",
+    "notPassed": "Pas encore réussi — réessaie l'examen",
+    "passedScore": "Réussi avec {{score}}%",
+    "failedScore": "Échoué avec {{score}}% — il faut au moins 50%"
   },
   "error": {
     "assistFallback": "Désolé, je n'ai pas pu répondre. Réessaie !",

@@ -248,7 +248,11 @@ function sessionReducer(state, action) {
       const _restored = {};
       for (const _ch of (action.payload.chunks || [])) {
         if (_ch.completed) {
-          _restored[_ch.chunk_id] = { score: _ch.score ?? null, mode_used: _ch.mode_used ?? null };
+          _restored[_ch.chunk_id] = {
+            score: _ch.score ?? null,
+            mode_used: _ch.mode_used ?? null,
+            passed: _ch.passed ?? null,
+          };
         }
       }
       return {
@@ -371,6 +375,7 @@ function sessionReducer(state, action) {
           [action.payload.chunk_id]: {
             score: action.payload.score,
             mode_used: action.payload.next_mode,
+            passed: action.payload.passed ?? null,
           },
         },
         currentChunkMode: newMode,

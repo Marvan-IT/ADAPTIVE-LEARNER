@@ -215,7 +215,10 @@
     "keepPracticing": "練習を続けよう！",
     "outOf": "100点中",
     "tryAgain": "もう一度挑戦",
-    "next": "次へ：{{title}}"
+    "next": "次へ：{{title}}",
+    "notPassed": "まだ合格していません — 試験を再挑戦してください",
+    "passedScore": "{{score}}%で合格",
+    "failedScore": "{{score}}%で不合格 — 50%以上必要です"
   },
   "error": {
     "assistFallback": "ごめんなさい、今は応答できませんでした。もう一度試してね！",

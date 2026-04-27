@@ -215,7 +215,10 @@
     "almostMsg": "{{title}} 잘했어요. 한 번 더 복습해 봐요!",
     "outOf": "100점 만점",
     "tryAgain": "다시 도전",
-    "next": "다음: {{title}}"
+    "next": "다음: {{title}}",
+    "notPassed": "아직 합격하지 못했습니다 — 시험을 다시 시도하세요",
+    "passedScore": "{{score}}%로 합격",
+    "failedScore": "{{score}}%로 불합격 — 최소 50% 필요"
   },
   "error": {
     "assistFallback": "미안해요, 지금은 응답할 수 없었어요. 다시 시도해 주세요!",

@@ -215,7 +215,10 @@
     "almostMsg": "Bom esforço em {{title}}. Vamos rever mais uma vez!",
     "outOf": "de 100",
     "tryAgain": "Tentar novamente",
-    "next": "Seguinte: {{title}}"
+    "next": "Seguinte: {{title}}",
+    "notPassed": "Ainda não aprovado — tenta o exame novamente",
+    "passedScore": "Aprovado com {{score}}%",
+    "failedScore": "Reprovado com {{score}}% — precisa de pelo menos 50%"
   },
   "error": {
     "assistFallback": "Desculpa, não consegui responder agora. Tenta novamente!",

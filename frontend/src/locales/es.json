@@ -215,7 +215,10 @@
     "keepPracticing": "¡Sigue practicando!",
     "outOf": "de 100",
     "tryAgain": "Intentar de nuevo",
-    "next": "Siguiente: {{title}}"
+    "next": "Siguiente: {{title}}",
+    "notPassed": "Aún no aprobado — intenta el examen de nuevo",
+    "passedScore": "Aprobado con {{score}}%",
+    "failedScore": "Reprobado con {{score}}% — necesitas al menos 50%"
   },
   "error": {
     "assistFallback": "Lo siento, no pude responder. ¡Inténtalo de nuevo!",

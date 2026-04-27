@@ -1295,13 +1295,21 @@ async def complete_chunk(
         ))
     )
 
-    # exam_disabled OR exercise: decide pass/fail from MCQ score right now
+    # Three-branch pass rule:
+    #   1. exam_disabled OR exercise → decide immediately from MCQ score
+    #   2. teaching (exam gate enabled) → wait for evaluate-chunk to set passed=True
+    #   3. everything else (chapter_intro, learning_objective, lab, …) →
+    #      informational chunks have no exam questions; auto-pass on study completion
     _cc_passed: bool | None
     if _cc_exam_disabled or _cc_is_exercise:
         _cc_passed = score >= round(CHUNK_EXAM_PASS_RATE * 100)
-    else:
-        # Teaching chunk with exam gate: mark not-yet-passed until evaluate-chunk runs
+    elif _cc_chunk_type == "teaching":
+        # Exam-gate required; passed=False until evaluate-chunk fires
         _cc_passed = False
+    else:
+        # chapter_intro / learning_objective / lab / section_review / etc.
+        # Informational chunks never receive exam questions — auto-pass on completion.
+        _cc_passed = True
 
     existing_progress[req.chunk_id] = {
         "mode": req.mode_used,
@@ -1326,15 +1334,20 @@ async def complete_chunk(
             idle_triggers=0,
         )
 
-        _, _, next_mode = build_blended_analytics(
+        _, _cc_blended_score, next_mode = build_blended_analytics(
             signals, history, session.concept_id, str(session.student_id)
         )
 
-        # Persist section_count increment to Student profile
+        # Persist section_count increment AND blended state score to Student profile.
+        # avg_state_score feeds into blended analytics for ALL future chunks —
+        # without writing it back, mode stays frozen at NORMAL (the DB default).
         await db.execute(
             sa_update(Student)
             .where(Student.id == session.student_id)
-            .values(section_count=Student.section_count + 1)
+            .values(
+                section_count=Student.section_count + 1,
+                avg_state_score=_cc_blended_score,
+            )
         )
     except Exception:
         logger.exception("[complete_chunk] adaptive blending failed, falling back to threshold")
@@ -1391,6 +1404,7 @@ async def complete_chunk(
         next_mode=next_mode,
         next_chunk_id=str(next_teaching["id"]) if next_teaching else None,
         all_study_complete=all_study_complete,
+        passed=_cc_passed,
     )
 
 
@@ -1579,13 +1593,18 @@ async def evaluate_chunk_answers(
                 time_on_card_sec=history.get("avg_time_per_card") or 0.0,
                 idle_triggers=0,
             )
-            _, _, next_mode = build_blended_analytics(
+            _, _ev_blended_score, next_mode = build_blended_analytics(
                 signals, history, session.concept_id, str(session.student_id)
             )
+            # Persist section_count AND blended state score — without writing
+            # avg_state_score back the mode stays frozen at the DB default (NORMAL).
             await db.execute(
                 sa_update(Student)
                 .where(Student.id == session.student_id)
-                .values(section_count=Student.section_count + 1)
+                .values(
+                    section_count=Student.section_count + 1,
+                    avg_state_score=_ev_blended_score,
+                )
             )
         except Exception:
             logger.exception("[evaluate-chunk] adaptive blending failed, using MCQ score fallback")
@@ -1766,6 +1785,7 @@ async def list_chunks(
                 completed=str(c.id) in progress,
                 score=progress.get(str(c.id), {}).get("score"),
                 mode_used=progress.get(str(c.id), {}).get("mode"),
+                passed=progress.get(str(c.id), {}).get("passed"),
             )
             for c in chunks
         ]
