@@ -557,13 +557,24 @@ async def graph_full(
 
     # Fetch heading translations in one query — do NOT mutate the cached graph dict.
     chunk_rows = (await db.execute(
-        select(_CC.concept_id, _CC.heading, _CC.heading_translations)
+        select(_CC.concept_id, _CC.heading, _CC.heading_translations,
+               _CC.admin_section_name, _CC.admin_section_name_translations)
         .where(_CC.book_slug == book_slug)
     )).all()
     heading_map: dict[str, tuple[str, dict]] = {
         row.concept_id: (row.heading, row.heading_translations or {})
         for row in chunk_rows
     }
+    # admin_section_name overrides the section title shown on the concept map.
+    # First non-null value wins per concept_id (rename writes the same value to
+    # all chunks of a section).
+    admin_name_map: dict[str, tuple[str, dict]] = {}
+    for row in chunk_rows:
+        if row.admin_section_name and row.concept_id not in admin_name_map:
+            admin_name_map[row.concept_id] = (
+                row.admin_section_name,
+                row.admin_section_name_translations or {},
+            )
 
     base_nodes = _chunk_knowledge_svc.get_all_nodes(book_slug)
     hidden = await get_hidden_concept_ids(db, book_slug)
@@ -571,16 +582,18 @@ async def graph_full(
         logger.debug("[graph-filter] book=%s hidden_concepts=%d (graph/full)", book_slug, len(hidden))
         base_nodes = [n for n in base_nodes if n["concept_id"] not in hidden]
 
-    if lang != "en":
-        nodes = []
-        for node in base_nodes:
-            cid = node["concept_id"]
-            if cid in heading_map:
-                en_heading, translations = heading_map[cid]
-                node = {**node, "title": resolve_translation(en_heading, translations, lang)}
-            nodes.append(node)
-    else:
-        nodes = base_nodes
+    nodes = []
+    for node in base_nodes:
+        cid = node["concept_id"]
+        # Priority: admin_section_name (if set) > heading translation (legacy) > graph.json title
+        if cid in admin_name_map:
+            en_name, translations = admin_name_map[cid]
+            new_title = resolve_translation(en_name, translations, lang) if lang != "en" else en_name
+            node = {**node, "title": new_title}
+        elif lang != "en" and cid in heading_map:
+            en_heading, translations = heading_map[cid]
+            node = {**node, "title": resolve_translation(en_heading, translations, lang)}
+        nodes.append(node)
 
     edges = _chunk_knowledge_svc.get_all_edges(book_slug)
     if hidden:
