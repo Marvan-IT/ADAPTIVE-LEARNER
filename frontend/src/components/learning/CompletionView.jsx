@@ -62,11 +62,13 @@ export default function CompletionView() {
       .catch(() => {});
   }, [masteredConcepts, session?.book_slug]);
 
-  const scoreLabel =
-    score >= 90 ? t("completion.excellent") || "Excellent!" :
-    score >= 60 ? t("completion.mastered") :
+  // Sub-message shown BELOW the ring. When mastered, the banner already says
+  // "Concept Mastered!" — don't repeat it. Only show a band-feedback line for
+  // not-yet-mastered scores.
+  const subMessage =
+    mastered ? null :
     score >= 40 ? t("completion.almostThere") :
-    t("completion.keepPracticing") || "Keep practicing";
+                  t("completion.keepPracticing") || "Keep practicing";
 
   const scoreColor =
     score >= 90 ? "var(--score-excellent)" :
@@ -85,7 +87,7 @@ export default function CompletionView() {
 
       {/* Header gradient banner */}
       <div
-        className="text-center text-white px-8 pt-6 pb-10"
+        className="text-center text-white px-8 pt-6 pb-8"
         style={{
           background: mastered
             ? "linear-gradient(135deg, var(--color-success), #16a34a)"
@@ -98,33 +100,48 @@ export default function CompletionView() {
         <h2 className="text-[1.4rem] font-extrabold m-0">
           {mastered ? t("completion.mastered") : t("completion.almostThere")}
         </h2>
-        <p className="text-[0.9rem] opacity-90 mt-1">
-          {mastered
-            ? t("completion.masteredMsg", { title: conceptTitle })
-            : t("completion.almostMsg", { title: conceptTitle })}
-        </p>
       </div>
 
       {/* Score + Actions */}
-      <div className="p-8 text-center">
-        {/* ProgressRing centered */}
-        <div className="relative inline-flex items-center justify-center mb-6 -mt-10">
+      <div className="px-7 pt-0 pb-7 text-center">
+        {/* ProgressRing — single label is passed as `label` prop to avoid
+            collision with ProgressRing's default `{score}%` rendering. */}
+        <div className="inline-flex items-center justify-center mb-4 -mt-12">
           <div className="rounded-full bg-[var(--color-surface)] p-1 shadow-lg">
-            <ProgressRing score={score} size={130} strokeWidth={9} />
-          </div>
-          <div className="absolute flex flex-col items-center justify-center">
-            <span className="text-[2rem] font-extrabold leading-none" style={{ color: scoreColor }}>
-              {score}
-            </span>
-            <span className="text-[0.65rem] text-[var(--color-text-muted)] font-bold">
-              {t("completion.outOf")}
-            </span>
+            <ProgressRing
+              score={score}
+              size="md"
+              label={
+                <div className="flex flex-col items-center justify-center leading-none">
+                  <span style={{ color: scoreColor, fontSize: "2.25rem", fontWeight: 800, lineHeight: 1 }}>
+                    {score}
+                  </span>
+                  <span style={{
+                    fontSize: "0.625rem", fontWeight: 700,
+                    letterSpacing: "0.1em", textTransform: "uppercase",
+                    color: "var(--color-text-muted)", marginTop: "4px",
+                  }}>
+                    {t("completion.outOf")}
+                  </span>
+                </div>
+              }
+            />
           </div>
         </div>
 
-        <p className="font-bold mb-6 text-base" style={{ color: scoreColor }}>
-          {scoreLabel}
-        </p>
+        {/* Concept-name context line — pedagogical anchor, not duplicate of banner */}
+        {conceptTitle && (
+          <p className="text-[0.875rem] italic text-[var(--color-text-muted)] mb-5">
+            {t("completion.youCompleted", { title: conceptTitle, defaultValue: `You completed: ${conceptTitle}` })}
+          </p>
+        )}
+
+        {/* Score-band feedback (only when not mastered — banner already conveys mastery) */}
+        {subMessage && (
+          <p className="font-bold mb-5 text-base" style={{ color: scoreColor }}>
+            {subMessage}
+          </p>
+        )}
 
         {/* Actions */}
         <div className="flex flex-col gap-2.5 max-w-[300px] mx-auto">

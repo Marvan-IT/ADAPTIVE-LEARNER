@@ -1,5 +1,7 @@
 import { createContext, useContext, useState, useCallback, useRef } from "react";
-import { Modal, ModalHeader, ModalBody, ModalFooter } from "../components/ui/Modal";
+import { motion } from "framer-motion";
+import { AlertTriangle } from "lucide-react";
+import { Modal } from "../components/ui/Modal";
 import Button from "../components/ui/Button";
 
 const DialogContext = createContext(null);
@@ -54,28 +56,61 @@ export function DialogProvider({ children }) {
     <DialogContext.Provider value={{ confirm, prompt }}>
       {children}
 
-      {/* Confirm dialog */}
+      {/* Confirm dialog — centered layout, deliberate decision moment */}
       <Modal open={confirmState.open} onClose={handleCancel} size="md">
-        <ModalHeader>{confirmState.title}</ModalHeader>
-        <ModalBody>
-          <p style={{ fontSize: "0.9375rem", color: "var(--color-text-muted)", lineHeight: 1.7, whiteSpace: "pre-line", paddingBottom: "8px" }}>
+        <div className="px-8 pt-7 pb-2 flex flex-col items-center text-center">
+          {confirmState.variant === "danger" && (
+            <motion.div
+              initial={{ scale: 0.7, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              transition={{ duration: 0.2, delay: 0.08 }}
+              style={{
+                width: 48, height: 48, borderRadius: "50%",
+                backgroundColor: "rgba(239, 68, 68, 0.1)",
+                border: "1.5px solid rgba(239, 68, 68, 0.25)",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                marginBottom: "12px",
+              }}
+            >
+              <AlertTriangle size={22} color="var(--color-danger)" strokeWidth={2.25} />
+            </motion.div>
+          )}
+          <h3 style={{
+            fontSize: "1.125rem", fontWeight: 700, color: "var(--color-text)",
+            letterSpacing: "-0.01em", margin: 0,
+          }}>
+            {confirmState.title}
+          </h3>
+        </div>
+        <div className="px-8 py-3">
+          <p style={{
+            fontSize: "0.9375rem", color: "var(--color-text-muted)",
+            lineHeight: 1.6, whiteSpace: "pre-line", textAlign: "center", margin: 0,
+          }}>
             {confirmState.message}
           </p>
-        </ModalBody>
-        <ModalFooter>
-          <Button variant="secondary" size="md" onClick={handleCancel} className="min-w-[96px] whitespace-nowrap">
+        </div>
+        <div className="px-8 pt-5 pb-7 flex justify-center gap-3">
+          <Button variant="secondary" size="lg" onClick={handleCancel} className="whitespace-nowrap" style={{ minWidth: 120 }}>
             {confirmState.cancelLabel}
           </Button>
-          <Button variant={confirmState.variant === "danger" ? "danger" : "primary"} size="md" onClick={handleConfirm} className="min-w-[96px] whitespace-nowrap">
+          <Button variant={confirmState.variant === "danger" ? "danger" : "primary"} size="lg" onClick={handleConfirm} className="whitespace-nowrap" style={{ minWidth: 120 }}>
             {confirmState.confirmLabel}
           </Button>
-        </ModalFooter>
+        </div>
       </Modal>
 
-      {/* Prompt dialog */}
+      {/* Prompt dialog — centered title, input centered, same footer treatment */}
       <Modal open={promptState.open} onClose={handlePromptCancel} size="md">
-        <ModalHeader>{promptState.title}</ModalHeader>
-        <ModalBody>
+        <div className="px-8 pt-7 pb-2 text-center">
+          <h3 style={{
+            fontSize: "1.125rem", fontWeight: 700, color: "var(--color-text)",
+            letterSpacing: "-0.01em", margin: 0,
+          }}>
+            {promptState.title}
+          </h3>
+        </div>
+        <div className="px-8 py-4">
           <input
             autoFocus
             type="text"
@@ -87,7 +122,7 @@ export function DialogProvider({ children }) {
             }}
             style={{
               width: "100%",
-              padding: "8px 12px",
+              padding: "10px 12px",
               fontSize: "0.9375rem",
               border: "1.5px solid var(--color-border, #E2E8F0)",
               borderRadius: "8px",
@@ -97,15 +132,15 @@ export function DialogProvider({ children }) {
               background: "var(--color-surface, #FFFFFF)",
             }}
           />
-        </ModalBody>
-        <ModalFooter>
-          <Button variant="secondary" size="md" onClick={handlePromptCancel} className="min-w-[96px] whitespace-nowrap">
+        </div>
+        <div className="px-8 pt-3 pb-7 flex justify-center gap-3">
+          <Button variant="secondary" size="lg" onClick={handlePromptCancel} className="whitespace-nowrap" style={{ minWidth: 120 }}>
             {promptState.cancelLabel}
           </Button>
-          <Button variant="primary" size="md" onClick={handlePromptConfirm} className="min-w-[96px] whitespace-nowrap">
+          <Button variant="primary" size="lg" onClick={handlePromptConfirm} className="whitespace-nowrap" style={{ minWidth: 120 }}>
             {promptState.confirmLabel}
           </Button>
-        </ModalFooter>
+        </div>
       </Modal>
     </DialogContext.Provider>
   );

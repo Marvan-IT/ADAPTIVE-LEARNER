@@ -215,6 +215,7 @@
     "almostMsg": "جهد جيد في {{title}}. هيا نراجع مرة أخرى!",
     "keepPracticing": "استمر في التدريب!",
     "outOf": "من 100",
+    "youCompleted": "أكملت: {{title}}",
     "tryAgain": "حاول مرة أخرى",
     "next": "التالي: {{title}}",
     "notPassed": "لم تنجح بعد — حاول الامتحان مرة أخرى",

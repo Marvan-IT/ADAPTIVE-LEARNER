@@ -215,6 +215,7 @@
     "almostMsg": "Bel effort sur {{title}}. Révisons encore une fois !",
     "keepPracticing": "Continue à pratiquer !",
     "outOf": "sur 100",
+    "youCompleted": "Tu as terminé : {{title}}",
     "tryAgain": "Réessayer",
     "next": "Suivant : {{title}}",
     "notPassed": "Pas encore réussi — réessaie l'examen",

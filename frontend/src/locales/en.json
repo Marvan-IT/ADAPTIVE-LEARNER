@@ -106,6 +106,7 @@
   "completion.keepPracticing": "Keep Practicing!",
   "completion.almostMsg": "Good effort on {{title}}. Let's review once more!",
   "completion.outOf": "out of 100",
+  "completion.youCompleted": "You completed: {{title}}",
   "completion.tryAgain": "Try Again",
   "completion.next": "Next: {{title}}",
   "completion.notPassed": "Not yet passed — try the exam again",

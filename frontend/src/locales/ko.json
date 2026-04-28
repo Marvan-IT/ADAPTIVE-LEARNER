@@ -215,6 +215,7 @@
     "keepPracticing": "계속 연습하세요!",
     "almostMsg": "{{title}} 잘했어요. 한 번 더 복습해 봐요!",
     "outOf": "100점 만점",
+    "youCompleted": "완료: {{title}}",
     "tryAgain": "다시 도전",
     "next": "다음: {{title}}",
     "notPassed": "아직 합격하지 못했습니다 — 시험을 다시 시도하세요",

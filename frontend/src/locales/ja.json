@@ -215,6 +215,7 @@
     "almostMsg": "{{title}}よく頑張ったね。もう一度復習しよう！",
     "keepPracticing": "練習を続けよう！",
     "outOf": "100点中",
+    "youCompleted": "完了しました：{{title}}",
     "tryAgain": "もう一度挑戦",
     "next": "次へ：{{title}}",
     "notPassed": "まだ合格していません — 試験を再挑戦してください",
