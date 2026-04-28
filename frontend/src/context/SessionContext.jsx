@@ -326,14 +326,18 @@ function sessionReducer(state, action) {
       return { ...state, phase: "CHUNK_QUESTIONS", chunkEvalResult: null, adaptiveCardLoading: false };
 
     case "CHUNK_EVAL_RESULT": {
-      const { passed, all_study_complete, chunk_progress, next_mode, ...rest } = action.payload;
+      const { passed, all_study_complete, chunk_progress, next_mode, score: scoreFractional, ...rest } = action.payload;
       const newMode = next_mode || state.currentChunkMode;
+      // evaluate_chunk_answers returns score as float 0-1; CompletionView expects int 0-100
+      const scorePct = scoreFractional != null ? Math.round(scoreFractional * 100) : state.score;
       let newState = {
         ...state,
-        chunkEvalResult: { passed, all_study_complete, ...rest },
+        chunkEvalResult: { passed, all_study_complete, score: scoreFractional, ...rest },
         loading: false,
         currentChunkMode: newMode,
         modeJustChanged: newMode !== state.currentChunkMode,
+        score: scorePct,
+        mastered: passed && all_study_complete ? true : state.mastered,
       };
       if (passed) {
         if (chunk_progress) {
@@ -367,6 +371,8 @@ function sessionReducer(state, action) {
     case "CHUNK_COMPLETED": {
       const prevMode = state.currentChunkMode;
       const newMode = action.payload.next_mode || prevMode;
+      // complete_chunk returns score as int 0-100 directly; CompletionView reads top-level state.score
+      const allDone = action.payload.all_study_complete ?? state.allStudyComplete;
       return {
         ...state,
         adaptiveCardLoading: false,
@@ -379,8 +385,10 @@ function sessionReducer(state, action) {
           },
         },
         currentChunkMode: newMode,
-        allStudyComplete: action.payload.all_study_complete ?? state.allStudyComplete,
+        allStudyComplete: allDone,
         modeJustChanged: newMode !== prevMode,
+        score: action.payload.score ?? state.score,
+        mastered: allDone && action.payload.passed ? true : state.mastered,
       };
     }
 

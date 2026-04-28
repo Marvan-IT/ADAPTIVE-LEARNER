@@ -58,7 +58,7 @@ export function DialogProvider({ children }) {
       <Modal open={confirmState.open} onClose={handleCancel} size="md">
         <ModalHeader>{confirmState.title}</ModalHeader>
         <ModalBody>
-          <p style={{ fontSize: "0.9375rem", color: "var(--color-text-muted)", lineHeight: 1.6, whiteSpace: "pre-line" }}>
+          <p style={{ fontSize: "0.9375rem", color: "var(--color-text-muted)", lineHeight: 1.7, whiteSpace: "pre-line", paddingBottom: "8px" }}>
             {confirmState.message}
           </p>
         </ModalBody>

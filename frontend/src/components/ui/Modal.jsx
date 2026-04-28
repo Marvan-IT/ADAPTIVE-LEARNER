@@ -159,7 +159,7 @@ export function ModalHeader({ children, className }) {
     <div
       className={cn(
         "flex items-center justify-between",
-        "px-[var(--sp-6)] pt-[var(--sp-6)] pb-[var(--sp-2)]",
+        "px-[var(--sp-6)] pt-[var(--sp-6)] pb-[var(--sp-4)]",
         className
       )}
     >
@@ -212,8 +212,8 @@ export function ModalFooter({ children, className }) {
   return (
     <div
       className={cn(
-        "flex justify-end gap-3",
-        "px-[var(--sp-6)] py-[var(--sp-4)]",
+        "flex justify-end gap-4",
+        "px-[var(--sp-6)] py-[var(--sp-5)]",
         "border-t border-[var(--color-border)]",
         className
       )}
