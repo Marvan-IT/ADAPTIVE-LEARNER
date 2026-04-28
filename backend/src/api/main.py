@@ -409,8 +409,8 @@ async def next_concepts(request: Request, req: NextConceptsRequest,
                         db: AsyncSession = Depends(get_db)):
     """Given mastered concepts, return all concepts now ready to learn and locked ones."""
     hidden = await get_hidden_concept_ids(db, book_slug)
-    ready = [c for c in _chunk_knowledge_svc.get_next_concepts(book_slug, req.mastered_concepts) if c not in hidden]
-    locked = [c for c in _chunk_knowledge_svc.get_locked_concepts(book_slug, req.mastered_concepts) if c not in hidden]
+    ready = [c for c in _chunk_knowledge_svc.get_next_concepts(book_slug, req.mastered_concepts) if c["concept_id"] not in hidden]
+    locked = [c for c in _chunk_knowledge_svc.get_locked_concepts(book_slug, req.mastered_concepts) if c["concept_id"] not in hidden]
     if hidden:
         logger.debug("[graph-filter] book=%s hidden_concepts=%d (next_concepts)", book_slug, len(hidden))
     return NextConceptsResponse(
