@@ -67,7 +67,7 @@ function CheckInCard({ card, onSelect }) {
           skipHtml={true}
           components={{
             img: ({ src, alt, ...props }) => (
-              <img src={resolveImageUrl(src)} alt={alt} {...props} />
+              src ? <img src={resolveImageUrl(src)} alt={alt} onError={(e) => { e.currentTarget.style.display = "none"; }} {...props} /> : null
             ),
           }}
         >
@@ -687,6 +687,7 @@ export default function CardLearningView({ remediationMode = false, onCardStates
                   src={resolveImageUrl(card.image_url)}
                   alt={card.caption || "Diagram"}
                   style={{ maxWidth: "100%", maxHeight: "400px", borderRadius: "8px", objectFit: "contain" }}
+                  onError={(e) => { e.currentTarget.style.display = "none"; }}
                 />
                 {card.caption && (
                   <p style={{ fontSize: "0.85rem", color: "#6b7280", marginTop: "6px", fontStyle: "italic" }}>
@@ -705,7 +706,7 @@ export default function CardLearningView({ remediationMode = false, onCardStates
                     skipHtml={true}
                     components={{
                       img: ({ src, alt, ...props }) => (
-                        <img src={resolveImageUrl(src)} alt={alt} {...props} />
+                        src ? <img src={resolveImageUrl(src)} alt={alt} onError={(e) => { e.currentTarget.style.display = "none"; }} {...props} /> : null
                       ),
                     }}
                   >
@@ -1084,7 +1085,7 @@ function MCQBlock({ question, index, feedback, isCorrect, onAnswer }) {
           components={{
             p: ({ children }) => <span>{children}</span>,
             img: ({ src, alt, ...props }) => (
-              <img src={resolveImageUrl(src)} alt={alt} {...props} />
+              src ? <img src={resolveImageUrl(src)} alt={alt} onError={(e) => { e.currentTarget.style.display = "none"; }} {...props} /> : null
             ),
           }}
           skipHtml={true}
@@ -1156,7 +1157,7 @@ function MCQBlock({ question, index, feedback, isCorrect, onAnswer }) {
                 components={{
                   p: ({ children }) => <span>{children}</span>,
                   img: ({ src, alt, ...props }) => (
-                    <img src={resolveImageUrl(src)} alt={alt} {...props} />
+                    src ? <img src={resolveImageUrl(src)} alt={alt} onError={(e) => { e.currentTarget.style.display = "none"; }} {...props} /> : null
                   ),
                 }}
                 skipHtml={true}

@@ -352,7 +352,7 @@ export default function LearningPage() {
           </div>
         </div>
         <p style={{ textAlign: "center", color: "var(--color-text-muted)", marginTop: "24px", fontSize: "0.95rem", fontWeight: 600 }}>
-          {phase === "INITIALIZING" ? t("learning.loadingLesson") : t("learning.craftingCards")}
+          {phase === "LOADING" ? t("learning.craftingCards") : t("learning.loadingLesson")}
         </p>
       </div>
     );
