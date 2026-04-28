@@ -30,6 +30,7 @@ from config import (
     OPENAI_MODEL_MINI,
     PREDEFINED_INTEREST_IDS,
 )
+from services.admin_config_helper import get_admin_config
 
 def _get_book_title(book_slug: str) -> str:
     """Look up human-readable book title from BOOK_REGISTRY by slug."""
@@ -1282,7 +1283,10 @@ async def complete_chunk(
     #   2. teaching (exam gate enabled) → wait for evaluate-chunk to set passed=True
     _cc_passed: bool | None
     if _cc_exam_disabled or _cc_is_exercise:
-        _cc_passed = score >= round(CHUNK_EXAM_PASS_RATE * 100)
+        _raw_rate = await get_admin_config(db, "CHUNK_EXAM_PASS_RATE", fallback=str(CHUNK_EXAM_PASS_RATE))
+        _live_pass_rate = float(_raw_rate)
+        logger.debug("[exam-gate] live CHUNK_EXAM_PASS_RATE=%.2f", _live_pass_rate)
+        _cc_passed = score >= round(_live_pass_rate * 100)
     else:  # teaching — exam-gate required; passed=False until evaluate-chunk fires
         _cc_passed = False
 
@@ -1527,7 +1531,10 @@ async def evaluate_chunk_answers(
     correct_count = sum(1 for r in results if r.get("correct"))
     total = len(req.questions)
     score_frac = correct_count / total if total > 0 else 0.0
-    passed = score_frac >= CHUNK_EXAM_PASS_RATE
+    _raw_rate = await get_admin_config(db, "CHUNK_EXAM_PASS_RATE", fallback=str(CHUNK_EXAM_PASS_RATE))
+    _live_pass_rate = float(_raw_rate)
+    logger.debug("[exam-gate] live CHUNK_EXAM_PASS_RATE=%.2f", _live_pass_rate)
+    passed = score_frac >= _live_pass_rate
 
     # Build feedback list
     feedback: list[ChunkEvaluateFeedback] = [
