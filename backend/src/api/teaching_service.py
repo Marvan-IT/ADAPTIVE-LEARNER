@@ -442,12 +442,33 @@ class TeachingService:
     def __init__(self):
         self._chunk_ksvc = ChunkKnowledgeService()
         self.openai = AsyncOpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
-        self.model = OPENAI_MODEL
-        self.model_mini = OPENAI_MODEL_MINI
+        # model resolved per operation via _resolve_models(db), not captured here
 
-    async def _chat(self, messages: list, max_tokens: int = 2000, temperature: float = 0.7, model: str | None = None, timeout: float = 30.0) -> str:
-        """Call GPT and return the response content. Pass model='mini' to use gpt-4o-mini."""
-        use_model = self.model_mini if model == "mini" else self.model
+    async def _resolve_models(self, db: AsyncSession) -> tuple[str, str]:
+        """Return (model_default, model_mini) resolved live from AdminConfig.
+
+        Falls back to OPENAI_MODEL / OPENAI_MODEL_MINI from config.py when no
+        AdminConfig row exists.  Call once per top-level operation; pass the
+        returned strings through to _chat to avoid stale module-level captures.
+        """
+        from services.admin_config_helper import get_openai_model
+        model_default = await get_openai_model(db, slot="default")
+        model_mini = await get_openai_model(db, slot="mini")
+        logger.debug("[llm] resolved model=%s slot=default", model_default)
+        logger.debug("[llm] resolved model=%s slot=mini", model_mini)
+        return model_default, model_mini
+
+    async def _chat(self, messages: list, max_tokens: int = 2000, temperature: float = 0.7,
+                    model: str | None = None, timeout: float = 30.0,
+                    model_default: str = OPENAI_MODEL, model_mini: str = OPENAI_MODEL_MINI) -> str:
+        """Call GPT and return the response content.
+
+        model_default / model_mini: live-resolved strings from _resolve_models().
+        model: legacy selector — 'mini' selects model_mini, anything else selects
+               model_default.  Left for backward compat with call sites that have
+               not yet been updated to pass explicit strings.
+        """
+        use_model = model_mini if model == "mini" else model_default
         last_exc = None
         for attempt in range(3):
             try:
@@ -517,6 +538,7 @@ class TeachingService:
         Uses KnowledgeService to get concept text, then sends to OpenAI.
         Caches the result in session.presentation_text.
         """
+        _model_default, _model_mini = await self._resolve_models(db)
         if session.presentation_text:
             return session.presentation_text
 
@@ -571,6 +593,8 @@ class TeachingService:
             ],
             max_tokens=2000,
             model="mini",
+            model_default=_model_default,
+            model_mini=_model_mini,
         )
 
         # 4. Cache in the session and store messages
@@ -733,6 +757,7 @@ class TeachingService:
 
         Returns card=None with has_more_concepts=False when the queue is exhausted.
         """
+        _model_default, _model_mini = await self._resolve_models(db)
         import time as _time
         from adaptive.adaptive_engine import load_student_history, load_wrong_option_pattern, build_blended_analytics
         from adaptive.profile_builder import build_learning_profile
@@ -1004,6 +1029,8 @@ class TeachingService:
             max_tokens=NEXT_CARD_MAX_TOKENS,
             model=None,  # use gpt-4o for per-card: title/body language fidelity
             timeout=30.0,
+            model_default=_model_default,
+            model_mini=_model_mini,
         )
 
         # ── Step 12: Parse + validate card ────────────────────────────────────
@@ -1177,6 +1204,7 @@ class TeachingService:
         Returns a list of card dicts (new LessonCard schema).
         Each card has chunk_id stamped on it by _normalise_per_card().
         """
+        _model_default, _model_mini = await self._resolve_models(db)
         try:
             from adaptive.adaptive_engine import build_blended_analytics  # noqa: F401
             from adaptive.prompt_builder import build_chunk_card_prompt, build_next_card_prompt, _CARD_MODE_DELIVERY  # noqa: F401
@@ -1473,6 +1501,8 @@ class TeachingService:
                 max_tokens=max_tokens,
                 model="main",
                 timeout=timeout,
+                model_default=_model_default,
+                model_mini=_model_mini,
             )
             cards_data = _parse_cards(raw)
         except Exception as _llm_err:
@@ -1511,6 +1541,8 @@ class TeachingService:
                     max_tokens=max_tokens,
                     model="mini",
                     timeout=timeout,
+                    model_default=_model_default,
+                    model_mini=_model_mini,
                 )
                 cards_data = _parse_cards(raw2)
             except Exception as _llm_err2:
@@ -1642,6 +1674,7 @@ class TeachingService:
         session: TeachingSession,
         chunk: dict,
         chunk_images: list[dict],
+        db: AsyncSession | None = None,
         card_index: int = 0,
         wrong_answers: list[str] | None = None,
         is_exercise: bool = False,
@@ -1652,6 +1685,7 @@ class TeachingService:
         Targeted re-explanation in STRUGGLING mode using chunk text directly.
         Returns card dict with is_recovery=True and chunk_id stamped, or None on failure.
         """
+        _model_default, _model_mini = await self._resolve_models(db) if db else (OPENAI_MODEL, OPENAI_MODEL_MINI)
 
         chunk_id = chunk.get("id", "")
         topic_title = chunk.get("heading", "this topic")
@@ -1729,6 +1763,8 @@ class TeachingService:
             model="mini",
             timeout=30.0,
             temperature=0.3,
+            model_default=_model_default,
+            model_mini=_model_mini,
         )
 
         cleaned = self._extract_json_block(raw)
@@ -1863,7 +1899,8 @@ class TeachingService:
         }
 
     async def _generate_cards_single(
-        self, system_prompt: str, user_prompt: str, max_tokens: int = 12000
+        self, system_prompt: str, user_prompt: str, max_tokens: int = 12000,
+        model_default: str = OPENAI_MODEL, model_mini: str = OPENAI_MODEL_MINI,
     ) -> dict:
         """Generate all cards in a single LLM call (primary model)."""
         # Increased floor (120s) and adjusted coefficient (/80 instead of /100)
@@ -1877,7 +1914,8 @@ class TeachingService:
         last_error = None
         for attempt in range(3):
             try:
-                raw_json = await self._chat(messages=messages, max_tokens=max_tokens, timeout=card_timeout, model="mini")
+                raw_json = await self._chat(messages=messages, max_tokens=max_tokens, timeout=card_timeout, model="mini",
+                                            model_default=model_default, model_mini=model_mini)
             except ValueError:
                 last_error = ValueError("LLM returned empty response")
                 logger.warning("[cards-single] Empty response (attempt %d)", attempt + 1)
@@ -1923,6 +1961,8 @@ class TeachingService:
         images_used_this_section: list[str] | None = None,
         generate_as: str = "NORMAL",
         blended_score: float = 2.0,
+        model_default: str = OPENAI_MODEL,
+        model_mini: str = OPENAI_MODEL_MINI,
     ) -> list[dict]:
         """
         Generate cards for each section in a separate LLM call, all in parallel.
@@ -1952,7 +1992,8 @@ class TeachingService:
                 # while the profile floor guarantees adequate room for SLOW/NORMAL/FAST learners.
                 text_driven_budget = max(per_section_floor, text_len // 2)
                 data = await self._generate_cards_single(
-                    system_prompt, section_user_prompt, max_tokens=text_driven_budget
+                    system_prompt, section_user_prompt, max_tokens=text_driven_budget,
+                    model_default=model_default, model_mini=model_mini,
                 )
                 generated_cards = data.get("cards", [])
                 # Stamp stable integer section index so sort is O(n) and text-free.
@@ -2030,6 +2071,7 @@ class TeachingService:
         Handle AI assistant sidebar request during card-based learning.
         Returns the assistant's response text.
         """
+        _model_default, _model_mini = await self._resolve_models(db)
         # Get card data from cache
         card_title = "the current topic"
         card_content = ""
@@ -2090,7 +2132,8 @@ class TeachingService:
         openai_messages.append({"role": "user", "content": user_text})
 
         # Call LLM for hints (uses gpt-4o-mini — cheaper for short nudges)
-        ai_response = await self._chat(messages=openai_messages, max_tokens=400, model="mini")
+        ai_response = await self._chat(messages=openai_messages, max_tokens=400, model="mini",
+                                       model_default=_model_default, model_mini=_model_mini)
 
         # Save messages
         msg_count = await self._get_message_count(db, session.id)
@@ -2127,6 +2170,7 @@ class TeachingService:
         Generate targeted re-teaching cards for topics the student struggled with.
         Uses TEACH + EXAMPLE + RECAP card types only — no QUESTION cards.
         """
+        _model_default, _model_mini = await self._resolve_models(db)
         session = await db.get(TeachingSession, session_id)
         if not session:
             raise ValueError(f"Session not found: {session_id}")
@@ -2168,6 +2212,8 @@ class TeachingService:
             ],
             max_tokens=4000,
             temperature=0.7,
+            model_default=_model_default,
+            model_mini=_model_mini,
         )
 
         raw_json = self._extract_json_block(raw_json)
@@ -2699,8 +2745,9 @@ class TeachingService:
         # (caller handles empty → uses covered_topics or generic message)
         return failed if failed else []
 
-    async def regenerate_mcq(self, req: RegenerateMCQRequest) -> CardMCQ:
+    async def regenerate_mcq(self, req: RegenerateMCQRequest, db: AsyncSession | None = None) -> CardMCQ:
         """Generate a replacement MCQ after a wrong answer — same concept, different numbers/scenario."""
+        _model_default, _model_mini = await self._resolve_models(db) if db else (OPENAI_MODEL, OPENAI_MODEL_MINI)
         _lang = req.language or "en"
         system = (
             "You generate replacement MCQ questions for a K-12 math adaptive learning app. "
@@ -2726,8 +2773,10 @@ class TeachingService:
                     {"role": "user", "content": user},
                 ],
                 max_tokens=300,
-                model=OPENAI_MODEL_MINI,
+                model="mini",
                 temperature=0.8,
+                model_default=_model_default,
+                model_mini=_model_mini,
             )
             raw = response.strip()
             # Strip markdown code blocks if present

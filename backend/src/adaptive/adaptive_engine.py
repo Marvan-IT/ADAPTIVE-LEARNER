@@ -794,7 +794,7 @@ async def generate_next_card(
         {"role": "system", "content": sys_p},
         {"role": "user", "content": usr_p},
     ]
-    raw = await _call_llm(llm_client, ADAPTIVE_CARD_MODEL, messages, max_tokens=2200)
+    raw = await _call_llm(llm_client, model, messages, max_tokens=2200)
     cleaned = _extract_json_block(raw)
 
     parsed: dict | None = None

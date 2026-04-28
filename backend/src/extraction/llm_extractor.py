@@ -19,6 +19,10 @@ import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from config import OPENAI_API_KEY, OPENAI_BASE_URL, OPENAI_MODEL
+# NOTE: OPENAI_MODEL is intentionally read from config at module-load time here.
+# llm_extractor.py is an offline pipeline tool (Stage 2 ingestion); it does not
+# have a live AsyncSession available at its entry points.  Live AdminConfig model
+# resolution is deferred to a future patch.  See docs/round5-fixes/execution-plan.md P4-7.
 
 
 # ── Rate limiting ────────────────────────────────────────────────────

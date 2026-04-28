@@ -106,6 +106,7 @@ async def _call_llm_once(
     prompt: str,
     system_prompt: str,
     timeout: float = 120.0,
+    model: str = OPENAI_MODEL_MINI,
 ) -> list[str]:
     """Single raw OpenAI chat completion call.
 
@@ -115,7 +116,7 @@ async def _call_llm_once(
     """
     strings: list[str] = json.loads(prompt)
     resp = await client.chat.completions.create(
-        model=OPENAI_MODEL_MINI,
+        model=model,
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user",   "content": prompt},
@@ -148,6 +149,7 @@ async def _translate_batch_with_retry(
     batch_idx: int,
     total_batches: int,
     system_prompt: str,
+    model: str = OPENAI_MODEL_MINI,
 ) -> tuple[list[str], int]:
     """Translate *strings* with up to 5 retry attempts using exponential back-off.
 
@@ -174,7 +176,7 @@ async def _translate_batch_with_retry(
             await asyncio.sleep(delay)
 
         try:
-            result = await _call_llm_once(client, prompt, system_prompt)
+            result = await _call_llm_once(client, prompt, system_prompt, model=model)
             return result, retries_performed
         except (openai.APITimeoutError, openai.APIConnectionError, openai.RateLimitError) as exc:
             last_exc = exc
@@ -203,6 +205,7 @@ async def _translate_item_fallback(
     one_string: str,
     lang: str,
     system_prompt: str,
+    model: str = OPENAI_MODEL_MINI,
 ) -> str | None:
     """Translate a single string using the same 5-attempt retry.
 
@@ -210,7 +213,7 @@ async def _translate_item_fallback(
     """
     try:
         results, _ = await _translate_batch_with_retry(
-            client, [one_string], lang, 0, 1, system_prompt
+            client, [one_string], lang, 0, 1, system_prompt, model=model
         )
         return results[0]
     except Exception as exc:
@@ -226,6 +229,7 @@ async def _llm_translate_batch(
     strings: list[str],
     lang: str,
     system_prompt: str,
+    model: str = OPENAI_MODEL_MINI,
 ) -> tuple[list[str], int, int]:
     """Translate *strings* into *lang*, splitting into chunks of BATCH_SIZE_PER_CALL.
 
@@ -246,7 +250,7 @@ async def _llm_translate_batch(
 
         try:
             translated, retries = await _translate_batch_with_retry(
-                client, batch, lang, batch_idx, n_batches, system_prompt
+                client, batch, lang, batch_idx, n_batches, system_prompt, model=model
             )
             total_retries += retries
             results.extend(translated)
@@ -256,7 +260,7 @@ async def _llm_translate_batch(
                 batch_idx + 1, n_batches, lang, exc,
             )
             for item in batch:
-                fallback = await _translate_item_fallback(client, item, lang, system_prompt)
+                fallback = await _translate_item_fallback(client, item, lang, system_prompt, model=model)
                 if fallback is not None:
                     total_fallbacks += 1
                     results.append(fallback)
@@ -280,6 +284,7 @@ async def _translate_table(
     languages: list[str],
     force: bool,
     dry_run: bool,
+    model: str = OPENAI_MODEL_MINI,
 ) -> tuple[int, int, int, int, int, int]:
     """Translate one table.
 
@@ -333,7 +338,7 @@ async def _translate_table(
         sys_prompt = _build_system_prompt(lang, table_label)
         try:
             translated, lang_retries, lang_fallbacks = await _llm_translate_batch(
-                client, strings, lang, sys_prompt
+                client, strings, lang, sys_prompt, model=model
             )
             llm_calls += 1
             batches_sent += n_batches_for_lang
@@ -530,6 +535,18 @@ async def translate_book(
         from openai import AsyncOpenAI
         openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL or None)
 
+    # Resolve model once for the whole translate_book run so all tables use the
+    # same model string even if the admin changes the setting mid-run.
+    # Falls back to OPENAI_MODEL_MINI from config.py if no AdminConfig row exists
+    # or if db is None (CLI mode).
+    _book_model = OPENAI_MODEL_MINI
+    if db is not None:
+        try:
+            from services.admin_config_helper import get_openai_model as _get_model
+            _book_model = await _get_model(db, slot="mini")
+        except Exception:
+            pass  # fallback to constant already set above
+
     total_written = 0
     total_calls   = 0
     total_skipped = 0
@@ -569,14 +586,14 @@ async def translate_book(
         _acc(await _translate_table(
             session, openai_client, "books.title",
             [(book_row.id, book_row.title, book_row.title_translations or {})],
-            "title_translations", Book, languages, force, dry_run,
+            "title_translations", Book, languages, force, dry_run, model=_book_model,
         ))
 
         # Books — subject_translations
         _acc(await _translate_table(
             session, openai_client, "books.subject",
             [(book_row.id, book_row.subject, book_row.subject_translations or {})],
-            "subject_translations", Book, languages, force, dry_run,
+            "subject_translations", Book, languages, force, dry_run, model=_book_model,
         ))
 
         # Subjects joined via book.subject slug — find by label matching book.subject
@@ -591,7 +608,7 @@ async def translate_book(
             _acc(await _translate_table(
                 session, openai_client, "subjects.label",
                 [(subj_row.id, subj_row.label, subj_row.label_translations or {})],
-                "label_translations", Subject, languages, force, dry_run,
+                "label_translations", Subject, languages, force, dry_run, model=_book_model,
             ))
         else:
             logger.warning("[subjects] no subject row found matching book.subject=%r — skipping", book_row.subject)
@@ -605,7 +622,7 @@ async def translate_book(
         logger.info("[concept_chunks] %d chunks to process", len(chunk_data))
         _acc(await _translate_table(
             session, openai_client, "concept_chunks.heading", chunk_data,
-            "heading_translations", ConceptChunk, languages, force, dry_run,
+            "heading_translations", ConceptChunk, languages, force, dry_run, model=_book_model,
         ))
 
         # ChunkImages — caption_translations (skip NULL captions)
@@ -619,7 +636,7 @@ async def translate_book(
         logger.info("[chunk_images] %d captioned images to process", len(img_data))
         _acc(await _translate_table(
             session, openai_client, "chunk_images.caption", img_data,
-            "caption_translations", ChunkImage, languages, force, dry_run,
+            "caption_translations", ChunkImage, languages, force, dry_run, model=_book_model,
         ))
 
         if not dry_run:

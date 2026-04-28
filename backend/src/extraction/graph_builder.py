@@ -27,6 +27,9 @@ from db.models import ConceptChunk
 
 logger = logging.getLogger(__name__)
 
+# NOTE: graph_builder.py is an offline pipeline tool (Stage 3 ingestion); it does
+# not have a live AsyncSession available at its entry points.  Live AdminConfig model
+# resolution is deferred to a future patch.  See docs/round5-fixes/execution-plan.md P4-7.
 
 # ── LLM-based cross-chapter prerequisite detection ──────────────────────────
 

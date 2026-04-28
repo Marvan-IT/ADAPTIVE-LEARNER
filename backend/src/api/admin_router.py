@@ -27,6 +27,7 @@ from auth.dependencies import require_admin
 from auth.models import User
 from config import OUTPUT_DIR, DATA_DIR, BACKEND_DIR
 from db.connection import get_db
+from services.admin_config_helper import get_openai_model as _get_live_model
 import openai
 import networkx as nx
 from uuid import UUID
@@ -113,8 +114,9 @@ async def create_subject(
     # ── Auto-translate the new subject label into all 12 non-English locales ──
     try:
         from api.translation_helper import translate_one_string
+        _trans_model = await _get_live_model(db, slot="mini")
         async with asyncio.timeout(10.0):
-            translations = await translate_one_string(label)
+            translations = await translate_one_string(label, model=_trans_model)
         if translations:
             subj.label_translations = translations
             logger.info(
@@ -157,8 +159,9 @@ async def update_subject(
     if label != old_label:
         try:
             from api.translation_helper import translate_one_string
+            _trans_model = await _get_live_model(db, slot="mini")
             async with asyncio.timeout(10.0):
-                translations = await translate_one_string(label)
+                translations = await translate_one_string(label, model=_trans_model)
             if translations:
                 subj.label_translations = translations
                 logger.info(
@@ -385,8 +388,9 @@ async def rename_book(
     if title != old_title:
         try:
             from api.translation_helper import translate_one_string
+            _trans_model = await _get_live_model(db, slot="mini")
             async with asyncio.timeout(10.0):
-                translations = await translate_one_string(title)
+                translations = await translate_one_string(title, model=_trans_model)
             if translations:
                 book.title_translations = translations
                 logger.info(
@@ -1903,8 +1907,9 @@ async def update_chunk(
     if "heading" in body and new_heading and new_heading != old_heading:
         try:
             from api.translation_helper import translate_one_string
+            _trans_model = await _get_live_model(db, slot="mini")
             async with asyncio.timeout(10.0):
-                translations = await translate_one_string(str(new_heading))
+                translations = await translate_one_string(str(new_heading), model=_trans_model)
             if translations:
                 await db.execute(
                     text("UPDATE concept_chunks SET heading_translations = :t WHERE id = :id"),
@@ -2172,8 +2177,9 @@ async def merge_chunks(
     # ── Auto-translate the merged heading into all 12 non-English locales ───
     try:
         from api.translation_helper import translate_one_string
+        _trans_model = await _get_live_model(db, slot="mini")
         async with asyncio.timeout(10.0):
-            translations = await translate_one_string(str(new_heading))
+            translations = await translate_one_string(str(new_heading), model=_trans_model)
         if translations:
             await db.execute(
                 text("UPDATE concept_chunks SET heading_translations = :t WHERE id = :id"),
@@ -2365,8 +2371,9 @@ async def split_chunk(
     # ── Auto-translate the new "(cont.)" heading into all 12 non-English locales ──
     try:
         from api.translation_helper import translate_one_string
+        _trans_model = await _get_live_model(db, slot="mini")
         async with asyncio.timeout(10.0):
-            translations = await translate_one_string(str(new_chunk.heading))
+            translations = await translate_one_string(str(new_chunk.heading), model=_trans_model)
         if translations:
             await db.execute(
                 text("UPDATE concept_chunks SET heading_translations = :t WHERE id = :id"),
@@ -2639,8 +2646,9 @@ async def rename_section(
     translations: dict = {}
     try:
         from api.translation_helper import translate_one_string
+        _trans_model = await _get_live_model(db, slot="mini")
         async with asyncio.timeout(10.0):
-            translations = await translate_one_string(str(name))
+            translations = await translate_one_string(str(name), model=_trans_model)
         if translations:
             await db.execute(
                 text(

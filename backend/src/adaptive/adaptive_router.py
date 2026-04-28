@@ -111,8 +111,11 @@ async def generate_lesson(
         len(mastery_store),
     )
 
-    # 3. Delegate to the engine
+    # 3. Delegate to the engine — resolve model once, pass through
     book_slug = getattr(req, "book_slug", None) or "prealgebra"
+    from services.admin_config_helper import get_openai_model as _get_model
+    _live_model = await _get_model(db, slot="default")
+    logger.debug("[llm] resolved model=%s slot=default (adaptive/lesson)", _live_model)
     try:
         lesson = await generate_adaptive_lesson(
             student_id=str(req.student_id),
@@ -123,6 +126,7 @@ async def generate_lesson(
             db=db,
             mastery_store=mastery_store,
             llm_client=adaptive_llm_client,
+            model=_live_model,
             language=language,
         )
     except ValueError as exc:

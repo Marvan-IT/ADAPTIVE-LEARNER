@@ -58,6 +58,7 @@ async def _call_llm_once(
     client: openai.AsyncOpenAI,
     text: str,
     lang: str,
+    model: str = OPENAI_MODEL_MINI,
 ) -> str:
     """Send a single OpenAI request translating *text* into *lang*.
 
@@ -69,7 +70,7 @@ async def _call_llm_once(
     system_prompt = _build_system_prompt(lang)
 
     resp = await client.chat.completions.create(
-        model=OPENAI_MODEL_MINI,
+        model=model,
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": payload},
@@ -95,6 +96,7 @@ async def _translate_one_lang_with_retry(
     client: openai.AsyncOpenAI,
     text: str,
     lang: str,
+    model: str = OPENAI_MODEL_MINI,
 ) -> str | None:
     """Translate *text* into *lang* with up to 5 retry attempts.
 
@@ -113,7 +115,7 @@ async def _translate_one_lang_with_retry(
             await asyncio.sleep(delay)
 
         try:
-            return await _call_llm_once(client, text, lang)
+            return await _call_llm_once(client, text, lang, model=model)
         except (
             openai.APITimeoutError,
             openai.APIConnectionError,
@@ -137,6 +139,7 @@ async def translate_one_string(
     text: str,
     target_langs: list[str] | None = None,
     openai_client: openai.AsyncOpenAI | None = None,
+    model: str = OPENAI_MODEL_MINI,
 ) -> dict[str, str]:
     """Translate *text* into all 12 non-English locales (or *target_langs* if given).
 
@@ -154,6 +157,8 @@ async def translate_one_string(
         openai_client: An existing ``AsyncOpenAI`` client.  If ``None``, a new
             client is instantiated from ``config.OPENAI_API_KEY`` /
             ``config.OPENAI_BASE_URL``.
+        model: OpenAI model string resolved live via get_openai_model(db, 'mini')
+            at the call site.  Defaults to OPENAI_MODEL_MINI from config.py.
 
     Returns:
         Dict mapping language code → translated string, plus ``en_source_hash``.
@@ -171,7 +176,7 @@ async def translate_one_string(
 
     try:
         results: list[str | None] = await asyncio.gather(
-            *[_translate_one_lang_with_retry(client, text, lang) for lang in langs],
+            *[_translate_one_lang_with_retry(client, text, lang, model=model) for lang in langs],
             return_exceptions=False,
         )
     except Exception as exc:  # noqa: BLE001

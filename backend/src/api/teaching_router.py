@@ -1034,6 +1034,7 @@ async def generate_chunk_cards(
     position metadata (chunk_index, total_chunks, is_last_chunk).
     """
     _require_services()
+    _llm_model_mini = await get_admin_config(db, "OPENAI_MODEL_MINI", fallback=str(OPENAI_MODEL_MINI))
     session = await db.get(TeachingSession, session_id)
     if not session:
         raise HTTPException(404, "Session not found")
@@ -1121,6 +1122,7 @@ async def generate_chunk_cards(
                         _q_system,
                         _q_user,
                         max_tokens=400,
+                        model=_llm_model_mini,
                     )
                     for _qi, _q in enumerate((_q_result.get("questions") or [])[:_target_q]):
                         _qtext = (_q.get("text") or "").strip()
@@ -1138,6 +1140,7 @@ async def generate_chunk_cards(
                             _q_system,
                             _q_user,
                             max_tokens=400,
+                            model=_llm_model_mini,
                         )
                         for _qi, _q in enumerate((_q_result2.get("questions") or [])[:_target_q]):
                             _qtext = (_q.get("text") or "").strip()
@@ -1213,6 +1216,7 @@ async def generate_chunk_recovery_card(
         session=session,
         chunk=chunk,
         chunk_images=images,
+        db=db,
         card_index=req.card_index,
         wrong_answers=req.wrong_answers,
         is_exercise=req.is_exercise,
@@ -1483,6 +1487,7 @@ async def evaluate_chunk_answers(
     If passed (>=70%), records chunk completion in session.chunk_progress and
     computes all_study_complete. Returns per-question feedback.
     """
+    _llm_model_mini = await get_admin_config(db, "OPENAI_MODEL_MINI", fallback=str(OPENAI_MODEL_MINI))
     session = await db.get(TeachingSession, session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -1521,6 +1526,7 @@ async def evaluate_chunk_answers(
             grading_system,
             grading_user,
             max_tokens=600,
+            model=_llm_model_mini,
         )
         results = grade_result.get("results") or []
     except Exception as _ge:
@@ -1822,17 +1828,21 @@ async def _call_llm_json(
     system_prompt: str,
     user_prompt: str,
     max_tokens: int,
+    model: str = OPENAI_MODEL_MINI,
 ) -> dict:
     """Call LLM with a JSON-output system prompt; parse and return the dict.
 
     Retries up to 3 times with exponential back-off. Raises ValueError on
     persistent failure or invalid JSON.
+
+    Pass ``model`` resolved via get_openai_model(db, 'mini') at the call site
+    so admin model changes take effect on the next operation.
     """
     last_exc: Exception | None = None
     for attempt in range(1, 4):
         try:
             resp = await client.chat.completions.create(
-                model=OPENAI_MODEL_MINI,
+                model=model,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user",   "content": user_prompt},
@@ -2158,7 +2168,7 @@ async def regenerate_mcq_endpoint(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     await _validate_student_ownership(user, session.student_id, db)
-    new_mcq = await teaching_svc.regenerate_mcq(body)
+    new_mcq = await teaching_svc.regenerate_mcq(body, db=db)
     return RegenerateMCQResponse(question=new_mcq)
 
 
