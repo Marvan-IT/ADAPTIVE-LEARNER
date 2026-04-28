@@ -702,7 +702,7 @@ class TeachingService:
         and returns a response compatible with the legacy /sessions/{id}/cards contract so
         that the frontend SessionContext.startLesson() can proceed without changes.
         """
-        from api.teaching_schemas import NextCardRequest
+        from types import SimpleNamespace
 
         # Parse existing cache, if any.
         _student_lang = getattr(student, "preferred_language", "en") or "en"
@@ -718,12 +718,15 @@ class TeachingService:
             cached = _ca.get_slice()
 
         # Generate the first card using zero-signal baseline request.
-        zero_req = NextCardRequest(
+        # generate_per_card uses duck typing on req (see its signature comment),
+        # so a namespace with the expected attrs is sufficient.
+        zero_req = SimpleNamespace(
             card_index=0,
             time_on_card_sec=0,
             wrong_attempts=0,
             hints_used=0,
             idle_triggers=0,
+            chunk_id=None,
         )
         result = await self.generate_per_card(db, session, student, zero_req)
 
