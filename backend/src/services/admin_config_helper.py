@@ -20,7 +20,7 @@ async def get_admin_config(db: AsyncSession, key: str, fallback: str = "") -> st
     row = (await db.execute(
         select(AdminConfig.value).where(AdminConfig.key == key)
     )).scalar_one_or_none()
-    return row if row is not None else fallback
+    return row if row else fallback
 
 
 async def get_openai_model(db: AsyncSession, slot: str = "default") -> str:
