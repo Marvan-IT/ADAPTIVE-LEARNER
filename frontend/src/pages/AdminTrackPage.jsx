@@ -11,7 +11,8 @@ function getStages(t) {
     { num: 3, label: t("admin.pipeline.stage3Label", "Build chunks & embeddings"), estimate: t("admin.pipeline.stage3Est", "~2-5 min"),   desc: t("admin.pipeline.stage3Desc", "Split content into teaching chunks, generate embeddings, save to database") },
     { num: 4, label: t("admin.pipeline.stage4Label", "Validate chunks"),           estimate: t("admin.pipeline.stage4Est", "~10 sec"),    desc: t("admin.pipeline.stage4Desc", "Check TOC coverage, section ordering, chunk quality") },
     { num: 5, label: t("admin.pipeline.stage5Label", "Build dependency graph"),    estimate: t("admin.pipeline.stage5Est", "~1 min"),     desc: t("admin.pipeline.stage5Desc", "Build prerequisite graph linking sections in reading order") },
-    { num: 6, label: t("admin.pipeline.stage6Label", "Ready for review"),          estimate: null,                                         desc: t("admin.pipeline.stage6Desc", "Pipeline complete — book is ready for admin review") },
+    { num: 6, label: t("admin.pipeline.stage6Label", "Hot-load into server"),      estimate: t("admin.pipeline.stage6Est", "~5 sec"),     desc: t("admin.pipeline.stage6Desc", "Mount the new book into the running server so students can see it") },
+    { num: 7, label: t("admin.pipeline.stage7Label", "Translate to all languages"), estimate: t("admin.pipeline.stage7Est", "~30-90 min"), desc: t("admin.pipeline.stage7Desc", "Auto-translate chunk headings, image captions, book/subject titles into 12 non-English languages") },
   ];
 }
 
@@ -45,7 +46,7 @@ export default function AdminTrackPage() {
           setElapsed(0);
         }
 
-        if (data.status === "READY_FOR_REVIEW" || data.stage_number >= 6) {
+        if (data.status === "READY_FOR_REVIEW") {
           clearInterval(pollRef.current);
           clearInterval(timerRef.current);
           setTimeout(() => navigate(`/admin/books/${slug}/review`), 1500);

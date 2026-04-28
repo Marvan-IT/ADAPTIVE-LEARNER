@@ -456,8 +456,16 @@ async def get_book_status(
                 stage_number, stage_label = 5, "Graph built \u2713"
             elif "Stage 6/6" in line and "Done" not in line:
                 stage_number, stage_label = 6, "Hot-loading into server"
+            elif "Hot-load successful" in line:
+                stage_number, stage_label = 6, "Hot-load complete ✓"
+            elif "Stage 7/7" in line and "Auto-translating" in line:
+                stage_number, stage_label = 7, "Translating to all languages"
+            elif "Stage 7/7" in line and "Translated" in line:
+                stage_number, stage_label = 7, "Translation complete ✓"
+            elif "Stage 7/7" in line and "Skipped" in line:
+                stage_number, stage_label = 7, "Translation skipped"
             elif "Pipeline complete" in line:
-                stage_number, stage_label = 6, "Ready for review"
+                stage_number, stage_label = 7, "Ready for review"
                 # Update DB status when pipeline completes
                 book = (await db.execute(
                     select(Book).where(Book.book_slug == slug)
@@ -469,7 +477,7 @@ async def get_book_status(
     # Filtered stage-marker lines for clear progression view
     stage_lines = [
         line for line in lines
-        if ("Stage " in line and "/6" in line)
+        if ("Stage " in line and ("/6" in line or "/7" in line))
         or "Pipeline started" in line
         or "Pipeline complete" in line
         or "Pipeline FAILED" in line
