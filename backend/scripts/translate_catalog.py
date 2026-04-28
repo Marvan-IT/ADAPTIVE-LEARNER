@@ -120,7 +120,11 @@ async def _call_llm_once(
             {"role": "system", "content": system_prompt},
             {"role": "user",   "content": prompt},
         ],
-        max_tokens=max(512, len(strings) * 60),
+        # 200 tokens per string accommodates non-Latin script translations
+        # (Hindi/Tamil/Sinhala can use 2-3× the tokens of English) for typical
+        # heading/caption lengths up to ~50 words. Was 60 — truncated
+        # nursing-style long captions, forcing expensive per-item fallbacks.
+        max_tokens=max(512, len(strings) * 200),
         temperature=0.1,
         timeout=timeout,
     )
