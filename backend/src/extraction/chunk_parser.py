@@ -837,9 +837,22 @@ def _find_chapter_intros(mmd_text: str, sections: list[dict] | None = None) -> d
             fig_pat = re.compile(rf"Figure\s+{ch_num}\.\d+", re.IGNORECASE)
             fig_match = fig_pat.search(region)
             if fig_match:
-                # Find the line start before the figure
-                line_start = region.rfind("\n", 0, fig_match.start())
-                intro_pos = prev_end + max(0, line_start)
+                # If the figure caption sits inside a \begin{figure}...\end{figure}
+                # block, the intro should start at \begin{figure} so the chunk
+                # captures the preceding \includegraphics{} (otherwise image is
+                # lost). Walk backward to find \begin{figure} if it exists.
+                begin_fig = region.rfind("\\begin{figure}", 0, fig_match.start())
+                if begin_fig != -1:
+                    # Verify the matching \end{figure} is AFTER the caption (i.e.
+                    # caption is inside this figure block, not a stray \begin
+                    # from an earlier figure).
+                    end_fig = region.find("\\end{figure}", fig_match.start())
+                    if end_fig != -1:
+                        intro_pos = prev_end + begin_fig
+                if intro_pos is None:
+                    # Fall back to original behaviour (line before the caption)
+                    line_start = region.rfind("\n", 0, fig_match.start())
+                    intro_pos = prev_end + max(0, line_start)
 
             # Check for ## Introduction heading.
             # Anchor to end-of-line so back-references like "## Introduction to
