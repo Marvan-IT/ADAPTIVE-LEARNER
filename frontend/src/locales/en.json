@@ -62,6 +62,7 @@
   "map.bookProcessing": "Textbook content is being prepared",
   "map.bookProcessingDesc": "The extraction pipeline is still running.",
   "learning.craftingCards": "Adaptive Learner is crafting your lesson cards...",
+  "learning.loadingLesson": "Loading lesson...",
   "learning.tryAgain": "Try Again",
   "learning.backToMap": "Back to Map",
   "learning.exitLesson": "Exit Lesson",

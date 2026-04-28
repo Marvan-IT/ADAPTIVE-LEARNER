@@ -114,6 +114,7 @@
   },
   "learning": {
     "craftingCards": "Adaptive Learner يعد بطاقات الدرس الخاصة بك...",
+    "loadingLesson": "جارٍ تحميل الدرس...",
     "tryAgain": "حاول مرة أخرى",
     "backToMap": "العودة إلى الخريطة",
     "exitLesson": "الخروج من الدرس",

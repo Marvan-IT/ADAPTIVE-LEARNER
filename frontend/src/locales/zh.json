@@ -114,6 +114,7 @@
   },
   "learning": {
     "craftingCards": "Adaptive Learner 正在为你制作课程卡片...",
+    "loadingLesson": "正在加载课程...",
     "tryAgain": "再试一次",
     "backToMap": "返回地图",
     "exitLesson": "退出课程",

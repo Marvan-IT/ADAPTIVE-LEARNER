@@ -82,7 +82,7 @@ function sessionReducer(state, action) {
       if (state.session?.concept_id) {
         localStorage.removeItem(`ada_session_${state.session.student_id}_${state.session.concept_id}`);
       }
-      return { ...initialState, phase: "LOADING", loading: true };
+      return { ...initialState, phase: "INITIALIZING", loading: true };
     case "TRANSITION_LOADING":
       return { ...state, loading: true };
     case "SESSION_CREATED":

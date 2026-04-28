@@ -114,6 +114,7 @@
   },
   "learning": {
     "craftingCards": "Adaptive Learner가 수업 카드를 만들고 있어요...",
+    "loadingLesson": "수업을 불러오는 중...",
     "tryAgain": "다시 시도",
     "backToMap": "지도로 돌아가기",
     "exitLesson": "수업 종료",

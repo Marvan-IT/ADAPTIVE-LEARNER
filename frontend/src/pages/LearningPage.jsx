@@ -319,7 +319,7 @@ export default function LearningPage() {
     );
   }
 
-  if (phase === "LOADING" || phase === "IDLE") {
+  if (phase === "LOADING" || phase === "IDLE" || phase === "INITIALIZING") {
     return (
       <div style={{ maxWidth: "1100px", margin: "0 auto", padding: "24px 24px 48px" }}>
         {/* Skeleton: mimics card layout */}
@@ -352,7 +352,7 @@ export default function LearningPage() {
           </div>
         </div>
         <p style={{ textAlign: "center", color: "var(--color-text-muted)", marginTop: "24px", fontSize: "0.95rem", fontWeight: 600 }}>
-          {t("learning.craftingCards")}
+          {phase === "INITIALIZING" ? t("learning.loadingLesson") : t("learning.craftingCards")}
         </p>
       </div>
     );

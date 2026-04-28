@@ -114,6 +114,7 @@
   },
   "learning": {
     "craftingCards": "Adaptive Learner erstellt deine Lektionskarten...",
+    "loadingLesson": "Lektion wird geladen...",
     "tryAgain": "Erneut versuchen",
     "backToMap": "Zurück zur Karte",
     "exitLesson": "Lektion beenden",

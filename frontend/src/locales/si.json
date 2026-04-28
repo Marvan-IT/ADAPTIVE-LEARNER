@@ -114,6 +114,7 @@
   },
   "learning": {
     "craftingCards": "Adaptive Learner ඔබේ පාඩම් කාඩ්පත් සාදමින්...",
+    "loadingLesson": "පාඩම පූරණය වෙමින්...",
     "tryAgain": "නැවත උත්සාහ කරන්න",
     "backToMap": "සිතියමට ආපසු",
     "exitLesson": "පාඩම අවසන් කරන්න",

@@ -114,6 +114,7 @@
   },
   "learning": {
     "craftingCards": "Adaptive Learner está a preparar os teus cartões de lição...",
+    "loadingLesson": "A carregar a lição...",
     "tryAgain": "Tentar novamente",
     "backToMap": "Voltar ao mapa",
     "exitLesson": "Sair da lição",

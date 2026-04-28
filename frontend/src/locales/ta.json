@@ -114,6 +114,7 @@
   },
   "learning": {
     "craftingCards": "Adaptive Learner உன் பாட அட்டைகளை உருவாக்குகிறது...",
+    "loadingLesson": "பாடத்தை ஏற்றுகிறது...",
     "tryAgain": "மீண்டும் முயற்சி செய்",
     "backToMap": "வரைபடத்திற்குத் திரும்பு",
     "exitLesson": "பாடத்தை விடு",

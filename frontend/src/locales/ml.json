@@ -114,6 +114,7 @@
   },
   "learning": {
     "craftingCards": "Adaptive Learner നിങ്ങളുടെ പാഠ കാർഡുകൾ തയ്യാറാക്കുന്നു...",
+    "loadingLesson": "പാഠം ലോഡ് ചെയ്യുന്നു...",
     "tryAgain": "വീണ്ടും ശ്രമിക്കുക",
     "backToMap": "ഭൂപടത്തിലേക്ക് മടങ്ങുക",
     "exitLesson": "പാഠം ഉപേക്ഷിക്കുക",
