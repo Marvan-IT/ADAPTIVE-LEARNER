@@ -2889,6 +2889,12 @@ async def toggle_section_visibility(
         await invalidate_chunk_cache(db, _section_vis_chunk_ids)
     except Exception:
         logger.warning("[admin-invalidate] action=toggle_section_visibility concept=%s — invalidation failed", concept_id)
+    # Also clear the in-memory graph cache so the next /graph/full request rebuilds
+    # with the updated is_hidden state.  invalidate_graph_cache is sync — no await.
+    try:
+        invalidate_graph_cache(book_slug)
+    except Exception:
+        logger.warning("[admin-invalidate] graph cache invalidation failed for book=%s", book_slug)
     await db.commit()
     logger.info(
         "[admin] Section concept=%s book=%s is_hidden=%s set by admin %s (%d chunks, audit_logged)",

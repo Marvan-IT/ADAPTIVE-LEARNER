@@ -71,6 +71,21 @@ def invalidate_graph_cache(book_slug: str) -> None:
     _graph_cache.pop(book_slug, None)
 
 
+async def get_hidden_concept_ids(db: AsyncSession, book_slug: str) -> set[str]:
+    """Return concept_ids where ALL chunks have is_hidden=True (fully-hidden sections).
+
+    Used at request time to filter hidden sections from student-facing graph endpoints.
+    Returns an empty set when no concepts are hidden (filter becomes a no-op).
+    """
+    rows = (await db.execute(
+        select(ConceptChunk.concept_id)
+        .where(ConceptChunk.book_slug == book_slug)
+        .group_by(ConceptChunk.concept_id)
+        .having(func.bool_and(ConceptChunk.is_hidden) == True)  # noqa: E712
+    )).scalars().all()
+    return set(rows)
+
+
 def _apply_overrides(G: nx.DiGraph, overrides: list) -> nx.DiGraph:
     """Apply admin graph overrides (add/remove edges) to a copy of the graph."""
     G_copy = G.copy()

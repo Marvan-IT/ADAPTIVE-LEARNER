@@ -32,7 +32,7 @@ from api.schemas import (
     LearningPathRequest, LearningPathResponse, LearningPathStep,
     ConceptDetailResponse, GraphInfoResponse,
 )
-from api.chunk_knowledge_service import ChunkKnowledgeService
+from api.chunk_knowledge_service import ChunkKnowledgeService, get_hidden_concept_ids
 from api.teaching_router import router as teaching_router
 from api.teaching_service import TeachingService
 import api.teaching_router as teaching_router_module
@@ -404,10 +404,15 @@ async def query_concepts(request: Request, req: ConceptQuery, book_slug: str = Q
 
 @app.post("/api/v1/concepts/next", response_model=NextConceptsResponse)
 @limiter.limit("60/minute")
-async def next_concepts(request: Request, req: NextConceptsRequest, book_slug: str = Query("prealgebra", pattern=r"^[a-z0-9_().+-]+$")):
+async def next_concepts(request: Request, req: NextConceptsRequest,
+                        book_slug: str = Query("prealgebra", pattern=r"^[a-z0-9_().+-]+$"),
+                        db: AsyncSession = Depends(get_db)):
     """Given mastered concepts, return all concepts now ready to learn and locked ones."""
-    ready = _chunk_knowledge_svc.get_next_concepts(book_slug, req.mastered_concepts)
-    locked = _chunk_knowledge_svc.get_locked_concepts(book_slug, req.mastered_concepts)
+    hidden = await get_hidden_concept_ids(db, book_slug)
+    ready = [c for c in _chunk_knowledge_svc.get_next_concepts(book_slug, req.mastered_concepts) if c not in hidden]
+    locked = [c for c in _chunk_knowledge_svc.get_locked_concepts(book_slug, req.mastered_concepts) if c not in hidden]
+    if hidden:
+        logger.debug("[graph-filter] book=%s hidden_concepts=%d (next_concepts)", book_slug, len(hidden))
     return NextConceptsResponse(
         mastered_concepts=req.mastered_concepts,
         ready_to_learn=ready,
@@ -420,6 +425,9 @@ async def get_concept(concept_id: str, book_slug: str = Query("prealgebra", patt
     """Full detail for a single concept including prerequisites and dependents."""
     from db.connection import get_db as _get_db
     async for _db in _get_db():
+        hidden = await get_hidden_concept_ids(_db, book_slug)
+        if concept_id in hidden:
+            raise HTTPException(status_code=404, detail=f"Concept not found: {concept_id}")
         detail = await _chunk_knowledge_svc.get_concept_detail(_db, concept_id, book_slug, lang="en")
         break
     if not detail:
@@ -428,9 +436,14 @@ async def get_concept(concept_id: str, book_slug: str = Query("prealgebra", patt
 
 
 @app.get("/api/v1/concepts/{concept_id}/prerequisites")
-async def get_prerequisites(concept_id: str, book_slug: str = Query("prealgebra", pattern=r"^[a-z0-9_().+-]+$")):
+async def get_prerequisites(concept_id: str,
+                             book_slug: str = Query("prealgebra", pattern=r"^[a-z0-9_().+-]+$"),
+                             db: AsyncSession = Depends(get_db)):
     """All transitive prerequisites for a concept."""
-    all_prereqs = _chunk_knowledge_svc.get_all_prerequisites(book_slug, concept_id)
+    hidden = await get_hidden_concept_ids(db, book_slug)
+    all_prereqs = [p for p in _chunk_knowledge_svc.get_all_prerequisites(book_slug, concept_id) if p not in hidden]
+    if hidden:
+        logger.debug("[graph-filter] book=%s hidden_concepts=%d (prerequisites)", book_slug, len(hidden))
     return {
         "concept_id": concept_id,
         "prerequisites": all_prereqs,
@@ -447,6 +460,9 @@ async def get_concept_images(concept_id: str, book_slug: str = Query("prealgebra
     """List all extracted images for a concept."""
     from db.connection import get_db as _get_db
     async for _db in _get_db():
+        hidden = await get_hidden_concept_ids(_db, book_slug)
+        if concept_id in hidden:
+            raise HTTPException(status_code=404, detail=f"Concept not found: {concept_id}")
         detail = await _chunk_knowledge_svc.get_concept_detail(_db, concept_id, book_slug, lang="en")
         break
     images = detail.get("images", []) if detail else []
@@ -550,6 +566,11 @@ async def graph_full(
     }
 
     base_nodes = _chunk_knowledge_svc.get_all_nodes(book_slug)
+    hidden = await get_hidden_concept_ids(db, book_slug)
+    if hidden:
+        logger.debug("[graph-filter] book=%s hidden_concepts=%d (graph/full)", book_slug, len(hidden))
+        base_nodes = [n for n in base_nodes if n["concept_id"] not in hidden]
+
     if lang != "en":
         nodes = []
         for node in base_nodes:
@@ -562,6 +583,8 @@ async def graph_full(
         nodes = base_nodes
 
     edges = _chunk_knowledge_svc.get_all_edges(book_slug)
+    if hidden:
+        edges = [e for e in edges if e["source"] not in hidden and e["target"] not in hidden]
     return {"nodes": nodes, "edges": edges}
 
 
@@ -570,6 +593,10 @@ async def topological_order(book_slug: str = Query("prealgebra", pattern=r"^[a-z
     """Return all concepts in a valid learning sequence."""
     await _require_visible_book(book_slug, db)
     order = _chunk_knowledge_svc.get_topological_order(book_slug)
+    hidden = await get_hidden_concept_ids(db, book_slug)
+    if hidden:
+        logger.debug("[graph-filter] book=%s hidden_concepts=%d (topological-order)", book_slug, len(hidden))
+        order = [o for o in order if o.get("concept_id") not in hidden]
     return {"order": order, "count": len(order)}
 
 
