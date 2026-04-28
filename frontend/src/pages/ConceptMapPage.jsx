@@ -697,11 +697,12 @@ function GraphView({
               exit={{ opacity: 0, x: 20, scale: 0.95 }}
               transition={{ type: "spring", stiffness: 400, damping: 30 }}
               style={{
-                position: "absolute", top: "16px", right: "16px", width: "300px", zIndex: 10,
+                position: "fixed", top: "100px", right: "32px", width: "300px", zIndex: 50,
                 background: "var(--color-surface)",
                 backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)",
                 borderRadius: "16px", border: "1px solid var(--color-border)",
                 padding: "22px", boxShadow: "0 12px 40px rgba(0,0,0,0.12), 0 2px 8px rgba(0,0,0,0.06)",
+                maxHeight: "calc(100vh - 140px)", overflowY: "auto",
               }}
             >
               <StatusBadge status={nodeStatuses[selectedNode]} />
