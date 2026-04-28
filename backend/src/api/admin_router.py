@@ -265,9 +265,11 @@ async def upload_book(
     except ValueError:
         raise HTTPException(400, "Invalid upload destination")
     content = await file.read()
-    # Validate file size (max 100MB)
-    if len(content) > 100_000_000:
-        raise HTTPException(status_code=413, detail="File too large (max 100MB)")
+    # Validate file size (max 200MB — nginx allows 500MB but we cap lower since
+    # the whole file is loaded into RAM here; a 500MB upload would use ~12% of
+    # available memory which is too risky on the 8GB server).
+    if len(content) > 200_000_000:
+        raise HTTPException(status_code=413, detail="File too large (max 200MB)")
     # Validate file is a PDF (magic bytes)
     if content[:4] != b"%PDF":
         raise HTTPException(status_code=400, detail="File must be a PDF")
