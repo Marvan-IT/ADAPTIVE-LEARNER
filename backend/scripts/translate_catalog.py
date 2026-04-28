@@ -83,8 +83,17 @@ def _needs_translate(
     current_hash = _sha1(en_value)
     if stored_hash != current_hash:
         # Source changed — retranslate everything.
+        logger.info(
+            "[translate_catalog] _needs_translate: hash mismatch stored=%s current=%s — retranslating all",
+            stored_hash[:8] if stored_hash else "(none)", current_hash[:8],
+        )
         return True, languages
     missing = [lang for lang in languages if not translations.get(lang)]
+    if missing:
+        logger.info(
+            "[translate_catalog] _needs_translate: missing langs=%s — partial retranslation",
+            missing,
+        )
     return bool(missing), missing
 
 
@@ -369,6 +378,12 @@ async def _translate_table(
         rows_written += 1
 
     await db.flush()
+    if not dry_run:
+        await db.commit()  # survive backend restart between languages; each table is an atomic unit
+        logger.info(
+            "[translate_catalog] committed table=%s rows=%d",
+            "translations", rows_written,
+        )
     return rows_written, llm_calls, rows_skipped, batches_sent, retries_performed, per_item_fallbacks
 
 
