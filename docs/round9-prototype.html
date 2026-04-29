@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CompletionView — Adaptive Learner</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --color-bg:           #FAFAFA;
+  --color-surface:      #FFFFFF;
+  --color-text:         #0F172A;
+  --color-text-muted:   #64748B;
+  --color-primary:      #F97316;
+  --color-primary-dark: #EA580C;
+  --color-border:       rgba(15,23,42,0.08);
+  --color-border-strong:rgba(15,23,42,0.16);
+  --color-success:      #22C55E;
+  --color-success-dark: #15803D;
+  --color-danger:       #EF4444;
+  --color-danger-dark:  #B91C1C;
+
+  /* Tinted backgrounds — pulled directly from DashboardPage SUBJECT_COLORS / STAT_COLORS */
+  --tint-orange:        #FFF7ED;
+  --tint-orange-text:   #C2410C;
+  --tint-green:         #F0FDF4;
+  --tint-green-text:    #15803D;
+  --tint-rose:          #FFF1F2;
+  --tint-rose-text:     #B91C1C;
+  --tint-amber:         #FFFBEB;
+  --tint-amber-text:    #B45309;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  padding: 32px 16px 80px;
+}
+
+/* page-level header (mock, just to give layout context) */
+.demo-header {
+  max-width: 720px;
+  margin: 0 auto 16px;
+  font-family: 'Outfit', sans-serif;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+.back-link {
+  max-width: 720px;
+  margin: 0 auto 16px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--color-text-muted);
+  text-decoration: none;
+  cursor: pointer;
+}
+.back-link:hover { color: var(--color-text); }
+
+/* ─── CARD (matches Dashboard pattern) ─────────────────────────── */
+.card {
+  max-width: 720px;
+  margin: 0 auto;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  padding: 28px 28px 24px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  animation: card-enter 0.45s cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+@keyframes card-enter {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ─── HEADER ROW ────────────────────────────────────────────────── */
+.header-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 22px;
+}
+
+.headings {
+  flex: 1;
+  min-width: 0;
+}
+
+.concept-name {
+  font-family: 'Outfit', sans-serif;
+  font-weight: 800;
+  font-size: 1.875rem;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  color: var(--color-text);
+  margin: 0 0 4px;
+}
+
+.section-meta {
+  font-family: 'DM Sans', sans-serif;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--color-text-muted);
+}
+.section-meta .dot { display: inline-block; margin: 0 8px; opacity: 0.5; }
+
+/* status badge */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-family: 'Outfit', sans-serif;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.badge svg { width: 13px; height: 13px; }
+.badge.excellent { background: var(--tint-green); color: var(--tint-green-text); }
+.badge.passed    { background: var(--tint-orange); color: var(--tint-orange-text); }
+.badge.review    { background: var(--tint-rose); color: var(--tint-rose-text); }
+
+/* ─── SCORE BLOCK ──────────────────────────────────────────────── */
+.score-block {
+  border-radius: 12px;
+  padding: 18px 20px;
+  margin-bottom: 20px;
+}
+.score-block.excellent { background: var(--tint-green); }
+.score-block.passed    { background: var(--tint-orange); }
+.score-block.review    { background: var(--tint-rose); }
+
+.score-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.bar-wrap {
+  flex: 1;
+  height: 10px;
+  background: rgba(15, 23, 42, 0.08);
+  border-radius: 999px;
+  overflow: hidden;
+  position: relative;
+}
+.bar {
+  height: 100%;
+  width: 0;
+  border-radius: 999px;
+  animation: bar-fill 0.85s 0.25s cubic-bezier(0.25, 0.1, 0.25, 1) forwards;
+}
+.score-block.excellent .bar { background: var(--color-success); }
+.score-block.passed    .bar { background: var(--color-primary-dark); }
+.score-block.review    .bar { background: var(--tint-rose-text); }
+@keyframes bar-fill { to { width: var(--score-pct); } }
+
+.score-numeric {
+  font-family: 'Outfit', sans-serif;
+  font-weight: 700;
+  font-size: 1.625rem;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text);
+  white-space: nowrap;
+}
+.score-numeric .denom {
+  font-weight: 500;
+  font-size: 1rem;
+  color: var(--color-text-muted);
+  margin-left: 2px;
+}
+
+.score-caption {
+  margin-top: 10px;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 0.875rem;
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
+/* ─── STAT TILES ───────────────────────────────────────────────── */
+.stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-bottom: 22px;
+}
+
+.stat {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  padding: 14px 12px;
+  text-align: center;
+  opacity: 0;
+  animation: tile-in 0.4s cubic-bezier(0.25, 0.1, 0.25, 1) forwards;
+}
+.stat:nth-child(1) { animation-delay: 0.55s; }
+.stat:nth-child(2) { animation-delay: 0.65s; }
+.stat:nth-child(3) { animation-delay: 0.75s; }
+@keyframes tile-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.stat-value {
+  font-family: 'Outfit', sans-serif;
+  font-weight: 800;
+  font-size: 1.5rem;
+  line-height: 1.1;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+.stat-value.xp     { color: var(--color-primary-dark); }
+.stat-value.time   { color: var(--color-text); }
+.stat-value.streak { color: #B45309; }
+
+.stat-label {
+  font-family: 'DM Sans', sans-serif;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  margin-top: 4px;
+}
+
+/* ─── ACTIONS ─────────────────────────────────────────────────── */
+.actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: stretch;
+}
+
+.btn-primary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  height: 48px;
+  border: none;
+  border-radius: 10px;
+  background: var(--color-primary-dark);
+  color: white;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 0.9375rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  cursor: pointer;
+  text-decoration: none;
+  transition: background 0.15s ease;
+  box-shadow: 0 1px 2px rgba(234, 88, 12, 0.20);
+}
+.btn-primary:hover { background: #C2410C; }
+
+.review .btn-primary { background: var(--tint-rose-text); box-shadow: 0 1px 2px rgba(185, 28, 28, 0.18); }
+.review .btn-primary:hover { background: #991B1B; }
+
+.btn-ghost {
+  align-self: center;
+  padding: 8px 16px;
+  background: transparent;
+  border: none;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  text-decoration: none;
+}
+.btn-ghost:hover { color: var(--color-text); }
+
+/* ─── DEMO DIVIDER ────────────────────────────────────────────── */
+.divider {
+  max-width: 720px;
+  margin: 56px auto 24px;
+  border: 0;
+  border-top: 1px dashed rgba(15, 23, 42, 0.15);
+}
+</style>
+</head>
+<body>
+
+<!-- ═══════════ STATE 1 — EXCELLENT (score 92) ═══════════ -->
+<p class="demo-header">— mastered · score 92 · excellent —</p>
+<a class="back-link">← Back</a>
+<div class="card">
+  <div class="header-row">
+    <div class="headings">
+      <h1 class="concept-name">What Is Philosophy?</h1>
+      <p class="section-meta">Section 1.1<span class="dot">·</span>Introduction to Philosophy</p>
+    </div>
+    <div class="badge excellent">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12 L10 17 L19 8"/></svg>
+      Excellent
+    </div>
+  </div>
+
+  <div class="score-block excellent" style="--score-pct: 92%;">
+    <div class="score-row">
+      <div class="bar-wrap"><div class="bar"></div></div>
+      <div class="score-numeric">92<span class="denom">/ 100</span></div>
+    </div>
+    <p class="score-caption">Concept fully mastered — strong work.</p>
+  </div>
+
+  <div class="stats">
+    <div class="stat">
+      <div class="stat-value xp">+17</div>
+      <div class="stat-label">XP Earned</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value time">24m</div>
+      <div class="stat-label">Time Spent</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value streak">+1</div>
+      <div class="stat-label">Day Streak</div>
+    </div>
+  </div>
+
+  <div class="actions">
+    <a class="btn-primary">
+      Continue: How Do Philosophers Arrive at Truth?
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12 H19"/><path d="M13 6 L19 12 L13 18"/></svg>
+    </a>
+    <a class="btn-ghost">Back to Concept Map</a>
+  </div>
+</div>
+
+<hr class="divider">
+
+<!-- ═══════════ STATE 2 — PASSED (score 67) ═══════════ -->
+<p class="demo-header">— mastered · score 67 · passed —</p>
+<a class="back-link">← Back</a>
+<div class="card">
+  <div class="header-row">
+    <div class="headings">
+      <h1 class="concept-name">Chapter 11 Introduction</h1>
+      <p class="section-meta">Section 11.0<span class="dot">·</span>Introduction to Philosophy</p>
+    </div>
+    <div class="badge passed">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12 L10 17 L19 8"/></svg>
+      Mastered
+    </div>
+  </div>
+
+  <div class="score-block passed" style="--score-pct: 67%;">
+    <div class="score-row">
+      <div class="bar-wrap"><div class="bar"></div></div>
+      <div class="score-numeric">67<span class="denom">/ 100</span></div>
+    </div>
+    <p class="score-caption">Passed. Worth a quick review before the next section.</p>
+  </div>
+
+  <div class="stats">
+    <div class="stat">
+      <div class="stat-value xp">+12</div>
+      <div class="stat-label">XP Earned</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value time">18m</div>
+      <div class="stat-label">Time Spent</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value streak">+1</div>
+      <div class="stat-label">Day Streak</div>
+    </div>
+  </div>
+
+  <div class="actions">
+    <a class="btn-primary">
+      Continue: Section 4.0
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12 H19"/><path d="M13 6 L19 12 L13 18"/></svg>
+    </a>
+    <a class="btn-ghost">Back to Concept Map</a>
+  </div>
+</div>
+
+<hr class="divider">
+
+<!-- ═══════════ STATE 3 — REVIEW NEEDED (score 35) ═══════════ -->
+<p class="demo-header">— needs review · score 35 —</p>
+<a class="back-link">← Back</a>
+<div class="card review">
+  <div class="header-row">
+    <div class="headings">
+      <h1 class="concept-name">Sterile Technique</h1>
+      <p class="section-meta">Section 6.4<span class="dot">·</span>Clinical Nursing Skills</p>
+    </div>
+    <div class="badge review">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8 V12"/><circle cx="12" cy="16" r="0.5" fill="currentColor"/></svg>
+      Review Needed
+    </div>
+  </div>
+
+  <div class="score-block review" style="--score-pct: 35%;">
+    <div class="score-row">
+      <div class="bar-wrap"><div class="bar"></div></div>
+      <div class="score-numeric">35<span class="denom">/ 100</span></div>
+    </div>
+    <p class="score-caption">A nurse shouldn't advance from this section uncertain. Read it once more.</p>
+  </div>
+
+  <div class="stats">
+    <div class="stat">
+      <div class="stat-value xp">+5</div>
+      <div class="stat-label">XP Earned</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value time">21m</div>
+      <div class="stat-label">Time Spent</div>
+    </div>
+    <div class="stat">
+      <div class="stat-value streak">+1</div>
+      <div class="stat-label">Day Streak</div>
+    </div>
+  </div>
+
+  <div class="actions">
+    <a class="btn-primary">
+      Read this section again
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12 a9 9 0 1 0 3-6.7"/><path d="M3 4 V12 H11"/></svg>
+    </a>
+    <a class="btn-ghost">Back to Concept Map</a>
+  </div>
+</div>
+
+</body>
+</html>
