@@ -2,6 +2,8 @@
 
 Run these on the server after `git pull`.
 
+> **Convention:** sections labelled **ONE-TIME** are tied to a specific release and should be **deleted (or moved to `docs/<release>-deploy.md`) once that release is fully deployed and verified**. Permanent steps live in sections 1, 2, and 4.
+
 ## 1. Backend
 
 ```bash
@@ -29,7 +31,7 @@ npm run build
 # - vercel:  vercel --prod
 ```
 
-## 3. One-time cache bust (recommended)
+## 3. ONE-TIME — Round 4 cache bust (recommended; delete after deploy)
 
 Sessions started before this deploy may have English content cached from the pre-fix per-card generator. Run once after deploy to clear them — student's next chunk-fetch then regenerates in their language:
 
@@ -40,7 +42,7 @@ PGPASSWORD=$DB_PASSWORD psql -h $DB_HOST -U $DB_USER -d $DB_NAME -c \
 
 This is **safe**: the next API request from each affected student will lazily regenerate their cards with the new (correct-language) prompt.
 
-## 3b. One-time stale-mastery cleanup (REQUIRED for mastery-rebuild release)
+## 3b. ONE-TIME — Round 4 stale-mastery cleanup (REQUIRED; delete after deploy)
 
 Before the mastery rewrite, `complete-chunk` auto-mastered any concept where the student walked through all sub-chunks — regardless of MCQ/exam-gate score. Some students may now show mastered concepts they shouldn't have. Clear those rows so the new flow can re-evaluate them:
 
@@ -61,7 +63,7 @@ WHERE NOT EXISTS (
 
 Students with cleared rows will need to retry the chunk's exam-gate (or finish its MCQs ≥50% for exam_disabled chunks) to remaster the concept.
 
-## 3c. Two-type chunk_type architecture (Round 4)
+## 3c. ONE-TIME — Round 4 two-type chunk_type wipe + re-ingest (delete after deploy)
 
 This section is **required** when deploying the Round 4 commit that collapses `chunk_type` to
 the two-canonical-value alphabet (`teaching`, `exercise`). The prealgebra_2e book must be wiped
