@@ -513,6 +513,27 @@ class TeachingService:
         student = await db.get(Student, student_id)
         if not student:
             raise ValueError(f"Student not found: {student_id}")
+
+        # Inherit chunk_progress from the most recent mastered session for this
+        # student+concept. Without this, revisiting an already-completed concept
+        # creates a fresh empty session and the subsection picker resets every
+        # chunk to "Start" — losing the visible "Passed · Review Lesson" state.
+        prior_mastered = (await db.execute(
+            select(TeachingSession)
+            .where(
+                TeachingSession.student_id == student_id,
+                TeachingSession.concept_id == concept_id,
+                TeachingSession.concept_mastered == True,  # noqa: E712
+            )
+            .order_by(TeachingSession.completed_at.desc().nullslast())
+            .limit(1)
+        )).scalar_one_or_none()
+        restored_progress = (
+            dict(prior_mastered.chunk_progress)
+            if prior_mastered and isinstance(prior_mastered.chunk_progress, dict)
+            else None
+        )
+
         session = TeachingSession(
             student_id=student_id,
             concept_id=concept_id,
@@ -520,9 +541,15 @@ class TeachingService:
             phase="PRESENTING",
             style=student.preferred_style or "default",
             lesson_interests=list(student.interests or []),
+            chunk_progress=restored_progress,
         )
         db.add(session)
         await db.flush()
+        if restored_progress:
+            logger.info(
+                "[start-session] inherited %d chunk(s) of progress from prior mastered session %s for student=%s concept=%s",
+                len(restored_progress), prior_mastered.id, student_id, concept_id,
+            )
         return session
 
     # ── Generate Presentation ─────────────────────────────────────
