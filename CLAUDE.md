@@ -43,6 +43,8 @@ Use `python -m uvicorn`, not bare `uvicorn` — bare loses venv deps.
 - Per-card cards have a `cache_version` check in `teaching_service.py`. Bump the version whenever you change card-generation prompts or the schema, or stale cards survive forever.
 - Settings (style, interests) are locked at session start. Changing them mid-session returns HTTP 409 — don't loosen this. **Language is the exception**: `PATCH /students/{id}/language` allows mid-session change and swaps the per-language card cache (no lesson corruption).
 - `.venv/` is at **project root**, activated as `source ../.venv/bin/activate` from `backend/` (on macOS/Linux; `../.venv/Scripts/activate` on Windows).
+- **Only 2 chunk types exist:** `teaching` and `exercise` (canonical since 2026-04-27 refactor). Don't reintroduce other types (`example`, `definition`, etc.) — they were deliberately collapsed.
+- **Some config values are live-read from `AdminConfig` at runtime, not just `config.py`:** `OPENAI_MODEL`, `OPENAI_MODEL_MINI`, `CHUNK_EXAM_PASS_RATE`. Editing `config.py` alone won't take effect if `AdminConfig` has a value set — update both.
 
 ## Workflows
 
