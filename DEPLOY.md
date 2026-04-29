@@ -92,10 +92,10 @@ DELETE FROM books WHERE slug='prealgebra_2e';
 
 Stage 7 auto-translates into all 13 languages. **The pipeline takes the BOOK CODE
 (registry key in `backend/src/config.py:BOOK_REGISTRY`), not the slug used in DB columns.**
-For prealgebra_2e the code is `PREALG2E` (slug stored in `book_slug` column is `prealgebra_2e`).
+For prealgebra_2e the code is `PREALG` (slug stored in `book_slug` column is `prealgebra_2e`).
 
 ```bash
-docker compose exec backend python -m src.pipeline --book PREALG2E
+docker compose exec backend python -m src.pipeline --book PREALG
 ```
 
 ### Restart

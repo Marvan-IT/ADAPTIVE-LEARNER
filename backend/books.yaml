@@ -1,19 +1,4 @@
 books:
-- book_code: PREALG
-  book_slug: prealgebra
-  pdf_filename: maths/prealgebra.pdf
-  title: Prealgebra 2e
-  subject: mathematics
-  section_header_font: RobotoSlab-Bold
-  section_header_size_min: 14.0
-  section_header_size_max: 14.6
-  chapter_header_font: RobotoSlab-Bold
-  chapter_header_size_min: 17.0
-  chapter_header_size_max: 17.5
-  section_pattern: ^(\d+)\.(\d+)\s+(.+)
-  front_matter_end_page: 16
-  exercise_marker_pattern: Section\s+\d+\.\d+\s+Exercises
-  toc_section_pattern: null
 - book_code: ELEMALG
   book_slug: elementary_algebra
   pdf_filename: maths/elementary_algebra.pdf
@@ -269,3 +254,13 @@ books:
   chapter_header_size_max: 17.4
   front_matter_end_page: 16
   exercise_marker_pattern: Section\s+\d+\.\d+\s+Exercises
+- book_code: PREALG
+  book_slug: prealgebra_2e
+  pdf_filename: maths/Prealgebra 2e.pdf
+  title: Prealgebra 2E
+  subject: maths
+- book_code: INTROD
+  book_slug: introduction_to_philosophy
+  pdf_filename: humanities/Introduction_to_Philosophy.pdf
+  title: Introduction To Philosophy
+  subject: humanities
