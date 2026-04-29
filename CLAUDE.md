@@ -46,6 +46,8 @@ Use `python -m uvicorn`, not bare `uvicorn` — bare loses venv deps.
 
 ## Workflows
 
+**Sub-agent memory may be stale.** `.claude/agent-memory/` files predate recent work and are not auto-synced. When invoking any sub-agent for non-trivial work, remind it to verify memory claims against current code before acting (the memory hygiene protocol at the top of each MEMORY.md spells this out).
+
 **New feature (non-trivial):** Use plan mode → launch `solution-architect` agent to produce `docs/{feature-slug}/{HLD.md,DLD.md,execution-plan.md}` → then `backend-developer` → `comprehensive-tester` → `frontend-developer`. These design docs are the source of truth — update them before code.
 
 **Schema change:** Edit `backend/src/db/models.py`, then invoke `devops-engineer` agent to write the Alembic migration. Run `alembic upgrade head`. Never skip this for dev convenience.
