@@ -1860,6 +1860,29 @@ async def admin_update_config(
 
 # ── Chunk Edit ──────────────────────────────────────────────────────────────────
 
+
+def _adjust_exercise_suffix(heading: str | None, new_type: str) -> str | None:
+    """Mirror the ingestion-time '(Exercises)' suffix when admin flips chunk_type.
+
+    Ingestion (chunk_parser.py) stores e.g. 'Round Whole Numbers (Exercises)'
+    in the heading column for chunks classified as exercises. Post-ingestion
+    type changes via PATCH or split don't touch heading, so manually-converted
+    or split-created exercise chunks look out-of-place on the learner page.
+    The lax 'contains exercise word' guard avoids redundant suffix on headings
+    the admin already named like 'Writing Exercises'.
+    """
+    if heading is None:
+        return heading
+    h = heading.rstrip()
+    has_suffix = h.lower().endswith("(exercises)")
+    contains_word = "exercise" in h.lower()
+    if new_type == "exercise" and not has_suffix and not contains_word:
+        return h + " (Exercises)"
+    if new_type == "teaching" and has_suffix:
+        return h[: -len("(Exercises)")].rstrip()
+    return heading
+
+
 @limiter.limit("30/minute")
 @router.patch("/api/admin/chunks/{chunk_id}")
 async def update_chunk(
@@ -1883,6 +1906,7 @@ async def update_chunk(
     old_snapshot = await audit_service.snapshot_chunk(db, chunk_uuid)
     book_slug_for_audit = chunk.book_slug
     old_heading = chunk.heading
+    old_chunk_type = chunk.chunk_type
 
     body = await request.json()
     if "chunk_type" in body and body["chunk_type"] not in ("teaching", "exercise"):
@@ -1899,12 +1923,20 @@ async def update_chunk(
             val = bool(val)
         setattr(chunk, field, val)
 
+    # When chunk_type changes, mirror ingestion-time suffix on the heading
+    # (whatever heading the admin just sent). Type-toggle without rename, or
+    # with rename in the same PATCH, both produce a consistent result.
+    if "chunk_type" in body and chunk.chunk_type != old_chunk_type:
+        adjusted = _adjust_exercise_suffix(chunk.heading, chunk.chunk_type)
+        if adjusted != chunk.heading:
+            chunk.heading = adjusted
+
     await db.flush()
     new_snapshot = await audit_service.snapshot_chunk(db, chunk_uuid)
 
     # ── Auto-translate updated heading into all 12 non-English locales ─────
     new_heading = chunk.heading
-    if "heading" in body and new_heading and new_heading != old_heading:
+    if new_heading and new_heading != old_heading:
         try:
             from api.translation_helper import translate_one_string
             _trans_model = await _get_live_model(db, slot="mini")

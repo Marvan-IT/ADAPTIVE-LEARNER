@@ -173,8 +173,10 @@ export default function useDraftMode(slug, conceptId, serverChunks) {
         ...original,
         id: tempId,
         text: textAfter,
-        heading: "",
       };
+      // Leave heading undefined so saveDraft's TRACKED_PROPS guard skips it
+      // and preserves the backend's auto-generated `<orig> (cont.)` heading.
+      delete newChunk.heading;
       const next = [
         ...prev.slice(0, idx),
         updatedOriginal,
